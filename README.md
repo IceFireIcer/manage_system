@@ -103,6 +103,21 @@ cd backend && alembic upgrade head
 
 > 仅供演示与测试，生产环境请立即修改密码。
 
+## 演示数据与验收材料（T11）
+
+预置耗材初始库存均高于安全线，直接演示时补货建议页会为空。先执行演示数据脚本，构造“紧急 / 一般 / 观察”三级场景（幂等，重复执行不会重复写入）：
+
+```bash
+cd backend
+python scripts/seed_demo.py
+```
+
+脚本效果：焊丝 1 卷（紧急）、记号笔 3 支（一般）、电阻 250 个（观察，趋势上升），砂纸与实训导线保持正常；并写入 20 笔近 30 天历史领用，供记录查询与 7/30 天消耗汇总演示。
+
+- 3 分钟演示脚本与录制建议：[docs/demo-script.md](docs/demo-script.md)
+- SPEC 逐项验收清单：[docs/acceptance-checklist.md](docs/acceptance-checklist.md)
+- 交付说明（账号、启动、测试、已知限制）：[docs/delivery.md](docs/delivery.md)
+
 ## 说明
 
 - 本地开发**零 Docker**：Python、Node、MySQL 均直接使用本机安装。
