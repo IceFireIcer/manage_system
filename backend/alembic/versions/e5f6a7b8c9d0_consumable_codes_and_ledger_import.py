@@ -1,7 +1,7 @@
 """consumable codes, identity constraint and ledger import batches
 
 Revision ID: e5f6a7b8c9d0
-Revises: c8d2e4f6a9b1
+Revises: d4a1b7c2e5f8
 Create Date: 2026-11-28 15:00:00.000000
 
 """
@@ -14,7 +14,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "e5f6a7b8c9d0"
-down_revision: str | None = "c8d2e4f6a9b1"
+down_revision: str | None = "d4a1b7c2e5f8"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
