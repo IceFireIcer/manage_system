@@ -23,7 +23,7 @@ class InventoryItemOut(BaseModel):
 
 
 class InventoryOverviewOut(BaseModel):
-    summary: InventorySummary
+    summary: InventorySummary | None = None
     items: list[InventoryItemOut]
 
 

@@ -99,7 +99,11 @@ def list_consumables(
             detail="无权限访问",
         )
 
-    query = select(Consumable).order_by(Consumable.id)
+    query = (
+        select(Consumable)
+        .where(Consumable.class_id == current_user.class_id)
+        .order_by(Consumable.id)
+    )
     if status_filter != "all":
         query = query.where(Consumable.status == status_filter)
     return [_serialize(item) for item in db.scalars(query).all()]

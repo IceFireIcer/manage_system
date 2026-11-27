@@ -7,6 +7,7 @@ import PageHeader from '../components/PageHeader.vue'
 import EmptyState from '../components/EmptyState.vue'
 import InventoryAuditDrawer from '../components/InventoryAuditDrawer.vue'
 import LogDetailDrawer from '../components/LogDetailDrawer.vue'
+import { useUserStore } from '../stores/user'
 
 const ROLE_NAMES = { teacher: '教师', admin: '班委', student: '学生' }
 const STATUS_NAMES = { enabled: '启用', disabled: '停用' }
@@ -29,6 +30,8 @@ const ACTIONS = [
 
 const ACTION_MAP = Object.fromEntries(ACTIONS.map((item) => [item.value, item]))
 
+const SENSITIVE_ACTIONS = new Set(['login', 'logout'])
+
 const SUMMARY_FIELDS = {
   name: '名称',
   spec: '规格',
@@ -42,6 +45,11 @@ const SUMMARY_FIELDS = {
 }
 
 const router = useRouter()
+const userStore = useUserStore()
+const isAdmin = computed(() => userStore.user?.role === 'admin')
+const actionOptions = computed(() =>
+  isAdmin.value ? ACTIONS : ACTIONS.filter((item) => !SENSITIVE_ACTIONS.has(item.value)),
+)
 
 const logs = ref([])
 const loading = ref(false)
@@ -351,7 +359,7 @@ onBeforeUnmount(() => {
             class="logs__filter-action"
           >
             <el-option
-              v-for="option in ACTIONS"
+              v-for="option in actionOptions"
               :key="option.value"
               :label="option.label"
               :value="option.value"

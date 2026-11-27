@@ -118,6 +118,7 @@ def test_overview_today_requisitions(admin_client: TestClient, db_session) -> No
         status="reversed",
     )
 
+    _login(admin_client, "admin01", "Admin@123")
     data = admin_client.get(OVERVIEW_URL).json()
 
     assert data["summary"]["today_requisitions"] == 2
@@ -170,4 +171,6 @@ def test_overview_student_access(student_client: TestClient) -> None:
     response = student_client.get(OVERVIEW_URL)
 
     assert response.status_code == 200
-    assert response.json()["summary"]["total_kinds"] == 0
+    data = response.json()
+    assert "summary" not in data
+    assert data["items"] == []

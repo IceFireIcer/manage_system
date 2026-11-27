@@ -164,7 +164,17 @@ def test_requisition_reversal_and_restock_logged(admin_client: TestClient, db_se
 
 def test_logs_filter_by_operator(admin_client: TestClient, db_session) -> None:
     teacher_id = _user_id(db_session, "teacher01")
+    consumable = _create_consumable(admin_client)
+    student_id = _user_id(db_session, "student01")
     _login(admin_client, "teacher01", "Teacher@123")
+    issued = admin_client.post(
+        REQUISITIONS_URL,
+        json={
+            "user_id": student_id,
+            "items": [{"consumable_id": consumable["id"], "quantity": 1}],
+        },
+    )
+    assert issued.status_code == 201, issued.text
 
     data = admin_client.get(LOGS_URL, params={"operator_id": teacher_id}).json()
 
