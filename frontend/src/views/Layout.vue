@@ -2,7 +2,8 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowDown, Box, Expand, Fold, Setting, Tickets, TrendCharts } from '@element-plus/icons-vue'
+import { ArrowDown, Bell, Box, Expand, Fold, Setting, Tickets, TrendCharts } from '@element-plus/icons-vue'
+import { useAlertsStore } from '../stores/alerts'
 import { useUserStore } from '../stores/user'
 
 const GROUP_META = {
@@ -21,12 +22,14 @@ const ROLE_TAG_CLASS = {
 const route = useRoute()
 const router = useRouter()
 const userStore = useUserStore()
+const alertsStore = useAlertsStore()
 
 const viewportWidth = ref(window.innerWidth)
 const collapsed = ref(window.innerWidth < 1280)
 const drawerOpen = ref(false)
 
 const isMobile = computed(() => viewportWidth.value < 768)
+const canSeeAlerts = computed(() => ['teacher', 'admin'].includes(userStore.user?.role))
 
 const currentTitle = computed(() => {
   const nav = route.meta?.nav
@@ -103,6 +106,16 @@ function handleMenuSelect() {
   }
 }
 
+function goAlerts() {
+  if (route.path === '/overview') {
+    document
+      .getElementById('stock-alerts')
+      ?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    return
+  }
+  router.push({ path: '/overview', query: { focus: 'alerts' } })
+}
+
 async function handleLogout() {
   const confirmed = await ElMessageBox.confirm(
     '退出当前会话后，本机需要重新登录才能继续使用，其它设备登录状态保留。',
@@ -159,6 +172,7 @@ const passwordError = ref('')
 const passwordForm = reactive({ oldPassword: '', newPassword: '', confirmPassword: '' })
 const expiryNotified = ref(false)
 let expiryTimer = null
+let alertsTimer = null
 
 function openPasswordDialog() {
   passwordError.value = ''
@@ -258,6 +272,10 @@ onMounted(() => {
   window.addEventListener('resize', handleResize)
   expiryTimer = window.setInterval(checkExpiry, 30000)
   checkExpiry()
+  if (canSeeAlerts.value) {
+    alertsStore.fetch()
+    alertsTimer = window.setInterval(() => alertsStore.fetch({ silent: true }), 30000)
+  }
 })
 
 onBeforeUnmount(() => {
@@ -265,6 +283,10 @@ onBeforeUnmount(() => {
   if (expiryTimer) {
     window.clearInterval(expiryTimer)
     expiryTimer = null
+  }
+  if (alertsTimer) {
+    window.clearInterval(alertsTimer)
+    alertsTimer = null
   }
 })
 </script>
@@ -289,6 +311,23 @@ onBeforeUnmount(() => {
       <span v-if="isMobile" class="layout__current">{{ currentTitle }}</span>
 
       <div class="layout__spacer" />
+
+      <el-badge
+        v-if="canSeeAlerts"
+        :value="alertsStore.activeCount"
+        :max="99"
+        :hidden="!alertsStore.activeCount"
+        class="layout__alert"
+      >
+        <button
+          class="layout__toggle"
+          type="button"
+          aria-label="站内待办"
+          @click="goAlerts"
+        >
+          <el-icon :size="18"><Bell /></el-icon>
+        </button>
+      </el-badge>
 
       <div class="layout__account">
         <span class="layout__user-name" :title="userStore.user?.name">
@@ -523,6 +562,10 @@ onBeforeUnmount(() => {
 
 .layout__spacer {
   flex: 1;
+}
+
+.layout__alert {
+  display: inline-flex;
 }
 
 .layout__account {

@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app import business_time, inventory_ledger
+from app import business_time, inventory_ledger, stock_alerts
 from app.models import Consumable, ConsumableImportBatch, InventoryEvent, OperationLog, User
 from app.schemas_consumables import (
     CODE_MAX_LENGTH,
@@ -505,6 +505,7 @@ def execute_import(
             if not consumable.code:
                 consumable.code = generate_code(consumable.id)
                 db.flush()
+            stock_alerts.sync_consumable(db, consumable, source="import", at=now)
 
             event = None
             if opening_stock > 0:

@@ -446,6 +446,54 @@ class RestockDisposition(Base):
     updated_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
 
 
+class StockAlert(Base):
+    __tablename__ = "stock_alerts"
+    __table_args__ = (
+        UniqueConstraint(
+            "class_id", "consumable_id", name="uq_stock_alerts_class_consumable"
+        ),
+        CheckConstraint(
+            "status IN ('open','acknowledged','completed')",
+            name="ck_stock_alerts_status",
+        ),
+        CheckConstraint(
+            "risk_level IN ('low','out')", name="ck_stock_alerts_risk_level"
+        ),
+        Index("ix_stock_alerts_class_status", "class_id", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    class_id: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    consumable_id: Mapped[int] = mapped_column(
+        ForeignKey("consumables.id"), nullable=False, index=True
+    )
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="open")
+    risk_level: Mapped[str] = mapped_column(String(8), nullable=False, default="low")
+    current_stock: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    safety_stock: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    gap: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    occurrence: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    detection_count: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    first_detected_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False)
+    last_detected_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False)
+    acknowledged_at: Mapped[datetime | None] = mapped_column(DATETIME, nullable=True)
+    acknowledged_by_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id"), nullable=True
+    )
+    acknowledged_by_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DATETIME, nullable=True)
+    completed_by_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id"), nullable=True
+    )
+    completed_by_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    completed_reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    last_order_no: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    last_source: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    note: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
+    updated_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
+
+
 class InventoryCount(Base):
     __tablename__ = "inventory_counts"
     __table_args__ = (

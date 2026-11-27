@@ -16,6 +16,7 @@ from app.request_context import (
     set_request_id,
 )
 from app.routers import (
+    alerts,
     auth,
     bootstrap,
     consumables,
@@ -141,6 +142,7 @@ def create_app() -> FastAPI:
     app.include_router(consumables.router)
     app.include_router(requisitions.router)
     app.include_router(inventory.router)
+    app.include_router(alerts.router)
     app.include_router(consumption.router)
     app.include_router(logs.router)
     app.include_router(ops.router)

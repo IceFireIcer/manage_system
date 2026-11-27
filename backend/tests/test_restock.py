@@ -6,6 +6,8 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
+from alembic.config import Config
+from alembic.script import ScriptDirectory
 from app import business_time
 from app.models import (
     Consumable,
@@ -25,6 +27,9 @@ SUGGESTIONS_URL = "/api/v1/inventory/suggestions"
 LEDGER_URL = "/api/v1/inventory/ledger"
 CONSUMABLES_URL = "/api/v1/consumables"
 BACKEND_DIR = Path(__file__).resolve().parents[1]
+ALEMBIC_HEAD = ScriptDirectory.from_config(
+    Config(str(BACKEND_DIR / "alembic.ini"))
+).get_current_head()
 
 
 def _consumable_payload(**overrides: Any) -> dict[str, Any]:
@@ -416,10 +421,11 @@ def test_migration_creates_restock_tables(tmp_path: Path) -> None:
     finally:
         conn.close()
 
-    assert version == ("e5f6a7b8c9d0",)
+    assert version == (ALEMBIC_HEAD,)
     assert {
         "restock_orders",
         "restock_lines",
         "restock_corrections",
         "restock_dispositions",
+        "stock_alerts",
     } <= tables
