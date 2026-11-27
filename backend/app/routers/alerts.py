@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from app import business_time, stock_alerts
 from app.database import get_db
-from app.deps import CurrentUser, require_role
+from app.deps import require_role
 from app.models import Consumable, User
 from app.schemas_alerts import StockAlertAction, StockAlertListOut, StockAlertOut
 
