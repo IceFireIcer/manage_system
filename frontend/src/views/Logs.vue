@@ -41,6 +41,7 @@ const ACTIONS = [
   { value: 'password_change', label: '修改密码', tagClass: 'status-tag--neutral' },
   { value: 'user_password_reset', label: '重置密码', tagClass: 'status-tag--warning' },
   { value: 'log_export', label: '导出操作日志', tagClass: 'status-tag--warning' },
+  { value: 'requisition_export', label: '导出领用流水', tagClass: 'status-tag--warning' },
   { value: 'requisition_create', label: '领用登记', tagClass: 'status-tag--info' },
   { value: 'requisition_reverse', label: '撤销领用', tagClass: 'status-tag--reversal' },
   { value: 'requisition_reentry', label: '关联重登', tagClass: 'status-tag--info' },
@@ -92,6 +93,7 @@ const SENSITIVE_ACTIONS = new Set([
   'password_change',
   'user_password_reset',
   'log_export',
+  'requisition_export',
   'admin_bootstrap',
   'admin_bootstrap_rejected',
   'teacher_provision',
@@ -438,7 +440,8 @@ function summaryText(row) {
       return `状态 ${STATUS_NAMES[row.before_status] ?? '—'} → ${STATUS_NAMES[row.after_status] ?? '—'}`
     case 'user_create':
       return after ? `新增账号 ${after.account}（${after.name}）` : row.remark || '—'
-    case 'log_export': {
+    case 'log_export':
+    case 'requisition_export': {
       if (!after) return row.remark || '—'
       return `导出 ${after.exported ?? 0} 条（匹配 ${after.matched ?? 0} 条）`
     }

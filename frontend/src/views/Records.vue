@@ -1,7 +1,7 @@
 <script setup>
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '../api'
 import { useUserStore } from '../stores/user'
 import PageHeader from '../components/PageHeader.vue'
@@ -453,29 +453,73 @@ async function handleExport() {
   if (!isStaff.value || exporting.value) return
   exporting.value = true
   try {
-    const response = await api.get('/requisitions/export', {
-      params: buildParams(),
-      responseType: 'blob',
-    })
-    const disposition = response.headers['content-disposition'] || ''
-    const matched = disposition.match(/filename="?([^";]+)"?/)
-    let filename = matched ? matched[1] : ''
-    if (filename) {
-      try {
-        filename = decodeURIComponent(filename)
-      } catch {
-        filename = matched[1]
+    const params = buildParams()
+    const { data: preview } = await api.get('/requisitions/export/preview', { params })
+    const total = Number(preview.total ?? 0)
+    if (!total) {
+      ElMessage.info('当前筛选条件下没有可导出的记录')
+      return
+    }
+    const segmentLimit = Number(preview.limit ?? 0) || total
+    const segments = Math.max(1, Math.ceil(total / segmentLimit))
+    const range =
+      preview.first_at && preview.last_at
+        ? `业务时间 ${formatTime(preview.first_at)} 至 ${formatTime(preview.last_at)}`
+        : ''
+    const segmentNote = segments > 1 ? `，将分 ${segments} 段完整导出` : ''
+    try {
+      await ElMessageBox.confirm(
+        `匹配 ${total} 条${range ? `（${range}）` : ''}${segmentNote}。`,
+        '确认导出',
+        {
+          confirmButtonText: '开始导出',
+          cancelButtonText: '取消',
+          type: 'info',
+        },
+      )
+    } catch {
+      return
+    }
+
+    const chunks = []
+    let exported = 0
+    let beforeCreatedAt = null
+    let beforeId = null
+    let hasMore = false
+    for (let guard = 0; guard < 1000; guard += 1) {
+      const segmentParams = { ...params, include_header: chunks.length === 0 }
+      if (beforeCreatedAt && beforeId) {
+        segmentParams.before_created_at = beforeCreatedAt
+        segmentParams.before_id = beforeId
       }
+      const response = await api.get('/requisitions/export', {
+        params: segmentParams,
+        responseType: 'blob',
+        timeout: 60000,
+      })
+      const blob =
+        response.data instanceof Blob
+          ? response.data
+          : new Blob([response.data], { type: 'text/csv;charset=utf-8' })
+      const text = await blob.text()
+      chunks.push(
+        chunks.length === 0 ? text : text.replace(/^\uFEFF/, ''),
+      )
+      const headers = response.headers || {}
+      exported += Number(headers['x-export-this-segment'] || 0)
+      hasMore = String(headers['x-export-has-more']).toLowerCase() === 'true'
+      if (!hasMore) break
+      beforeCreatedAt = headers['x-export-next-before-created-at']
+      beforeId = headers['x-export-next-before-id']
+      if (!beforeCreatedAt || !beforeId) break
     }
-    if (!filename) {
-      const pad = (value) => String(value).padStart(2, '0')
-      const now = new Date()
-      filename = `requisitions_${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}.csv`
-    }
-    const blob = response.data instanceof Blob
-      ? response.data
-      : new Blob([response.data], { type: 'text/csv;charset=utf-8' })
-    const url = URL.createObjectURL(blob)
+
+    const pad = (value) => String(value).padStart(2, '0')
+    const now = new Date()
+    const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}`
+    const filename = `requisitions_${stamp}_${exported}条.csv`
+    const output = new Blob(chunks, { type: 'text/csv;charset=utf-8' })
+    const url = URL.createObjectURL(output)
     const link = document.createElement('a')
     link.href = url
     link.download = filename
@@ -483,7 +527,11 @@ async function handleExport() {
     link.click()
     document.body.removeChild(link)
     URL.revokeObjectURL(url)
-    ElMessage.success('已开始下载 CSV')
+    if (exported === total) {
+      ElMessage.success(`已完整导出 ${exported} 条`)
+    } else {
+      ElMessage.warning(`已导出 ${exported} / ${total} 条，请重试或收窄条件`)
+    }
   } catch {
     ElMessage.error('导出失败，请稍后重试')
   } finally {

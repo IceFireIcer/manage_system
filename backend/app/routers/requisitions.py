@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app import business_time, inventory_ledger, stock_alerts
 from app.agent import service
+from app.auth_logs import trim_audit_logs
 from app.database import get_db
 from app.deps import CurrentUser, require_role
 from app.models import (
@@ -29,6 +30,7 @@ from app.models import (
     RequisitionScrap,
     User,
 )
+from app.operation_log import record_operation
 from app.schemas_consumables import STATUS_ENABLED
 from app.schemas_requisitions import (
     MAX_BACKFILL_DAYS,
@@ -41,6 +43,7 @@ from app.schemas_requisitions import (
     RequisitionCreateOut,
     RequisitionDetailOut,
     RequisitionErrorOut,
+    RequisitionExportPreviewOut,
     RequisitionItemOut,
     RequisitionListItemOut,
     RequisitionPageOut,
@@ -64,7 +67,50 @@ VALID_TYPES = ("normal", "reversal")
 VALID_STATUSES = ("active", "reversed")
 
 CSV_EXPORT_LIMIT = 10000
-CSV_HEADERS = ["时间", "耗材", "数量", "领用人", "领后剩余", "类型", "状态", "撤销原因", "备注"]
+CSV_EXPORT_MAX_ROWS = 200000
+EXPORT_COLUMNS = (
+    "id",
+    "order_no",
+    "created_at",
+    "posted_at",
+    "consumable_name",
+    "consumable_spec",
+    "unit",
+    "quantity",
+    "user_name",
+    "stock_after",
+    "type",
+    "status",
+    "related",
+    "reversal_reason",
+    "remark",
+    "operator_name",
+)
+EXPORT_ADMIN_COLUMNS = (
+    "user_account",
+    "operator_account",
+)
+EXPORT_COLUMN_LABELS = {
+    "id": "流水号",
+    "order_no": "单号",
+    "created_at": "业务时间",
+    "posted_at": "入账时间",
+    "consumable_name": "耗材",
+    "consumable_spec": "规格",
+    "unit": "单位",
+    "quantity": "数量",
+    "user_name": "领用人",
+    "stock_after": "变动后库存",
+    "type": "类型",
+    "status": "状态",
+    "related": "关联红冲",
+    "reversal_reason": "撤销原因",
+    "remark": "备注",
+    "user_account": "领用人账号",
+    "operator_name": "经办人",
+    "operator_account": "经办账号",
+}
+EXPORT_NUMERIC_COLUMNS = ("quantity", "stock_after")
 TYPE_NAMES = {"normal": "领用", "reversal": "红冲"}
 STATUS_NAMES = {"active": "有效", "reversed": "已撤销"}
 
@@ -409,6 +455,160 @@ def _list_related(
     return None
 
 
+def _chunked(values: list[int], size: int = 400) -> list[list[int]]:
+    return [values[index : index + size] for index in range(0, len(values), size)]
+
+
+def _export_related(db: Session, records: list[Requisition]) -> dict[int, Requisition]:
+    origin_ids = sorted(
+        {record.reversal_of for record in records if record.reversal_of is not None}
+    )
+    origins: dict[int, Requisition] = {}
+    for chunk in _chunked(origin_ids):
+        for item in db.scalars(select(Requisition).where(Requisition.id.in_(chunk))):
+            origins[item.id] = item
+
+    reversed_ids = sorted(
+        {
+            record.id
+            for record in records
+            if record.type == "normal" and record.status == "reversed"
+        }
+    )
+    reversals: dict[int, Requisition] = {}
+    for chunk in _chunked(reversed_ids):
+        for item in db.scalars(
+            select(Requisition)
+            .where(Requisition.reversal_of.in_(chunk))
+            .order_by(Requisition.id)
+        ):
+            reversals.setdefault(item.reversal_of, item)
+
+    related: dict[int, Requisition] = {}
+    for record in records:
+        if record.reversal_of is not None:
+            candidate = origins.get(record.reversal_of)
+        elif record.type == "normal" and record.status == "reversed":
+            candidate = reversals.get(record.id)
+        else:
+            candidate = None
+        if candidate is not None:
+            related[record.id] = candidate
+    return related
+
+
+def _export_operator_accounts(db: Session, records: list[Requisition]) -> dict[int, str]:
+    operator_ids = sorted(
+        {record.operator_id for record in records if record.operator_id is not None}
+    )
+    accounts: dict[int, str] = {}
+    for chunk in _chunked(operator_ids):
+        for user_id, account in db.execute(
+            select(User.id, User.account).where(User.id.in_(chunk))
+        ):
+            accounts[user_id] = account
+    return accounts
+
+
+def _export_columns(is_admin: bool) -> tuple[str, ...]:
+    if is_admin:
+        return EXPORT_COLUMNS + EXPORT_ADMIN_COLUMNS
+    return EXPORT_COLUMNS
+
+
+def _export_related_label(record: Requisition, related: Requisition | None) -> str:
+    if related is None:
+        return ""
+    label = "原领用" if record.reversal_of is not None else "红冲"
+    suffix = f" {related.order_no}" if related.order_no else ""
+    return f"{label} #{related.id}{suffix}"
+
+
+def _export_cell(value: object) -> object:
+    if value is None:
+        return ""
+    if isinstance(value, datetime):
+        return value.strftime("%Y-%m-%d %H:%M:%S")
+    if isinstance(value, int):
+        return value
+    text = str(value)
+    if text.lstrip()[:1] in ("=", "+", "-", "@", "\t", "\r"):
+        return "'" + text
+    return text
+
+
+def _export_row(
+    record: Requisition,
+    consumable: Consumable,
+    user: User,
+    related: Requisition | None,
+    accounts: dict[int, str],
+) -> dict:
+    return {
+        "id": record.id,
+        "order_no": record.order_no,
+        "created_at": record.created_at,
+        "posted_at": record.posted_at,
+        "consumable_name": record.name_snapshot or consumable.name,
+        "consumable_spec": record.spec_snapshot or consumable.spec,
+        "unit": record.unit_snapshot or consumable.unit,
+        "quantity": record.quantity,
+        "user_name": user.name,
+        "stock_after": record.stock_after,
+        "type": TYPE_NAMES.get(record.type, record.type),
+        "status": STATUS_NAMES.get(record.status, record.status),
+        "related": _export_related_label(record, related),
+        "reversal_reason": record.reversal_reason,
+        "remark": record.remark,
+        "user_account": user.account,
+        "operator_name": record.operator_name,
+        "operator_account": accounts.get(record.operator_id),
+    }
+
+
+def _export_text(
+    columns: tuple[str, ...],
+    rows: list,
+    related: dict[int, Requisition],
+    accounts: dict[int, str],
+    *,
+    include_header: bool,
+) -> str:
+    buffer = io.StringIO()
+    writer = csv.writer(buffer, lineterminator="\r\n")
+    if include_header:
+        writer.writerow([EXPORT_COLUMN_LABELS[column] for column in columns])
+    for record, consumable, user in rows:
+        values = _export_row(
+            record, consumable, user, related.get(record.id), accounts
+        )
+        writer.writerow(
+            [
+                values[column]
+                if column in EXPORT_NUMERIC_COLUMNS
+                else _export_cell(values.get(column))
+                for column in columns
+            ]
+        )
+    prefix = "\ufeff" if include_header else ""
+    return prefix + buffer.getvalue()
+
+
+def _export_filter_snapshot(filters: dict) -> dict:
+    return {
+        "consumable_id": filters["consumable_id"],
+        "user_id": filters["user_id"],
+        "start_date": filters["start_date"].isoformat()
+        if filters["start_date"] is not None
+        else None,
+        "end_date": filters["end_date"].isoformat()
+        if filters["end_date"] is not None
+        else None,
+        "type": filters["req_type"],
+        "status": filters["req_status"],
+    }
+
+
 def _latest_corrections(
     db: Session, requisition_ids: list[int]
 ) -> dict[int, RequisitionCorrection]:
@@ -534,43 +734,141 @@ def list_requisitions(
     return RequisitionPageOut(items=items, total=total, page=page, page_size=page_size)
 
 
+def _export_scope(db: Session, query) -> tuple[int, datetime | None, datetime | None]:
+    base = (
+        query.with_only_columns(Requisition.created_at, Requisition.id)
+        .order_by(None)
+        .subquery()
+    )
+    total = db.scalar(select(func.count()).select_from(base)) or 0
+    first_at, last_at = db.execute(
+        select(func.min(base.c.created_at), func.max(base.c.created_at))
+    ).one()
+    return total, first_at, last_at
+
+
+@router.get("/export/preview")
+def preview_requisitions_csv(
+    db: Annotated[Session, Depends(get_db)],
+    staff: Annotated[User, Depends(require_role("teacher", "admin"))],
+    filters: Annotated[dict, Depends(_consume_params)] = None,
+) -> RequisitionExportPreviewOut:
+    query = _build_query(db=db, current_user=staff, **filters)
+    total, first_at, last_at = _export_scope(db, query)
+    segments = (
+        (total + CSV_EXPORT_LIMIT - 1) // CSV_EXPORT_LIMIT if total > 0 else 0
+    )
+    return RequisitionExportPreviewOut(
+        total=total,
+        first_at=first_at,
+        last_at=last_at,
+        limit=CSV_EXPORT_LIMIT,
+        segments=segments,
+        fields=list(_export_columns(staff.role == "admin")),
+    )
+
+
 @router.get("/export")
 def export_requisitions_csv(
     db: Annotated[Session, Depends(get_db)],
     staff: Annotated[User, Depends(require_role("teacher", "admin"))],
     filters: Annotated[dict, Depends(_consume_params)] = None,
+    include_header: Annotated[bool, Query()] = True,
+    before_created_at: Annotated[datetime | None, Query()] = None,
+    before_id: Annotated[int | None, Query()] = None,
+    segment: Annotated[int, Query(ge=1)] = 1,
 ) -> Response:
     query = _build_query(db=db, current_user=staff, **filters)
-    rows = db.execute(
-        query.order_by(Requisition.created_at.desc(), Requisition.id.desc()).limit(CSV_EXPORT_LIMIT)
-    ).all()
-
-    buffer = io.StringIO()
-    writer = csv.writer(buffer)
-    writer.writerow(CSV_HEADERS)
-    for record, consumable, user in rows:
-        name = record.name_snapshot or consumable.name
-        spec = record.spec_snapshot or consumable.spec
-        spec_suffix = f"（{spec}）" if spec else ""
-        writer.writerow(
-            [
-                record.created_at.strftime("%Y-%m-%d %H:%M:%S"),
-                f"{name}{spec_suffix}",
-                record.quantity,
-                user.name,
-                record.stock_after,
-                TYPE_NAMES.get(record.type, record.type),
-                STATUS_NAMES.get(record.status, record.status),
-                record.reversal_reason or "",
-                record.remark or "",
-            ]
+    total, first_at, last_at = _export_scope(db, query)
+    if total > CSV_EXPORT_MAX_ROWS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"匹配 {total} 条，超过单次完整导出上限 {CSV_EXPORT_MAX_ROWS} 条，"
+                "请缩小日期或筛选范围"
+            ),
         )
 
-    filename = f"requisitions_{business_time.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    segment_query = query
+    if before_created_at is not None and before_id is not None:
+        segment_query = segment_query.where(
+            (Requisition.created_at < before_created_at)
+            | (
+                (Requisition.created_at == before_created_at)
+                & (Requisition.id < before_id)
+            )
+        )
+    rows = db.execute(
+        segment_query.order_by(
+            Requisition.created_at.desc(), Requisition.id.desc()
+        ).limit(CSV_EXPORT_LIMIT + 1)
+    ).all()
+    has_more = len(rows) > CSV_EXPORT_LIMIT
+    rows = rows[:CSV_EXPORT_LIMIT]
+
+    records = [record for record, _consumable, _user in rows]
+    is_admin = staff.role == "admin"
+    columns = _export_columns(is_admin)
+    related = _export_related(db, records)
+    accounts = _export_operator_accounts(db, records) if is_admin else {}
+    content = _export_text(
+        columns,
+        rows,
+        related,
+        accounts,
+        include_header=include_header,
+    )
+
+    headers = {
+        "Content-Disposition": (
+            "attachment; filename="
+            f"requisitions_{business_time.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        ),
+        "X-Export-Total": str(total),
+        "X-Export-This-Segment": str(len(rows)),
+        "X-Export-Has-More": "true" if has_more else "false",
+        "Cache-Control": "no-store",
+    }
+    if has_more and rows:
+        last = rows[-1][0]
+        headers["X-Export-Next-Before-Created-At"] = last.created_at.isoformat(
+            sep=" "
+        )
+        headers["X-Export-Next-Before-Id"] = str(last.id)
+
+    record_operation(
+        db,
+        action="requisition_export",
+        operator=staff,
+        target_type="requisition",
+        target_label=f"导出领用流水 {len(rows)} 条（匹配 {total} 条）",
+        after_value=json.dumps(
+            {
+                "matched": total,
+                "exported": len(rows),
+                "segment": segment,
+                "has_more": has_more,
+                "first_at": first_at.isoformat() if first_at else None,
+                "last_at": last_at.isoformat() if last_at else None,
+                "filters": _export_filter_snapshot(filters),
+                "fields": list(columns),
+                "cursor": {
+                    "before_created_at": before_created_at.isoformat()
+                    if before_created_at
+                    else None,
+                    "before_id": before_id,
+                },
+            },
+            ensure_ascii=False,
+        ),
+        remark=f"导出领用流水第 {segment} 段 {len(rows)} 条",
+    )
+    db.commit()
+    trim_audit_logs(db)
     return Response(
-        content="\ufeff" + buffer.getvalue(),
+        content=content,
         media_type="text/csv; charset=utf-8",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers=headers,
     )
 
 
