@@ -56,10 +56,26 @@ cd backend && pytest
 
 # 后端代码检查
 cd backend && ruff check .
+
+# 数据库迁移（T02 起）
+cd backend && alembic upgrade head
 ```
+
+## 演示账号（T02 起）
+
+运行 `alembic upgrade head` 后自动写入数据库（本地默认 SQLite `backend/dev.db`）：
+
+| 账号 | 初始密码 | 角色 | 姓名 |
+| ---- | -------- | ---- | ---- |
+| teacher01 | Teacher@123 | teacher（教师） | 王老师 |
+| admin01 | Admin@123 | admin（班委） | 李班委 |
+| student01 | Student@123 | student（学生） | 张同学 |
+
+> 仅供演示与测试，生产环境请立即修改密码。
 
 ## 说明
 
 - 本地开发**零 Docker**：Python、Node、MySQL 均直接使用本机安装。
-- 当前 T01 阶段无需 MySQL；数据库连接、认证与业务逻辑由后续票据实现。
+- T02 起本地默认使用 SQLite（`backend/.env` 中 `DATABASE_URL=sqlite:///./dev.db`）；接入 MySQL 8.0 时修改该变量即可。
+- 认证采用 JWT 写入 httpOnly Cookie（SameSite=Lax，有效期 8 小时）。
 - 配置通过 `pydantic-settings` 从 `backend/.env` 读取，`.env.example` 仅含占位符。
