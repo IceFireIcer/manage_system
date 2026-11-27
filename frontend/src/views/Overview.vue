@@ -68,29 +68,17 @@ const statusOptions = [
   { value: 'all', label: '全部' },
   { value: 'out', label: '缺货' },
   { value: 'low', label: '低于安全库存线' },
+  { value: 'uncovered', label: '未设预警线' },
 ]
-
-function rankOf(row) {
-  if (row.is_out) return 0
-  if (row.low_stock) return 1
-  return 2
-}
-
-const sortedItems = computed(() =>
-  [...items.value].sort((left, right) => {
-    const diff = rankOf(left) - rankOf(right)
-    if (diff !== 0) return diff
-    return String(left.name).localeCompare(String(right.name), 'zh-CN')
-  }),
-)
 
 const hasFilters = computed(() => Boolean(appliedSearch.value.trim()) || statusFilter.value !== 'all')
 
 const filteredItems = computed(() => {
   const keyword = appliedSearch.value.trim().toLowerCase()
-  return sortedItems.value.filter((row) => {
+  return items.value.filter((row) => {
     if (statusFilter.value === 'out' && !row.is_out) return false
     if (statusFilter.value === 'low' && !row.low_stock) return false
+    if (statusFilter.value === 'uncovered' && row.safety_stock > 0) return false
     if (!keyword) return true
     return [row.name, row.spec, row.location].some((field) =>
       String(field ?? '')
@@ -98,6 +86,12 @@ const filteredItems = computed(() => {
         .includes(keyword),
     )
   })
+})
+
+const safetyCoverage = computed(() => {
+  const total = items.value.length
+  const covered = items.value.filter((row) => row.safety_stock > 0).length
+  return { total, covered, missing: total - covered }
 })
 
 const hasItems = computed(() => items.value.length > 0)
@@ -176,12 +170,17 @@ const summaryReady = computed(
   () => !initialLoading.value && (!loadError.value || Boolean(lastUpdated.value)),
 )
 
+let overviewSeq = 0
+let active = true
+
 async function fetchOverview({ silent = false } = {}) {
+  const seq = ++overviewSeq
   if (!silent) {
     refreshing.value = true
   }
   try {
     const { data } = await api.get('/inventory/overview')
+    if (seq !== overviewSeq || !active) return
     summary.value = {
       total_kinds: data.summary?.total_kinds ?? 0,
       low_stock_count: data.summary?.low_stock_count ?? 0,
@@ -192,14 +191,17 @@ async function fetchOverview({ silent = false } = {}) {
     loadError.value = false
     pollFailed.value = false
   } catch {
+    if (seq !== overviewSeq || !active) return
     if (lastUpdated.value) {
       pollFailed.value = true
     } else {
       loadError.value = true
     }
   } finally {
-    initialLoading.value = false
-    refreshing.value = false
+    if (seq === overviewSeq) {
+      initialLoading.value = false
+      refreshing.value = false
+    }
   }
 }
 
@@ -261,6 +263,20 @@ function showLowStock() {
 
 function goArchive() {
   router.push('/consumables')
+}
+
+function goSuggestion(row) {
+  router.push({ path: '/restock', query: { consumable_id: String(row.id) } })
+}
+
+function goArchiveItem(row) {
+  router.push({ path: '/consumables', query: { consumable_id: String(row.id) } })
+}
+
+function showUncovered() {
+  searchInput.value = ''
+  appliedSearch.value = ''
+  statusFilter.value = 'uncovered'
 }
 
 function goUsers(query) {
@@ -333,8 +349,9 @@ function statusLabel(row) {
 }
 
 function safetyLabel(row) {
-  if (!row.safety_stock) return '未设安全库存线'
-  return ''
+  if (row.safety_stock) return ''
+  if (row.is_out) return '未设安全库存线，缺货不进入补货建议'
+  return '未设安全库存线'
 }
 
 function handleResize() {
@@ -356,6 +373,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  active = false
   if (pollTimer) {
     clearInterval(pollTimer)
     pollTimer = null
@@ -423,6 +441,18 @@ onBeforeUnmount(() => {
           {{ summaryReady ? summary.low_stock_count : '—' }}
         </span>
         <span class="overview__metric-label">低库存预警数</span>
+      </button>
+
+      <button
+        type="button"
+        class="overview__metric overview__metric--clickable"
+        aria-label="查看未设安全库存线的耗材"
+        @click="showUncovered"
+      >
+        <span class="overview__metric-value">
+          {{ summaryReady ? `${safetyCoverage.missing}/${safetyCoverage.total}` : '—' }}
+        </span>
+        <span class="overview__metric-label">预警配置未覆盖 / 总类数</span>
       </button>
 
       <button
@@ -563,6 +593,12 @@ onBeforeUnmount(() => {
                 <el-button v-if="isAdmin" link type="primary" @click="openReceive(row)">
                   收货
                 </el-button>
+                <el-button v-if="row.is_out && canAudit" link type="primary" @click="goSuggestion(row)">
+                  补货建议
+                </el-button>
+                <el-button v-if="row.is_out && isAdmin" link type="primary" @click="goArchiveItem(row)">
+                  档案
+                </el-button>
                 <el-button v-if="canAudit" link type="primary" @click="openAudit(row)">
                   查库存变动
                 </el-button>
@@ -602,6 +638,12 @@ onBeforeUnmount(() => {
             </el-button>
             <span v-if="row.is_out" class="overview__hint overview__hint--out">当前缺货</span>
             <el-button v-if="isAdmin" size="small" @click="openReceive(row)">收货</el-button>
+            <el-button v-if="row.is_out && canAudit" size="small" @click="goSuggestion(row)">
+              补货建议
+            </el-button>
+            <el-button v-if="row.is_out && isAdmin" size="small" @click="goArchiveItem(row)">
+              档案
+            </el-button>
             <el-button v-if="canAudit" size="small" @click="openAudit(row)">查库存变动</el-button>
           </div>
         </li>
@@ -636,7 +678,7 @@ onBeforeUnmount(() => {
 
 .overview__metrics {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 16px;
   margin-bottom: 24px;
 }
@@ -850,6 +892,10 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 1279px) {
+  .overview__metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .overview__search {
     width: 240px;
   }
