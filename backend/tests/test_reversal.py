@@ -377,8 +377,8 @@ def test_list_all_records_with_filters(admin_client: TestClient, db_session) -> 
 
 
 def test_list_invalid_filter_rejected(admin_client: TestClient) -> None:
-    assert admin_client.get(BASE_URL, params={"type": "xxx"}).status_code == 400
-    assert admin_client.get(BASE_URL, params={"status": "xxx"}).status_code == 400
+    assert admin_client.get(BASE_URL, params={"type": "xxx"}).status_code == 422
+    assert admin_client.get(BASE_URL, params={"status": "xxx"}).status_code == 422
 
 
 def test_list_pagination_desc_by_id(admin_client: TestClient, db_session) -> None:

@@ -76,8 +76,24 @@ class RequisitionRecordOut(BaseModel):
     remark: str | None
 
 
+class RequisitionListItemOut(BaseModel):
+    id: int
+    created_at: datetime
+    consumable_name: str
+    consumable_spec: str
+    quantity: int
+    user_id: int
+    user_name: str
+    stock_after: int
+    type: str
+    status: str
+    reversal_of: int | None
+    reversal_reason: str | None
+    remark: str | None
+
+
 class RequisitionPageOut(BaseModel):
-    items: list[RequisitionRecordOut]
+    items: list[RequisitionListItemOut]
     total: int
     page: int
     page_size: int
