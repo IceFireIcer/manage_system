@@ -483,7 +483,7 @@ async function fetchUserOptions() {
   userLoading.value = true
   userLoadError.value = ''
   try {
-    const { data } = await api.get('/users/options')
+    const { data } = await api.get('/users/options', { params: { detail: true } })
     userOptions.value = data
     if (form.userId && !data.some((option) => option.id === form.userId)) {
       form.userId = null
@@ -1117,7 +1117,7 @@ onBeforeUnmount(() => {
                 <el-option
                   v-for="option in userOptions"
                   :key="option.id"
-                  :label="`${option.name}（${ROLE_NAMES[option.role] ?? option.role}）`"
+                  :label="`${option.name}（${ROLE_NAMES[option.role] ?? option.role}·${option.account}）`"
                   :value="option.id"
                 />
               </el-select>

@@ -54,6 +54,12 @@ class UserOption(BaseModel):
     name: str
     role: str
 
+    model_config = {"from_attributes": True}
+
+
+class UserDetailOption(UserOption):
+    account: str
+
 
 class StatusUpdate(BaseModel):
     status: str
@@ -171,9 +177,13 @@ def list_users(
 def list_user_options(
     db: Annotated[Session, Depends(get_db)],
     _current_user: Annotated[User, Depends(require_role("teacher", "admin"))],
-) -> list[UserOption]:
+    detail: bool = False,
+):
     statement = select(User).where(User.status == "enabled").order_by(User.id)
-    return db.scalars(statement).all()
+    users = db.scalars(statement).all()
+    if detail:
+        return [UserDetailOption.model_validate(user) for user in users]
+    return [UserOption.model_validate(user) for user in users]
 
 
 @router.get("/history-options")

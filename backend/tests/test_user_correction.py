@@ -317,3 +317,23 @@ def test_reset_password_rejects_non_student_and_self(
     assert teacher_response.status_code == 400
     assert self_response.status_code == 400
     assert "自己" in self_response.json()["detail"]
+
+
+def test_active_options_detail_exposes_account_for_same_name_selection(
+    admin_client: TestClient, db_session
+) -> None:
+    _create_student(admin_client, "student02", "张同学")
+
+    response = admin_client.get(f"{USERS_URL}/options", params={"detail": "true"})
+
+    assert response.status_code == 200
+    options = response.json()
+    assert all("account" in option for option in options)
+    same_named = [
+        option
+        for option in options
+        if option["name"] == "张同学" and option["role"] == "student"
+    ]
+    assert {option["account"] for option in same_named} == {"student01", "student02"}
+    disabled_id = _user_id(db_session, "disabled01")
+    assert all(option["id"] != disabled_id for option in options)
