@@ -19,7 +19,7 @@ const routes = [
       { path: 'requisition', name: 'requisition', component: () => import('../views/Requisition.vue'), meta: { title: '领用登记' } },
       { path: 'records', name: 'records', component: () => import('../views/Records.vue'), meta: { title: '记录查询' } },
       { path: 'consumables', name: 'consumables', component: () => import('../views/Consumables.vue'), meta: { title: '耗材档案', roles: ['admin'] } },
-      { path: 'users', name: 'users', component: () => import('../views/Users.vue'), meta: { title: '用户管理', roles: ['teacher', 'admin'] } },
+      { path: 'users', name: 'users', component: () => import('../views/Users.vue'), meta: { title: '用户管理', roles: ['admin'] } },
       { path: 'restock', name: 'restock', component: () => import('../views/Restock.vue'), meta: { title: '补货建议', roles: ['teacher', 'admin'] } },
       { path: 'logs', name: 'logs', component: () => import('../views/Logs.vue'), meta: { title: '操作日志', roles: ['teacher', 'admin'] } },
     ],
