@@ -13,6 +13,7 @@ EVENT_RESTOCK = "restock"
 EVENT_RESTOCK_CORRECTION = "restock_correction"
 EVENT_RETURN = "return"
 EVENT_SCRAP = "scrap"
+EVENT_INVENTORY_ADJUSTMENT = "inventory_adjustment"
 
 SOURCE_OPENING = "opening"
 SOURCE_REQUISITION_ORDER = "requisition_order"
@@ -21,6 +22,7 @@ SOURCE_REQUISITION_REENTRY = "requisition_reentry"
 SOURCE_RESTOCK_ORDER = "restock_order"
 SOURCE_REQUISITION_RETURN = "requisition_return"
 SOURCE_REQUISITION_SCRAP = "requisition_scrap"
+SOURCE_INVENTORY_COUNT = "inventory_count"
 
 EVIDENCE_TRUSTED = "trusted"
 EVIDENCE_INSUFFICIENT = "insufficient"
@@ -137,3 +139,6 @@ def return_order_no_for(request_id: str, business_at: datetime) -> str:
 
 def scrap_order_no_for(request_id: str, business_at: datetime) -> str:
     return order_no_for(request_id, business_at, prefix="SCP")
+
+def count_order_no_for(request_id: str, business_at: datetime) -> str:
+    return order_no_for(request_id, business_at, prefix="CNT")

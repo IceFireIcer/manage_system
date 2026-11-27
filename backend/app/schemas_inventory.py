@@ -207,3 +207,107 @@ class InventoryAuditOut(BaseModel):
     affected_range: AuditRangeOut | None
     posting: AuditBasisOut
     business: AuditBasisOut
+
+MAX_COUNT_LINES = 100
+
+
+class InventoryCountLineIn(BaseModel):
+    consumable_id: int = Field(gt=0)
+    counted_qty: int | None = Field(default=None, ge=0)
+    reason: str | None = Field(default=None, max_length=64)
+
+    @field_validator("reason", mode="after")
+    @classmethod
+    def normalize_reason(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        stripped = value.strip()
+        return stripped or None
+
+
+class InventoryCountCreate(BaseModel):
+    lines: list[InventoryCountLineIn] = Field(
+        min_length=1, max_length=MAX_COUNT_LINES
+    )
+    count_at: datetime | None = None
+    counter_id: int | None = Field(default=None, gt=0)
+    reviewer_id: int | None = Field(default=None, gt=0)
+    remark: str | None = Field(default=None, max_length=255)
+    request_id: str | None = Field(default=None, max_length=64)
+
+    @field_validator("remark", mode="after")
+    @classmethod
+    def normalize_remark(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        stripped = value.strip()
+        return stripped or None
+
+    @field_validator("request_id", mode="after")
+    @classmethod
+    def normalize_request_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        stripped = value.strip()
+        if not stripped:
+            return None
+        if any(ch not in "-_.:" and not ch.isalnum() for ch in stripped):
+            raise ValueError("请求标识仅支持字母、数字与 - _ . : 字符")
+        return stripped
+
+
+class InventoryCountLineUpdate(BaseModel):
+    consumable_id: int = Field(gt=0)
+    counted_qty: int = Field(ge=0)
+    reason: str | None = Field(default=None, max_length=64)
+
+    @field_validator("reason", mode="after")
+    @classmethod
+    def normalize_reason(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        stripped = value.strip()
+        return stripped or None
+
+
+class InventoryCountLinesUpdate(BaseModel):
+    lines: list[InventoryCountLineUpdate] = Field(
+        min_length=1, max_length=MAX_COUNT_LINES
+    )
+
+
+class InventoryCountLineOut(BaseModel):
+    line_no: int
+    consumable_id: int
+    consumable_name: str
+    unit: str
+    baseline_stock: int
+    baseline_seq: int
+    counted_qty: int | None
+    period_delta: int
+    expected_stock: int
+    current_stock: int
+    diff: int | None
+    reason: str | None
+    event_id: int | None
+    recheck_required: bool
+
+
+class InventoryCountOut(BaseModel):
+    id: int
+    order_no: str
+    request_id: str
+    status: Literal["open", "posted"]
+    count_at: datetime
+    counter_id: int
+    counter_name: str
+    counter_role: str
+    reviewer_id: int
+    reviewer_name: str
+    reviewer_role: str
+    posted_at: datetime | None
+    posted_by_name: str | None
+    remark: str | None
+    warning: str | None
+    recheck_required: bool
+    lines: list[InventoryCountLineOut]

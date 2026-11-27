@@ -427,6 +427,68 @@ class RestockDisposition(Base):
     updated_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
 
 
+class InventoryCount(Base):
+    __tablename__ = "inventory_counts"
+    __table_args__ = (
+        UniqueConstraint("order_no", name="uq_inventory_counts_order_no"),
+        UniqueConstraint("request_id", name="uq_inventory_counts_request_id"),
+        CheckConstraint(
+            "status IN ('open','posted')",
+            name="ck_inventory_counts_status",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    order_no: Mapped[str] = mapped_column(String(40), nullable=False)
+    request_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="open")
+    count_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False)
+    counter_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    counter_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    counter_role: Mapped[str] = mapped_column(String(16), nullable=False)
+    reviewer_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    reviewer_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    reviewer_role: Mapped[str] = mapped_column(String(16), nullable=False)
+    operator_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    operator_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    operator_role: Mapped[str] = mapped_column(String(16), nullable=False)
+    class_id: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    remark: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    warning: Mapped[str | None] = mapped_column(Text, nullable=True)
+    posted_at: Mapped[datetime | None] = mapped_column(DATETIME, nullable=True)
+    posted_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    posted_by_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
+    updated_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
+
+
+class InventoryCountLine(Base):
+    __tablename__ = "inventory_count_lines"
+    __table_args__ = (
+        UniqueConstraint("count_id", "line_no", name="uq_inventory_count_lines_no"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    count_id: Mapped[int] = mapped_column(
+        ForeignKey("inventory_counts.id"), nullable=False, index=True
+    )
+    line_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    consumable_id: Mapped[int] = mapped_column(
+        ForeignKey("consumables.id"), nullable=False, index=True
+    )
+    consumable_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    unit: Mapped[str] = mapped_column(String(16), nullable=False)
+    baseline_stock: Mapped[int] = mapped_column(Integer, nullable=False)
+    baseline_seq: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    counted_qty: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    period_delta: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    diff: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    event_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
+    updated_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
+
+
 class OperationLog(Base):
     __tablename__ = "operation_logs"
 
