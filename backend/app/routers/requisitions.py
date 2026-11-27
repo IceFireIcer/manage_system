@@ -1,15 +1,17 @@
 """批量领用登记：整单一个数据库事务，逐行条件原子扣减，任一行失败全部回滚。"""
 
+import csv
+import io
 import json
-from datetime import datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import update
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.deps import CurrentUser
+from app.deps import CurrentUser, require_role
 from app.models import Consumable, OperationLog, Requisition, User
 from app.schemas_consumables import STATUS_ENABLED
 from app.schemas_requisitions import (
@@ -17,15 +19,169 @@ from app.schemas_requisitions import (
     RequisitionCreate,
     RequisitionCreateOut,
     RequisitionItemOut,
+    RequisitionListItemOut,
+    RequisitionPageOut,
 )
 
 router = APIRouter(prefix="/api/v1/requisitions", tags=["requisitions"])
+
+CSV_EXPORT_LIMIT = 10000
+CSV_HEADERS = ["时间", "耗材", "数量", "领用人", "领后剩余", "类型", "状态", "撤销原因", "备注"]
+TYPE_NAMES = {"normal": "领用", "reversal": "红冲"}
+STATUS_NAMES = {"active": "有效", "reversed": "已撤销"}
 
 
 def _row_error(row_number: int, message: str) -> HTTPException:
     return HTTPException(
         status_code=status.HTTP_400_BAD_REQUEST,
         detail=f"第 {row_number} 行：{message}",
+    )
+
+
+def _build_query(
+    db: Session,
+    current_user: User,
+    consumable_id: int | None,
+    user_id: int | None,
+    start_date: date | None,
+    end_date: date | None,
+    req_type: str | None,
+    req_status: str | None,
+):
+    query = (
+        select(Requisition, Consumable, User)
+        .join(Consumable, Requisition.consumable_id == Consumable.id)
+        .join(User, Requisition.user_id == User.id)
+    )
+    if current_user.role == "student":
+        query = query.where(Requisition.user_id == current_user.id)
+    elif user_id is not None:
+        query = query.where(Requisition.user_id == user_id)
+    if consumable_id is not None:
+        query = query.where(Requisition.consumable_id == consumable_id)
+    if start_date is not None:
+        query = query.where(Requisition.created_at >= datetime.combine(start_date, time.min))
+    if end_date is not None:
+        query = query.where(
+            Requisition.created_at
+            <= datetime.combine(end_date, time.min) + timedelta(days=1) - timedelta(seconds=1)
+        )
+    if req_type is not None:
+        query = query.where(Requisition.type == req_type)
+    if req_status is not None:
+        query = query.where(Requisition.status == req_status)
+    return query
+
+
+def _serialize_row(
+    requisition: Requisition, consumable: Consumable, user: User
+) -> RequisitionListItemOut:
+    return RequisitionListItemOut(
+        id=requisition.id,
+        created_at=requisition.created_at,
+        consumable_name=consumable.name,
+        consumable_spec=consumable.spec,
+        quantity=requisition.quantity,
+        user_name=user.name,
+        stock_after=requisition.stock_after,
+        type=requisition.type,
+        status=requisition.status,
+        reversal_reason=requisition.reversal_reason,
+        remark=requisition.remark,
+    )
+
+
+def _consume_params(
+    consumable_id: Annotated[int | None, Query()] = None,
+    user_id: Annotated[int | None, Query()] = None,
+    start_date: Annotated[date | None, Query()] = None,
+    end_date: Annotated[date | None, Query()] = None,
+    req_type: Annotated[str | None, Query(alias="type")] = None,
+    req_status: Annotated[str | None, Query(alias="status")] = None,
+) -> dict:
+    if req_type is not None and req_type not in ("normal", "reversal"):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="type 参数仅支持 normal/reversal",
+        )
+    if req_status is not None and req_status not in ("active", "reversed"):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="status 参数仅支持 active/reversed",
+        )
+    return {
+        "consumable_id": consumable_id,
+        "user_id": user_id,
+        "start_date": start_date,
+        "end_date": end_date,
+        "req_type": req_type,
+        "req_status": req_status,
+    }
+
+
+@router.get("")
+def list_requisitions(
+    db: Annotated[Session, Depends(get_db)],
+    current_user: CurrentUser,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
+    filters: Annotated[dict, Depends(_consume_params)] = None,
+) -> RequisitionPageOut:
+    """领用流水查询：倒序分页。
+
+    - 学生只能查询本人记录（传入 user_id 也会被强制过滤为本人）。
+    - 教师与班委可按耗材/领用人/时间/类型/状态筛选。
+    """
+    query = _build_query(db=db, current_user=current_user, **filters)
+    total = db.scalar(
+        select(func.count()).select_from(query.subquery())
+    ) or 0
+
+    rows = db.execute(
+        query.order_by(Requisition.created_at.desc(), Requisition.id.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    ).all()
+    items = [_serialize_row(record, consumable, user) for record, consumable, user in rows]
+    return RequisitionPageOut(items=items, total=total, page=page, page_size=page_size)
+
+
+@router.get("/export")
+def export_requisitions_csv(
+    db: Annotated[Session, Depends(get_db)],
+    staff: Annotated[User, Depends(require_role("teacher", "admin"))],
+    filters: Annotated[dict, Depends(_consume_params)] = None,
+) -> Response:
+    """CSV 导出：教师与班委可用，与列表同参数（不分页，上限 10000 行），UTF-8 BOM。"""
+    query = _build_query(db=db, current_user=staff, **filters)
+    rows = db.execute(
+        query.order_by(Requisition.created_at.desc(), Requisition.id.desc()).limit(CSV_EXPORT_LIMIT)
+    ).all()
+
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(CSV_HEADERS)
+    for record, consumable, user in rows:
+        spec_suffix = f"（{consumable.spec}）" if consumable.spec else ""
+        writer.writerow(
+            [
+                record.created_at.strftime("%Y-%m-%d %H:%M:%S"),
+                f"{consumable.name}{spec_suffix}",
+                record.quantity,
+                user.name,
+                record.stock_after,
+                TYPE_NAMES.get(record.type, record.type),
+                STATUS_NAMES.get(record.status, record.status),
+                record.reversal_reason or "",
+                record.remark or "",
+            ]
+        )
+
+    filename = f"requisitions_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    return Response(
+        content="\ufeff" + buffer.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 
