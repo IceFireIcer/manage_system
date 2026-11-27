@@ -1,6 +1,14 @@
 from datetime import datetime
 
-from sqlalchemy import DATETIME, ForeignKey, Integer, String, Text
+from sqlalchemy import (
+    DATETIME,
+    CheckConstraint,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.business_time import now as business_now
@@ -51,6 +59,91 @@ class Requisition(Base):
     class_id: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     created_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
     remark: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+
+class RequisitionOrder(Base):
+    __tablename__ = "requisition_orders"
+    __table_args__ = (
+        UniqueConstraint("order_no", name="uq_requisition_orders_order_no"),
+        UniqueConstraint("request_id", name="uq_requisition_orders_request_id"),
+        CheckConstraint(
+            "status IN ('processing','submitted','rejected')",
+            name="ck_requisition_orders_status",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    order_no: Mapped[str] = mapped_column(String(40), nullable=False)
+    request_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="processing")
+    owner_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    owner_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    operator_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    operator_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    operator_role: Mapped[str] = mapped_column(String(16), nullable=False)
+    class_id: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    business_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False)
+    posted_at: Mapped[datetime | None] = mapped_column(DATETIME, nullable=True)
+    remark: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    items_signature: Mapped[str] = mapped_column(Text, nullable=False)
+    receipt_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    errors_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
+    updated_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
+
+
+class InventoryEvent(Base):
+    __tablename__ = "inventory_events"
+    __table_args__ = (
+        UniqueConstraint(
+            "consumable_id", "exec_seq", name="uq_inventory_events_consumable_seq"
+        ),
+        CheckConstraint("delta <> 0", name="ck_inventory_events_delta"),
+        CheckConstraint(
+            "stock_after = stock_before + delta", name="ck_inventory_events_balance"
+        ),
+        CheckConstraint("stock_before >= 0", name="ck_inventory_events_before"),
+        CheckConstraint("stock_after >= 0", name="ck_inventory_events_after"),
+        CheckConstraint(
+            "event_type IN ('opening','requisition','reversal','restock','return',"
+            "'scrap','inventory_adjustment','restock_correction')",
+            name="ck_inventory_events_type",
+        ),
+        CheckConstraint(
+            "evidence_status IN ('trusted','insufficient','unverifiable')",
+            name="ck_inventory_events_evidence",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    consumable_id: Mapped[int] = mapped_column(
+        ForeignKey("consumables.id"), nullable=False, index=True
+    )
+    event_type: Mapped[str] = mapped_column(String(24), nullable=False)
+    delta: Mapped[int] = mapped_column(Integer, nullable=False)
+    stock_before: Mapped[int] = mapped_column(Integer, nullable=False)
+    stock_after: Mapped[int] = mapped_column(Integer, nullable=False)
+    exec_seq: Mapped[int] = mapped_column(Integer, nullable=False)
+    business_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False)
+    posted_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False)
+    source_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    source_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    requisition_id: Mapped[int | None] = mapped_column(
+        ForeignKey("requisitions.id"), nullable=True, index=True
+    )
+    line_no: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    operator_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id"), nullable=True
+    )
+    operator_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    operator_role: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    unit_snapshot: Mapped[str] = mapped_column(String(16), nullable=False, default="")
+    evidence_status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="trusted"
+    )
+    class_id: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    created_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
 
 
 class OperationLog(Base):

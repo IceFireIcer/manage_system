@@ -69,3 +69,33 @@ class RestockOut(BaseModel):
     quantity: int
     stock_before: int
     stock_after: int
+
+class InventoryEventOut(BaseModel):
+    id: int
+    event_type: str
+    delta: int
+    stock_before: int
+    stock_after: int
+    exec_seq: int
+    business_at: datetime
+    posted_at: datetime
+    source_type: str
+    source_id: int | None
+    order_no: str | None
+    requisition_id: int | None
+    line_no: int | None
+    operator_id: int | None
+    operator_name: str | None
+    operator_role: str | None
+    unit_snapshot: str
+    evidence_status: str
+
+
+class InventoryLedgerOut(BaseModel):
+    consumable_id: int
+    name: str
+    unit: str
+    current_stock: int
+    opening_stock: int | None
+    consistent: bool
+    events: list[InventoryEventOut]

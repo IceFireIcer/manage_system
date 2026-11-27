@@ -10,8 +10,10 @@ import { businessDate, businessNowInput, businessToday } from '../utils/business
 
 const MAX_ROWS = 5
 const MAX_BACKFILL_DAYS = 30
+const PENDING_KEY = 'manage_system.requisition.pending'
 
 const ROLE_NAMES = { teacher: '教师', admin: '班委', student: '学生' }
+const STATUS_NAMES = { processing: '处理中', submitted: '已提交', rejected: '已拒绝' }
 
 const userStore = useUserStore()
 const route = useRoute()
@@ -33,6 +35,8 @@ const submitting = ref(false)
 const result = ref(null)
 const submitError = ref('')
 const uncertain = ref(false)
+const requestStatus = ref(null)
+const checkingRequest = ref(false)
 const bypassLeaveGuard = ref(false)
 
 const form = reactive({
@@ -362,31 +366,115 @@ async function applyPrefill() {
   rowQtyRefs.get(0)?.focus?.()
 }
 
-function buildSnapshot() {
-  return rows.value.map((row) => {
-    const item = rowItem(row)
-    return {
-      consumableId: row.consumableId,
-      quantity: row.quantity,
-      name: item?.name ?? '',
-      spec: item?.spec ?? '',
-      unit: item?.unit ?? '',
+function createRequestId() {
+  if (window.crypto?.randomUUID) return window.crypto.randomUUID()
+  return `req-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`
+}
+
+function readPending() {
+  try {
+    const raw = window.localStorage.getItem(PENDING_KEY)
+    return raw ? JSON.parse(raw) : null
+  } catch {
+    return null
+  }
+}
+
+function savePending(requestId, payload) {
+  window.localStorage.setItem(
+    PENDING_KEY,
+    JSON.stringify({ requestId, payload, savedAt: new Date().toISOString() }),
+  )
+}
+
+function clearPending() {
+  window.localStorage.removeItem(PENDING_KEY)
+}
+
+function formatMoment(value) {
+  if (!value) return '—'
+  return String(value).replace('T', ' ').slice(0, 19)
+}
+
+function applyReceiptErrors(errors) {
+  let firstRow = null
+  for (const error of errors ?? []) {
+    if (error.line_no && error.line_no >= 1 && error.line_no <= rows.value.length) {
+      rowErrors[error.line_no - 1] = error.reason
+      if (firstRow === null) firstRow = error.line_no - 1
+    } else if (error.field === 'user_id') {
+      metaErrors.user = error.reason
     }
-  })
+  }
+  if (firstRow !== null) focusRow(firstRow, 'select')
 }
 
-function snapshotText(index) {
-  const row = result.value?.rows?.[index]
-  if (!row) return ''
-  return row.spec ? `（${row.spec}）` : ''
+function applyPendingDraft(pending) {
+  const payload = pending?.payload
+  if (!payload || !Array.isArray(payload.items) || payload.items.length === 0) return
+  rows.value = payload.items.slice(0, MAX_ROWS).map((item) =>
+    createRow(item.consumable_id ?? item.consumableId ?? null, item.quantity ?? 1),
+  )
+  form.remark = payload.remark ?? ''
+  if (payload.user_id) form.userId = payload.user_id
+  if (payload.created_at) {
+    form.timeMode = 'backfill'
+    form.backfillAt = payload.created_at
+  }
 }
 
-function snapshotUnit(index) {
-  return result.value?.rows?.[index]?.unit ?? ''
+function showReceipt(receipt, pending) {
+  if (!receipt) return
+  result.value = {
+    count: receipt.lines.length,
+    receipt,
+    orderNo: receipt.order_no,
+    businessAt: receipt.business_at,
+    postedAt: receipt.posted_at,
+  }
+  requestStatus.value = {
+    request_id: receipt.request_id,
+    order_no: receipt.order_no,
+    status: receipt.status,
+    receipt,
+    errors: [],
+    error_detail: null,
+  }
+  uncertain.value = false
+  submitError.value = ''
+  clearPending()
 }
 
-function snapshotName(index, fallback) {
-  return result.value?.rows?.[index]?.name || fallback
+async function checkPendingRequest({ silent = false } = {}) {
+  const pending = readPending()
+  if (!pending?.requestId) {
+    if (!silent) ElMessage.info('没有待查证的领用请求')
+    return false
+  }
+  checkingRequest.value = true
+  try {
+    const { data } = await api.get(
+      `/requisitions/requests/${encodeURIComponent(pending.requestId)}`,
+    )
+    requestStatus.value = data
+    if (data.status === 'submitted' && data.receipt) {
+      showReceipt(data.receipt, pending)
+    } else if (data.status === 'rejected') {
+      uncertain.value = false
+      submitError.value = data.error_detail || '本次领用已被拒绝'
+      applyReceiptErrors(data.errors)
+      clearPending()
+    } else {
+      uncertain.value = true
+      submitError.value = ''
+    }
+    return true
+  } catch (error) {
+    if (!silent) ElMessage.warning('暂时无法查询上次提交结果，请稍后重试')
+    return false
+  } finally {
+    checkingRequest.value = false
+  }
 }
 
 function mapValidationDetail(detail) {
@@ -414,9 +502,16 @@ async function handleSubmitError(error) {
   const status = error.response.status
   const detail = error.response.data?.detail
   if (status === 400 && typeof detail === 'string') {
+    const headerRow = Number(error.response.headers?.['x-error-row'])
+    const headerField = error.response.headers?.['x-error-field'] ?? ''
     const matched = detail.match(/第\s*(\d+)\s*行\s*[：:]\s*(.*)$/)
     let rowLocated = false
-    if (matched) {
+    if (Number.isInteger(headerRow) && headerRow > 0 && headerRow <= rows.value.length) {
+      const index = headerRow - 1
+      rowErrors[index] = detail.replace(/^第\s*\d+\s*行\s*[：:]\s*/, '') || detail
+      focusRow(index, headerField.includes('quantity') ? 'qty' : 'select')
+      rowLocated = true
+    } else if (matched) {
       const index = Number.parseInt(matched[1], 10) - 1
       if (index >= 0 && index < rows.value.length) {
         rowErrors[index] = matched[2] || detail
@@ -471,21 +566,34 @@ async function handleSubmit() {
   submitError.value = ''
   if (!validateMeta()) return
   if (!validateRows()) return
-  const snapshot = buildSnapshot()
+  const requestId = createRequestId()
   const payload = {
     items: rows.value.map((row) => ({
       consumable_id: row.consumableId,
       quantity: row.quantity,
     })),
     remark: form.remark.trim() || null,
+    request_id: requestId,
   }
   if (!isStudent.value) payload.user_id = form.userId
   if (form.timeMode === 'backfill') payload.created_at = form.backfillAt
+  savePending(requestId, payload)
 
   submitting.value = true
   try {
     const { data } = await api.post('/requisitions', payload)
-    result.value = { count: data.count, items: data.items, rows: snapshot }
+    if (data.receipt) showReceipt(data.receipt)
+    else {
+      result.value = { count: data.count, items: data.items, orderNo: data.order_no }
+      requestStatus.value = {
+        request_id: requestId,
+        order_no: data.order_no,
+        status: data.status,
+        errors: [],
+        error_detail: null,
+      }
+      clearPending()
+    }
     refreshWarning.value = ''
     const [consumablesOk, usersOk] = await Promise.all([fetchConsumables(), fetchUserOptions()])
     if (!consumablesOk || !usersOk) {
@@ -493,6 +601,8 @@ async function handleSubmit() {
     }
     clearRowErrors()
   } catch (error) {
+    const status = error.response?.status
+    if (error.response && status < 500) clearPending()
     await handleSubmitError(error)
   } finally {
     submitting.value = false
@@ -521,6 +631,7 @@ async function handleReset() {
 
 function handleContinue() {
   result.value = null
+  requestStatus.value = null
   refreshWarning.value = ''
   resetFormState()
   router.replace({ query: {} })
@@ -569,9 +680,15 @@ onBeforeRouteLeave(async () => {
 onMounted(async () => {
   window.addEventListener('beforeunload', handleBeforeUnload)
   form.userId = userStore.user?.id ?? null
+  const pending = readPending()
 
   const [consumablesOk] = await Promise.all([fetchConsumables(), fetchUserOptions()])
-  if (consumablesOk) await applyPrefill()
+  if (pending) {
+    applyPendingDraft(pending)
+    await checkPendingRequest({ silent: true })
+  } else if (consumablesOk) {
+    await applyPrefill()
+  }
 })
 
 onBeforeUnmount(() => {
@@ -587,28 +704,52 @@ onBeforeUnmount(() => {
       <div class="requisition__receipt-head">
         <div>
           <h2 class="requisition__receipt-title">已登记 {{ result.count }} 项耗材</h2>
-          <p class="requisition__receipt-desc">本次领用已扣减库存并生成流水，回执中的库存为服务端扣减后数值。</p>
+          <p v-if="result.orderNo" class="requisition__receipt-desc">
+            领用单号：{{ result.orderNo }}
+          </p>
+          <p class="requisition__receipt-desc">
+            业务时间 {{ formatMoment(result.businessAt) }} · 入账时间 {{ formatMoment(result.postedAt) }}
+          </p>
+          <p v-if="result.receipt" class="requisition__receipt-desc">
+            领用人 {{ result.receipt.owner_name }} · 经办人 {{ result.receipt.operator_name }}
+            （{{ ROLE_NAMES[result.receipt.operator_role] ?? result.receipt.operator_role }}）
+          </p>
         </div>
-        <span class="status-tag status-tag--success">提交成功</span>
+        <span class="status-tag status-tag--success">
+          {{ STATUS_NAMES[requestStatus?.status] ?? '提交成功' }}
+        </span>
       </div>
 
       <ul class="requisition__receipt-list">
         <li
-          v-for="(item, index) in result.items"
-          :key="`${item.consumable_name}-${index}`"
+          v-for="line in result.receipt?.lines ?? []"
+          :key="line.event_id"
           class="requisition__receipt-row"
         >
           <span class="requisition__receipt-name">
-            {{ snapshotName(index, item.consumable_name) }}{{ snapshotText(index) }}
+            第 {{ line.line_no }} 行 · {{ line.consumable_name }}
           </span>
           <span class="requisition__receipt-qty">
-            领用 {{ item.quantity }}{{ snapshotUnit(index) ? ` ${snapshotUnit(index)}` : '' }}
+            领用 {{ line.quantity }}{{ line.unit ? ` ${line.unit}` : '' }}
           </span>
           <span class="requisition__receipt-stock">
-            扣减后库存 {{ item.stock_after }}{{ snapshotUnit(index) ? ` ${snapshotUnit(index)}` : '' }}
+            扣减前 {{ line.stock_before }} · 扣减后 {{ line.stock_after }}
+            {{ line.unit ? ` ${line.unit}` : '' }}
+          </span>
+          <span class="requisition__receipt-event">
+            流水 #{{ line.event_id }}（记录 #{{ line.requisition_id }}）
           </span>
         </li>
       </ul>
+
+      <el-alert
+        v-if="requestStatus"
+        type="info"
+        :closable="false"
+        show-icon
+        :title="`请求标识 ${requestStatus.request_id} · 状态 ${STATUS_NAMES[requestStatus.status] ?? requestStatus.status}`"
+        class="requisition__alert"
+      />
 
       <el-alert
         v-if="refreshWarning"
@@ -684,8 +825,21 @@ onBeforeUnmount(() => {
           >
             <template #default>
               <p class="requisition__alert-text">
-                请求超时或连接中断，请按领用人、耗材与时间到记录查询核对；确认前请勿重复提交相同明细。
+                请求超时或连接中断，可按请求标识查询处理结果；确认前请勿重复提交相同明细。
               </p>
+              <p v-if="requestStatus?.orderNo" class="requisition__alert-text">
+                领用单号：{{ requestStatus.orderNo }} · 状态：{{
+                  STATUS_NAMES[requestStatus.status] ?? requestStatus.status
+                }}
+              </p>
+              <el-button
+                link
+                type="primary"
+                :loading="checkingRequest"
+                @click="checkPendingRequest()"
+              >
+                查询提交结果
+              </el-button>
               <el-button link type="primary" @click="goRecords">去记录查询</el-button>
             </template>
           </el-alert>
@@ -1174,6 +1328,13 @@ onBeforeUnmount(() => {
 
 .requisition__receipt-stock {
   margin-left: auto;
+}
+
+.requisition__receipt-event {
+  flex-basis: 100%;
+  font-size: 13px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
 }
 
 .requisition__receipt-actions {
