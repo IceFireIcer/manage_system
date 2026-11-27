@@ -41,6 +41,10 @@ class SuggestionOut(BaseModel):
     tier: Literal["urgent", "moderate", "observe"]
     recommended_quantity: int
     rationale: str
+    disposition_status: Literal["pending", "awaiting", "partial", "resolved"] = "pending"
+    disposition_handler_name: str | None = None
+    disposition_order_no: str | None = None
+    disposition_updated_at: datetime | None = None
 
 
 class SuggestionListOut(BaseModel):
@@ -52,14 +56,29 @@ class RestockCreate(BaseModel):
     consumable_id: int = Field(gt=0)
     quantity: int = Field(gt=0)
     remark: str | None = Field(default=None, max_length=255)
+    request_id: str | None = Field(default=None, max_length=64)
+    received_at: datetime | None = None
+    source: str | None = Field(default=None, max_length=64)
 
-    @field_validator("remark", mode="after")
+    @field_validator("remark", "source", mode="after")
     @classmethod
     def normalize_remark(cls, value: str | None) -> str | None:
         if value is None:
             return value
         stripped = value.strip()
         return stripped or None
+
+    @field_validator("request_id", mode="after")
+    @classmethod
+    def normalize_request_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        stripped = value.strip()
+        if not stripped:
+            return None
+        if any(ch not in "-_.:" and not ch.isalnum() for ch in stripped):
+            raise ValueError("请求标识仅支持字母、数字与 - _ . : 字符")
+        return stripped
 
 
 class RestockOut(BaseModel):
@@ -69,6 +88,11 @@ class RestockOut(BaseModel):
     quantity: int
     stock_before: int
     stock_after: int
+    order_no: str | None = None
+    request_id: str | None = None
+    source: str | None = None
+    business_at: datetime | None = None
+    posted_at: datetime | None = None
 
 class InventoryEventOut(BaseModel):
     id: int

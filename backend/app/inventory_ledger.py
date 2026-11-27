@@ -8,9 +8,12 @@ from app.models import Consumable, InventoryEvent, User
 
 EVENT_OPENING = "opening"
 EVENT_REQUISITION = "requisition"
+EVENT_RESTOCK = "restock"
+EVENT_RESTOCK_CORRECTION = "restock_correction"
 
 SOURCE_OPENING = "opening"
 SOURCE_REQUISITION_ORDER = "requisition_order"
+SOURCE_RESTOCK_ORDER = "restock_order"
 
 EVIDENCE_TRUSTED = "trusted"
 EVIDENCE_INSUFFICIENT = "insufficient"
@@ -97,6 +100,10 @@ def list_events(db: Session, consumable_id: int) -> list[InventoryEvent]:
     )
 
 
-def order_no_for(request_id: str, business_at: datetime) -> str:
+def order_no_for(request_id: str, business_at: datetime, prefix: str = "REQ") -> str:
     digest = hashlib.sha1(request_id.encode("utf-8")).hexdigest()[:10].upper()
-    return f"REQ-{business_at.strftime('%Y%m%d')}-{digest}"
+    return f"{prefix}-{business_at.strftime('%Y%m%d')}-{digest}"
+
+
+def restock_order_no_for(request_id: str, business_at: datetime) -> str:
+    return order_no_for(request_id, business_at, prefix="RSK")

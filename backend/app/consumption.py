@@ -129,7 +129,7 @@ def audit_events(
 
     restock_logs = db.scalars(
         select(OperationLog).where(
-            OperationLog.action == "restock",
+            OperationLog.action.in_(("restock", "restock_correction")),
             OperationLog.target_id == consumable_id,
         )
     ).all()

@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app import business_time
+from app import business_time, restock
 from app.agent import llm
 from app.agent.rules import WINDOW_DAYS, Evaluation, evaluate
 from app.consumption import local_day_start, window_net
@@ -149,4 +149,7 @@ def inspect(db: Session, now: datetime | None = None) -> SuggestionListOut:
     items.sort(
         key=lambda item: (TIER_ORDER[item.tier], -item.recommended_quantity, item.name)
     )
-    return SuggestionListOut(generated_at=_last_inspection_at, items=items)
+    return SuggestionListOut(
+        generated_at=_last_inspection_at,
+        items=restock.attach_dispositions(db, items),
+    )

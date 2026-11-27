@@ -5,6 +5,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '../api'
 import PageHeader from '../components/PageHeader.vue'
 import EmptyState from '../components/EmptyState.vue'
+import RestockDialog from '../components/RestockDialog.vue'
 
 const router = useRouter()
 
@@ -33,6 +34,11 @@ const editingId = ref(null)
 const formRef = ref()
 const formError = ref('')
 const nameError = ref('')
+
+const receive = reactive({
+  visible: false,
+  row: null,
+})
 
 const emptyForm = {
   name: '',
@@ -333,6 +339,15 @@ function goRecords(row) {
   router.push({ path: '/records', query: { consumable_id: String(row.id) } })
 }
 
+function openReceive(row) {
+  receive.row = row
+  receive.visible = true
+}
+
+function handleReceived() {
+  fetchList('已入库，暂时无法刷新列表')
+}
+
 function handleResize() {
   viewportWidth.value = window.innerWidth
 }
@@ -440,7 +455,7 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
               </span>
             </template>
           </el-table-column>
-          <el-table-column label="操作" min-width="196" fixed="right">
+          <el-table-column label="操作" min-width="260" fixed="right">
             <template #default="{ row }">
               <template v-if="row.status === 'enabled'">
                 <el-button
@@ -451,6 +466,15 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
                   @click="openEdit(row)"
                 >
                   编辑
+                </el-button>
+                <el-button
+                  link
+                  type="primary"
+                  size="small"
+                  :aria-label="`收货 ${row.name}`"
+                  @click="openReceive(row)"
+                >
+                  收货
                 </el-button>
                 <el-button
                   link
@@ -598,6 +622,12 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
         </div>
       </template>
     </el-dialog>
+
+    <RestockDialog
+      v-model="receive.visible"
+      :consumable="receive.row"
+      @completed="handleReceived"
+    />
   </div>
 </template>
 

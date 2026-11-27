@@ -16,6 +16,13 @@ const TIER_META = {
 
 const TIER_ORDER = { urgent: 0, moderate: 1, observe: 2 }
 
+const DISPOSITION_META = {
+  pending: { label: '待跟进', tagClass: 'status-tag--warning' },
+  awaiting: { label: '待到货', tagClass: 'status-tag--info' },
+  partial: { label: '部分到货', tagClass: 'status-tag--warning' },
+  resolved: { label: '风险解除', tagClass: 'status-tag--success' },
+}
+
 const TIER_FILTERS = [
   { value: 'all', label: '全部' },
   { value: 'urgent', label: '紧急' },
@@ -40,7 +47,11 @@ const restockDialog = reactive({
   visible: false,
   item: null,
   quantity: null,
+  receivedDate: businessToday(),
+  source: '',
   remark: '',
+  requestId: '',
+  lastSignature: '',
   submitting: false,
   fieldError: '',
   errorKind: '',
@@ -155,10 +166,21 @@ async function fetchSuggestions(force = false) {
   }
 }
 
+function newRequestId() {
+  if (globalThis.crypto?.randomUUID) {
+    return globalThis.crypto.randomUUID().replaceAll('-', '')
+  }
+  return `rst-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`
+}
+
 function openRestock(item) {
   restockDialog.item = item
   restockDialog.quantity = item.recommended_quantity > 0 ? item.recommended_quantity : null
+  restockDialog.receivedDate = businessToday()
+  restockDialog.source = '建议补货'
   restockDialog.remark = ''
+  restockDialog.requestId = newRequestId()
+  restockDialog.lastSignature = ''
   restockDialog.fieldError = ''
   restockDialog.errorKind = ''
   restockDialog.errorMessage = ''
@@ -189,26 +211,39 @@ async function submitRestock() {
   restockDialog.errorKind = ''
   restockDialog.errorMessage = ''
   restockDialog.submitting = true
+  const signature = JSON.stringify([
+    item.consumable_id,
+    quantity,
+    restockDialog.receivedDate,
+    restockDialog.source.trim(),
+    restockDialog.remark.trim(),
+  ])
+  if (signature !== restockDialog.lastSignature) {
+    restockDialog.requestId = newRequestId()
+    restockDialog.lastSignature = signature
+  }
   try {
-    const { data } = await api.post('/inventory/restock', {
-      consumable_id: item.consumable_id,
-      quantity,
+    const { data } = await api.post('/inventory/restock/orders', {
+      items: [{ consumable_id: item.consumable_id, quantity }],
+      received_at: restockDialog.receivedDate
+        ? `${restockDialog.receivedDate}T00:00:00`
+        : null,
+      source: restockDialog.source.trim() || null,
       remark: restockDialog.remark.trim() || null,
+      request_id: restockDialog.requestId,
     })
-    items.value = items.value.filter((row) => row.consumable_id !== data.consumable_id)
-    if (!items.value.length) handledAll.value = true
     restockDialog.visible = false
-    const unit = data.unit || item.unit
-    ElMessage.success(
-      `已入库 ${data.quantity}${unit}，当前库存 ${data.stock_after}${unit}`,
-    )
+    const line = Array.isArray(data.lines) ? data.lines[0] : null
+    const stockText = line ? `，当前库存 ${line.stock_after}${line.unit}` : ''
+    ElMessage.success(`已生成入库单 ${data.order_no}${stockText}`)
+    await fetchSuggestions(true)
   } catch (error) {
     if (!error.response) {
       restockDialog.errorKind = 'unconfirmed'
       restockDialog.errorMessage = '网络异常或请求超时，暂未确认本次入库是否成功。'
     } else {
       const status = error.response.status
-      if ([400, 404, 422].includes(status)) {
+      if ([400, 404, 409, 422].includes(status)) {
         restockDialog.errorKind = 'rule'
         restockDialog.errorMessage =
           error.response.data?.detail || '该耗材当前无法入库，请刷新建议后重试。'
@@ -347,6 +382,19 @@ onBeforeUnmount(() => {
           </div>
         </header>
 
+        <div v-if="item.disposition_status" class="restock__disposition">
+          <span
+            class="status-tag"
+            :class="DISPOSITION_META[item.disposition_status]?.tagClass"
+          >
+            {{ DISPOSITION_META[item.disposition_status]?.label ?? item.disposition_status }}
+          </span>
+          <span v-if="item.disposition_handler_name">
+            处理人 {{ item.disposition_handler_name }}
+          </span>
+          <span v-if="item.disposition_order_no">入库单 {{ item.disposition_order_no }}</span>
+        </div>
+
         <dl class="restock__metrics">
           <div class="restock__metric">
             <dt>当前库存</dt>
@@ -438,6 +486,23 @@ onBeforeUnmount(() => {
             <p v-if="expectedStock !== null" class="restock__hint">
               预计入库后 {{ expectedStock }}{{ restockDialog.item.unit }}
             </p>
+          </el-form-item>
+          <el-form-item label="实收日期" required>
+            <el-date-picker
+              v-model="restockDialog.receivedDate"
+              type="date"
+              value-format="YYYY-MM-DD"
+              :disabled="restockDialog.submitting"
+              class="restock__quantity"
+            />
+          </el-form-item>
+          <el-form-item label="来源">
+            <el-input
+              v-model="restockDialog.source"
+              maxlength="64"
+              :disabled="restockDialog.submitting"
+              placeholder="如：建议补货、采购回库"
+            />
           </el-form-item>
           <el-form-item label="备注">
             <el-input
@@ -609,6 +674,16 @@ onBeforeUnmount(() => {
   font-size: 14px;
   font-weight: 500;
   color: var(--text-secondary);
+}
+
+.restock__disposition {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--text-muted);
 }
 
 .restock__metrics {

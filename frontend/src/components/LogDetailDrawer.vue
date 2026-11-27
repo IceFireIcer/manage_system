@@ -25,6 +25,7 @@ const ACTION_NAMES = {
   requisition_create: '领用登记',
   requisition_reverse: '撤销领用',
   restock: '补货入库',
+  restock_correction: '入库纠错',
   consumable_create: '耗材建档',
   consumable_update: '耗材修改',
   consumable_disable: '耗材停用',
