@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowDown, Box, Expand, Fold, Setting, Tickets, TrendCharts } from '@element-plus/icons-vue'
@@ -105,8 +105,8 @@ function handleMenuSelect() {
 
 async function handleLogout() {
   const confirmed = await ElMessageBox.confirm(
-    '退出后需要重新登录才能继续使用系统。',
-    '退出登录',
+    '退出当前会话后，本机需要重新登录才能继续使用，其它设备登录状态保留。',
+    '退出当前会话',
     {
       confirmButtonText: '确认退出',
       cancelButtonText: '取消',
@@ -124,15 +124,118 @@ async function handleLogout() {
     return
   }
 
-  ElMessage.success('已退出登录')
+  ElMessage.success('已退出当前会话')
   router.push('/login')
+}
+
+async function handleLogoutAll() {
+  const confirmed = await ElMessageBox.confirm(
+    '撤销全部会话后，所有设备都需要重新登录。',
+    '撤销全部会话',
+    {
+      confirmButtonText: '确认撤销',
+      cancelButtonText: '取消',
+      type: 'warning',
+    },
+  )
+    .then(() => true)
+    .catch(() => false)
+
+  if (!confirmed) return
+
+  const success = await userStore.logoutAll()
+  if (!success) {
+    ElMessage.error('撤销失败，请重试')
+    return
+  }
+
+  ElMessage.success('已撤销全部会话')
+  router.push('/login')
+}
+
+const passwordDialogOpen = ref(false)
+const passwordSubmitting = ref(false)
+const passwordError = ref('')
+const passwordForm = reactive({ oldPassword: '', newPassword: '', confirmPassword: '' })
+const expiryNotified = ref(false)
+let expiryTimer = null
+
+function openPasswordDialog() {
+  passwordError.value = ''
+  passwordForm.oldPassword = ''
+  passwordForm.newPassword = ''
+  passwordForm.confirmPassword = ''
+  passwordDialogOpen.value = true
+}
+
+function handlePasswordClosed() {
+  if (userStore.mustChangePassword) {
+    passwordDialogOpen.value = true
+  }
+}
+
+async function submitPassword() {
+  if (passwordSubmitting.value) return
+  passwordError.value = ''
+  if (!passwordForm.oldPassword) {
+    passwordError.value = '请输入当前密码'
+    return
+  }
+  if (passwordForm.newPassword.length < 8) {
+    passwordError.value = '新密码至少 8 位'
+    return
+  }
+  if (passwordForm.newPassword !== passwordForm.confirmPassword) {
+    passwordError.value = '两次输入的新密码不一致'
+    return
+  }
+  passwordSubmitting.value = true
+  try {
+    await userStore.changePassword({
+      old_password: passwordForm.oldPassword,
+      new_password: passwordForm.newPassword,
+    })
+    passwordDialogOpen.value = false
+    ElMessage.success('密码已更新，初始凭据与旧会话已失效')
+  } catch (error) {
+    passwordError.value = error.response?.data?.detail || '修改密码失败，请重试'
+  } finally {
+    passwordSubmitting.value = false
+  }
+}
+
+function checkExpiry() {
+  if (!userStore.sessionExpiresAt || !userStore.isLoggedIn) return
+  const remaining = new Date(userStore.sessionExpiresAt).getTime() - Date.now()
+  if (remaining <= 0) {
+    userStore.sessionExpired = true
+    userStore.clearUser()
+    router.replace('/login')
+    return
+  }
+  if (remaining <= 5 * 60 * 1000 && !expiryNotified.value) {
+    expiryNotified.value = true
+    ElMessage.warning('登录将在 5 分钟内过期，请及时保存当前操作')
+  }
 }
 
 function handleUserCommand(command) {
   if (command === 'logout') {
     handleLogout()
+  } else if (command === 'logout-all') {
+    handleLogoutAll()
+  } else if (command === 'change-password') {
+    openPasswordDialog()
   }
 }
+
+watch(
+  () => userStore.mustChangePassword,
+  (value) => {
+    if (value) openPasswordDialog()
+  },
+  { immediate: true },
+)
 
 watch(
   () => route.path,
@@ -141,9 +244,29 @@ watch(
   },
 )
 
-onMounted(() => window.addEventListener('resize', handleResize))
+watch(
+  () => userStore.identityLocked,
+  (value) => {
+    if (value) {
+      ElMessage.warning('账号已在其它标签页切换或退出，请重新登录')
+      router.replace({ path: '/login', query: { redirect: route.fullPath } })
+    }
+  },
+)
 
-onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
+onMounted(() => {
+  window.addEventListener('resize', handleResize)
+  expiryTimer = window.setInterval(checkExpiry, 30000)
+  checkExpiry()
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', handleResize)
+  if (expiryTimer) {
+    window.clearInterval(expiryTimer)
+    expiryTimer = null
+  }
+})
 </script>
 
 <template>
@@ -184,7 +307,9 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
                 <span class="layout__dropdown-name">{{ userStore.user?.name }}</span>
                 <span class="layout__dropdown-role">{{ userStore.roleName }}</span>
               </el-dropdown-item>
-              <el-dropdown-item divided command="logout">退出登录</el-dropdown-item>
+              <el-dropdown-item divided command="change-password">修改密码</el-dropdown-item>
+              <el-dropdown-item command="logout">退出当前会话</el-dropdown-item>
+              <el-dropdown-item command="logout-all">撤销全部会话</el-dropdown-item>
             </el-dropdown-menu>
           </template>
         </el-dropdown>
@@ -267,6 +392,75 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
         </div>
       </main>
     </div>
+
+    <el-dialog
+      v-model="passwordDialogOpen"
+      :title="userStore.mustChangePassword ? '首次登录请修改密码' : '修改密码'"
+      width="420px"
+      :close-on-click-modal="false"
+      :close-on-press-escape="!userStore.mustChangePassword"
+      :show-close="!userStore.mustChangePassword"
+      @closed="handlePasswordClosed"
+    >
+      <div class="layout__password">
+        <el-alert
+          v-if="userStore.mustChangePassword"
+          type="info"
+          :closable="false"
+          show-icon
+          title="初始密码仅可使用一次，请设置新密码后继续使用。"
+          class="layout__password-alert"
+        />
+        <el-alert
+          v-if="passwordError"
+          type="error"
+          :closable="false"
+          show-icon
+          :title="passwordError"
+          class="layout__password-alert"
+        />
+        <el-form label-position="top" @submit.prevent="submitPassword">
+          <el-form-item label="当前密码">
+            <el-input
+              v-model="passwordForm.oldPassword"
+              type="password"
+              autocomplete="current-password"
+              :disabled="passwordSubmitting"
+            />
+          </el-form-item>
+          <el-form-item label="新密码">
+            <el-input
+              v-model="passwordForm.newPassword"
+              type="password"
+              autocomplete="new-password"
+              :disabled="passwordSubmitting"
+            />
+          </el-form-item>
+          <el-form-item label="确认新密码">
+            <el-input
+              v-model="passwordForm.confirmPassword"
+              type="password"
+              autocomplete="new-password"
+              :disabled="passwordSubmitting"
+              @keyup.enter="submitPassword"
+            />
+          </el-form-item>
+        </el-form>
+        <p class="layout__password-hint">新密码至少 8 位。修改后其它设备需要重新登录。</p>
+      </div>
+      <template #footer>
+        <el-button
+          v-if="!userStore.mustChangePassword"
+          :disabled="passwordSubmitting"
+          @click="passwordDialogOpen = false"
+        >
+          取消
+        </el-button>
+        <el-button type="primary" :loading="passwordSubmitting" @click="submitPassword">
+          保存新密码
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 

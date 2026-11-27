@@ -11,6 +11,15 @@ const api = axios.create({
 
 let lastForbiddenAt = 0
 
+api.interceptors.request.use((config) => {
+  if (config.skipAuthRedirect) return config
+  const userStore = useUserStore()
+  if (userStore.identityLocked) {
+    return Promise.reject(new axios.CanceledError('session-locked'))
+  }
+  return config
+})
+
 api.interceptors.response.use(
   (response) => response,
   (error) => {
@@ -31,6 +40,12 @@ api.interceptors.response.use(
         router.replace('/login')
       }
     } else if (status === 403) {
+      const detail = error.response?.data?.detail
+      if (detail === '请先修改初始密码') {
+        const userStore = useUserStore()
+        userStore.mustChangePassword = true
+        return Promise.reject(error)
+      }
       const now = Date.now()
       if (now - lastForbiddenAt > 800) {
         lastForbiddenAt = now
