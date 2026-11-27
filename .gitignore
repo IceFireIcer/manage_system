@@ -14,6 +14,7 @@ dist/
 *.sqlite
 *.db
 .coverage
+temp/
 
 htmlcov/
 .idea/
