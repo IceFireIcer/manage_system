@@ -82,6 +82,32 @@ class ConsumableImportBatch(Base):
     created_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
 
 
+class StudentImportBatch(Base):
+    __tablename__ = "student_import_batches"
+    __table_args__ = (
+        UniqueConstraint(
+            "request_id", name="uq_student_import_batches_request_id"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    request_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    signature: Mapped[str] = mapped_column(String(64), nullable=False)
+    source: Mapped[str] = mapped_column(String(128), nullable=False)
+    on_existing: Mapped[str] = mapped_column(String(16), nullable=False, default="skip")
+    operator_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    operator_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    operator_role: Mapped[str] = mapped_column(String(16), nullable=False)
+    class_id: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    total_rows: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_rows: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    existing_rows: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    updated_rows: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    error_rows: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    receipt_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
+
+
 class Requisition(Base):
     __tablename__ = "requisitions"
     __table_args__ = (
