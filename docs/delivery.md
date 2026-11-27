@@ -21,23 +21,25 @@
 | 后端 | Python 3.12、FastAPI 0.115、SQLAlchemy 2.0、Alembic、PyJWT、bcrypt |
 | 前端 | Vue 3.5、Vite 5、Element Plus、Pinia、Axios、vue-router 4、ECharts 5 |
 | 数据库 | MySQL 8.0（生产，Compose 内置）/ SQLite（本地零 Docker 开发兜底） |
-| 部署 | Docker Compose（nginx + uvicorn + MySQL）；可选 CodeArts 流水线 |
+| 部署 | Docker Compose（nginx + uvicorn + MySQL）；GitHub Actions CI 与 GHCR 镜像发布 |
 
 ## 2. 部署入口
 
-完整部署手册见 **[deploy.md](deploy.md)**，包含部署拓扑、Docker 安装、密钥配置、构建启动、健康检查、日常运维、升级回滚、备份恢复、故障排查，以及可选 CodeArts 流水线三阶段配置。
+完整部署手册见 **[deploy.md](deploy.md)**，包含部署拓扑、Docker 安装、密钥配置、GHCR 镜像拉取、健康检查、日常运维、升级回滚、备份恢复、故障排查，以及 GitHub Actions 与 GHCR 镜像发布说明。
 
 快速命令：
 
 ```bash
 cp .env.example .env
 # 编辑 .env：MYSQL_ROOT_PASSWORD、JWT_SECRET_KEY 填随机强值
-docker compose up -d --build
+docker login ghcr.io -u <GitHub 用户名>   # 私有包需要
+docker compose pull
+docker compose up -d
 docker compose logs backend | grep bootstrap   # 获取管理员初始密码
 curl -fsS http://127.0.0.1:4900/api/v1/health
 ```
 
-云端资源（ECS、公网 IP、DeepSeek Key）需在部署前开通；本仓库不包含任何真实密钥。
+本地自行构建可改用 `docker compose up -d --build`。云端资源（服务器、公网 IP、DeepSeek Key）需在部署前开通；本仓库不包含任何真实密钥。
 
 ## 3. 配置项
 
@@ -50,7 +52,7 @@ curl -fsS http://127.0.0.1:4900/api/v1/health
 | `ADMIN_INIT_ACCOUNT` / `ADMIN_INIT_PASSWORD` / `ADMIN_INIT_NAME` | 否 | 首次创建的管理员账号/密码/姓名，默认 `admin` / 随机 / 系统管理员 |
 | `LLM_API_KEY` / `LLM_BASE_URL` / `LLM_MODEL` | 否 | OpenAI 兼容接口，留空则智能补货只用规则引擎 |
 | `WEB_PORT` | 否 | 对外 HTTP 端口，默认 4900 |
-| `IMAGE_TAG` | 否 | 镜像版本标签，默认 latest |
+| `IMAGE_TAG` | 否 | 镜像版本标签，默认 latest；升级/回滚切换 `sha-<short>` 或 `v*` 版本标签 |
 
 内置默认密钥仅用于首次开箱启动；生产必须覆盖数据库密码与 JWT 密钥。
 
@@ -121,6 +123,7 @@ manage_system/
 │  ├─ adr/                 # 架构决策记录
 │  └─ agents/              # 仓库协作说明
 ├─ scripts/                # 本地零 Docker 启动脚本、CI 三阶段脚本
+├─ .github/workflows/      # GitHub Actions：ci.yml、docker-publish.yml
 ├─ docker-compose.yml
 └─ README.md
 ```
@@ -165,9 +168,9 @@ cd frontend && npm run build
 
 ## 10. 交付物清单
 
-- 源代码：后端、前端、迁移、测试、启动脚本、Docker Compose、CI 三阶段脚本（`scripts/ci/`）
+- 源代码：后端、前端、迁移、测试、启动脚本、Docker Compose、CI 三阶段脚本（`scripts/ci/`）、GitHub Actions 工作流（`.github/workflows/`）
 - 管理员自举脚本：`backend/scripts/bootstrap_admin.py`
 - 验收清单：`docs/acceptance-checklist.md`
 - 交付说明：`docs/delivery.md`
 - 部署手册：`docs/deploy.md`
-- 架构决策：`docs/adr/`（四表模型、处置即入库、红冲撤销、技术栈与部署）
+- 架构决策：`docs/adr/`（四表模型、处置即入库、红冲撤销、技术栈与部署、GitHub CI/CD 与 GHCR）

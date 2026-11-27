@@ -2,24 +2,27 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-IMAGE_REGISTRY="${IMAGE_REGISTRY:-}"
+IMAGE_REGISTRY="${IMAGE_REGISTRY:-ghcr.io/icefireicer}"
 IMAGE_TAG="${IMAGE_TAG:-}"
 
 usage() {
   cat >&2 <<'EOF'
 [stage3] 用法：
-  IMAGE_REGISTRY=<镜像仓库地址> IMAGE_TAG=<版本标签> \
-    bash scripts/ci/stage3-image-publish.sh
+  IMAGE_TAG=<版本标签> bash scripts/ci/stage3-image-publish.sh
 
 参数：
-  IMAGE_REGISTRY  必填，镜像仓库前缀，例如 swr.cn-north-4.myhuaweicloud.com/<namespace>
+  IMAGE_REGISTRY  可选，镜像仓库前缀，默认 ghcr.io/icefireicer
+                  推送镜像为 ${IMAGE_REGISTRY}/labstock-api 与 ${IMAGE_REGISTRY}/labstock-web
+                  ghcr.io 需先 docker login ghcr.io（私有包用带 read:packages 的 GitHub PAT）
   IMAGE_TAG       必填，镜像版本标签，例如 v20261127-1（不要使用 latest 做回滚依据）
 
-前置：已执行 docker login 登录目标镜像仓库。
+说明：GitHub Actions（.github/workflows/docker-publish.yml）已在 main 与 v* 标签推送时原生构建并推送
+      ghcr.io/icefireicer/labstock-api 与 ghcr.io/icefireicer/labstock-web；
+      本脚本保留为手动发布或其他 CI 平台的备用路径。
 EOF
 }
 
-if [ -z "$IMAGE_REGISTRY" ] || [ -z "$IMAGE_TAG" ]; then
+if [ -z "$IMAGE_TAG" ]; then
   usage
   exit 2
 fi

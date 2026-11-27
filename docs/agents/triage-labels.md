@@ -12,4 +12,13 @@ The skills speak in terms of five canonical triage roles. This file maps those r
 
 When a skill mentions a role (e.g. "apply the AFK-ready triage label"), use the corresponding label string from this table.
 
-Labels must be created once in the AtomGit web UI (see `issue-tracker.md`) — there is no CLI to create them.
+Labels are created once with the `gh` CLI in `IceFireIcer/manage_system`; re-running a command for an existing label errors harmlessly.
+
+```bash
+export HTTPS_PROXY=http://127.0.0.1:7890
+gh label create needs-triage --color FBCA04 --description "Maintainer needs to evaluate this issue"
+gh label create needs-info --color D876E3 --description "Waiting on reporter for more information"
+gh label create ready-for-agent --color 0E8A16 --description "Fully specified, ready for an AFK agent"
+gh label create ready-for-human --color 1D76DB --description "Requires human implementation"
+gh label create wontfix --color E4E669 --description "Will not be actioned"
+```

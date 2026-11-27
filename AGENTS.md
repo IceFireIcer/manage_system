@@ -4,7 +4,7 @@
 
 ### Issue tracker
 
-Issues live in the AtomGit Issue tracker (IceFire_Icer/manage_system), read and written via the AtomGit API with a token. See `docs/agents/issue-tracker.md`.
+Issues live in GitHub Issues (`IceFireIcer/manage_system`), read and written via the `gh` CLI. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 

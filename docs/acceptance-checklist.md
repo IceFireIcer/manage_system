@@ -67,7 +67,7 @@ ruff check .
 | 全量自动测试与 Lint | `cd backend && pytest`、`cd backend && ruff check .` | 238 passed；ruff 通过 | 通过 |
 | 前端生产构建 | `cd frontend && npm run build` | 构建成功 | 通过 |
 | 本地零 Docker 启动 | — | `scripts/dev-start.ps1` / `dev-start.sh`；见 README | 通过 |
-| 云端部署与流水线 | `docs/deploy.md` 第 13 节 | 由用户在自有服务器执行 | 待用户执行 |
+| 云端部署与 GitHub Actions + GHCR 镜像 | `docs/deploy.md` 第 13 节 | 由用户在自有服务器执行 | 待用户执行 |
 
 ## 6. 遗留事项（不属于代码验收）
 

@@ -20,7 +20,7 @@
 | 后端 | Python 3.12、FastAPI 0.115、SQLAlchemy 2.0、Alembic、PyJWT、bcrypt |
 | 前端 | Vue 3.5、Vite 5、Element Plus、Pinia、Axios、vue-router 4、ECharts 5 |
 | 数据库 | MySQL 8.0（由 Compose 内置；本地开发可用 SQLite 兜底） |
-| 部署 | Docker Compose（nginx + uvicorn + MySQL），可选华为云 CodeArts 流水线 |
+| 部署 | Docker Compose（nginx + uvicorn + MySQL），GHCR 镜像 + GitHub Actions CI/CD |
 
 ## 环境要求
 
@@ -35,7 +35,7 @@ curl -fsSL https://get.docker.com | sh -s -- --mirror Aliyun
 systemctl enable --now docker
 
 # 2. 获取代码
-git clone https://atomgit.com/IceFire_Icer/manage_system.git
+git clone https://github.com/IceFireIcer/manage_system.git
 cd manage_system
 
 # 3. 配置生产密钥（生产环境必做，见「配置」一节）
@@ -43,8 +43,9 @@ cp .env.example .env
 chmod 600 .env
 # 编辑 .env：MYSQL_ROOT_PASSWORD、JWT_SECRET_KEY 必须替换为随机值
 
-# 4. 构建并启动（首次约 3-8 分钟）
-docker compose up -d --build
+# 4. 拉取 GHCR 镜像并启动（镜像由 GitHub Actions 构建；私有包需先 docker login ghcr.io）
+docker compose pull
+docker compose up -d
 docker compose ps
 
 # 5. 获取管理员初始密码
@@ -52,6 +53,10 @@ docker compose logs backend | grep bootstrap
 ```
 
 浏览器访问 `http://<服务器IP>:4900/`（或 `http://<服务器IP>:<WEB_PORT>/`），使用上一步打印的管理员账号登录。
+
+- 首次部署也可本地构建：`docker compose up -d --build`（不依赖 GHCR，构建约 3-8 分钟）
+- GHCR 包默认私有：可在 GitHub Packages 将 `labstock-api` / `labstock-web` 设为 public；或服务器用带 `read:packages` 权限的 PAT 执行 `docker login ghcr.io -u <GitHub 用户名>` 后拉取
+- 镜像名：`ghcr.io/icefireicer/labstock-api`、`ghcr.io/icefireicer/labstock-web`，版本由 `IMAGE_TAG` 指定（默认 `latest`）
 
 - 健康检查：`curl -fsS http://127.0.0.1:4900/api/v1/health` 应返回 `{"status":"ok"}`
 - 完整部署、运维、备份恢复、升级回滚与排错见 **[docs/deploy.md](docs/deploy.md)**
@@ -180,6 +185,7 @@ manage_system/
 │  ├─ adr/                 # 架构决策记录
 │  └─ agents/              # 仓库协作说明
 ├─ scripts/                # 本地零 Docker 启动脚本、CI 三阶段脚本
+├─ .github/workflows/      # GitHub Actions：ci.yml、docker-publish.yml
 ├─ docker-compose.yml
 ├─ .env.example
 └─ README.md
@@ -203,7 +209,10 @@ cd frontend && npm run build
 ## 部署与流水线
 
 - 云端部署、迁移、健康检查、日常运维、备份恢复、升级回滚、故障排查：[docs/deploy.md](docs/deploy.md)
-- 可选华为云 CodeArts 三阶段流水线（前端构建 / 后端测试 / 镜像发布）脚本位于 `scripts/ci/`，配置说明见 deploy.md 第 13 节
+- GitHub Actions 工作流位于 `.github/workflows/`：
+  - `ci.yml`：push 与 pull_request 触发，后端 `pytest -q` + `ruff check .`，前端 `npm ci` + `npm run build`
+  - `docker-publish.yml`：push 到 `main`、推送 `v*` 标签或手动触发时，构建并推送 `ghcr.io/icefireicer/labstock-api` 与 `ghcr.io/icefireicer/labstock-web`，标签为 `latest`、`sha-<short>`，版本标签推送时附加版本号
+- `scripts/ci/` 三阶段脚本保留为手动执行或其他 CI 平台（Jenkins / GitLab CI 等）的备用路径
 
 ## 安全与运维要点
 
@@ -211,7 +220,7 @@ cd frontend && npm run build
 - **管理员密码**：首次启动后立即修改随机初始密码；丢弃该密码后按上文容器内脚本重置
 - **网络**：仅暴露 `WEB_PORT`（默认 4900），不对外开放 3306 / 8000；HTTPS 建议在前置 nginx/Caddy 或云负载均衡终止
 - **备份**：定期 `mysqldump` 或对数据卷做快照，升级前必须先备份
-- **升级/回滚**：升级用 `docker compose up -d --build`；回滚优先切换历史 `IMAGE_TAG` 启动，数据库迁移通常单向，回滚前确认表结构兼容
+- **升级/回滚**：升级用 `docker compose pull && docker compose up -d`；回滚切换历史 `IMAGE_TAG`（`sha-<short>` 或版本标签）后 `docker compose pull` 再启动；本地自行构建用 `--build`。数据库迁移通常单向，回滚前确认表结构兼容
 - **日志**：`docker compose logs -f backend` 查看运行与 `[bootstrap]` 记录；定期巡检并清理旧镜像
 
 ## 系统行为说明
@@ -223,4 +232,4 @@ cd frontend && npm run build
 ## 维护与许可
 
 - 维护者与许可协议待项目组补充（当前仓库未附 LICENSE 文件，正式分发前请确认授权范围）
-- 问题与需求通过 AtomGit 仓库 Issue 跟踪
+- 问题与需求通过 GitHub Issues（`IceFireIcer/manage_system`）跟踪

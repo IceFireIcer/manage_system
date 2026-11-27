@@ -24,7 +24,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    image: labstock-api:${IMAGE_TAG:-latest}
+    image: ghcr.io/icefireicer/labstock-api:${IMAGE_TAG:-latest}
     restart: unless-stopped
     depends_on:
       db:
@@ -56,7 +56,7 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-    image: labstock-web:${IMAGE_TAG:-latest}
+    image: ghcr.io/icefireicer/labstock-web:${IMAGE_TAG:-latest}
     restart: unless-stopped
     depends_on:
       backend:

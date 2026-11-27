@@ -3,18 +3,18 @@
 本手册面向**任意一台 Ubuntu 云服务器**（阿里云 / 腾讯云 / 华为云 / 自建虚拟机均可），从零完成本系统的部署、验证、升级与回滚。不依赖任何云厂商控制台，控制台操作仅限「开放 4900 端口 / 拿到公网 IP」这类通用步骤。
 
 - 本地零 Docker 开发：见 [README](../README.md#本地开发) 与 `scripts/dev-start.sh`、`scripts/dev-start.ps1`
-- CodeArts 流水线（可选）：见本文 [第 13 节](#13-可选codearts-流水线三阶段)
+- GitHub Actions 与 GHCR 镜像发布（可选）：见本文 [第 13 节](#13-可选github-actions-与-ghcr-镜像发布)
 
 ## 0. 快速部署（推荐）
 
-Compose 内置 `mysql:8.0`、nginx 与 uvicorn，服务器只需安装 Docker；首次启动自动建表并创建管理员账号。
+Compose 内置 `mysql:8.0`、nginx 与 uvicorn，服务器只需安装 Docker；应用镜像由 GitHub Actions 构建并发布到 GHCR，服务器直接拉取；首次启动自动建表并创建管理员账号。
 
 ```bash
 # 服务器只需安装 Docker（Ubuntu）
 curl -fsSL https://get.docker.com | sh -s -- --mirror Aliyun
 systemctl enable --now docker
 
-git clone https://atomgit.com/IceFire_Icer/manage_system.git
+git clone https://github.com/IceFireIcer/manage_system.git
 cd manage_system
 
 # 生产环境必须替换密钥（详见第 5 节）
@@ -22,10 +22,14 @@ cp .env.example .env
 chmod 600 .env
 # 编辑 .env：MYSQL_ROOT_PASSWORD、JWT_SECRET_KEY 填随机值
 
-docker compose up -d --build
+# 私有包需先登录 GHCR（公开包可跳过）
+docker login ghcr.io -u <GitHub 用户名>
+
+docker compose pull
+docker compose up -d
 ```
 
-首次启动约 3-8 分钟（构建镜像 + 拉取 mysql:8.0）：
+首次启动约 1-3 分钟（拉取 mysql:8.0 与 GHCR 应用镜像）：
 
 1. `db` 容器初始化 `manage_system` 库（utf8mb4），健康检查通过后才启动 `backend`
 2. `backend` 执行 `alembic upgrade head` 建四张核心表，再执行 `scripts/bootstrap_admin.py` 创建管理员（幂等）
@@ -45,6 +49,8 @@ docker compose logs backend | grep bootstrap
 - 修改初始密码的方法见 [README「管理员初始化」](../README.md#管理员初始化)
 
 访问 `http://<服务器IP>:4900/` 登录；新建耗材档案与用户后即可开始日常使用。
+
+> GHCR 包默认私有：可在 GitHub Packages 将 `labstock-api` / `labstock-web` 设为 public；或服务器使用带 `read:packages` 权限的 PAT 执行 `docker login ghcr.io -u <GitHub 用户名>`。首次部署也可本地构建：`docker compose up -d --build`（不依赖 GHCR，约 3-8 分钟）。
 
 > **安全提示**：Compose 内置的默认 `MYSQL_ROOT_PASSWORD` 与 `JWT_SECRET_KEY` 仅用于首次开箱启动，**不具备生产安全性**。生产部署必须通过 `.env` 覆盖。第 `1`~`14` 节为完整部署与运维说明：安装与首次启动已包含在本节，可跳过第 `3`~`6` 节；后续运维、升级、备份与排错仍按下文执行。
 
@@ -69,7 +75,7 @@ docker compose logs backend | grep bootstrap
 | 硬件 | 2C4G 起，磁盘 ≥ 20G |
 | 网络 | 安全组 / 防火墙放行 TCP 4900（或自定义 `WEB_PORT`） |
 | 账号 | 具备 `sudo` 权限的 SSH 账号 |
-| 代码 | AtomGit 仓库 `https://atomgit.com/IceFire_Icer/manage_system.git` 访问权限 |
+| 代码 | GitHub 仓库 `https://github.com/IceFireIcer/manage_system.git` 访问权限 |
 
 > 本文不涉及开通云主机、创建镜像仓库等操作，请先在云厂商控制台完成，并在安全组放行 4900 端口。
 
@@ -108,7 +114,7 @@ docker compose version
 
 ```bash
 sudo mkdir -p /opt/manage_system && sudo chown "$USER":"$USER" /opt/manage_system
-git clone https://atomgit.com/IceFire_Icer/manage_system.git /opt/manage_system
+git clone https://github.com/IceFireIcer/manage_system.git /opt/manage_system
 cd /opt/manage_system
 ```
 
@@ -162,19 +168,30 @@ vi .env
 | `ADMIN_INIT_ACCOUNT` / `ADMIN_INIT_PASSWORD` / `ADMIN_INIT_NAME` | 首次创建的管理员账号、密码、姓名；仅首次创建生效 |
 | `LLM_API_KEY` / `LLM_BASE_URL` / `LLM_MODEL` | OpenAI 兼容接口；留空则只用规则引擎 |
 | `WEB_PORT` | 对外 HTTP 端口，默认 `4900` |
-| `IMAGE_TAG` | 镜像版本标签，默认 `latest`，升级/回滚时切换 |
+| `IMAGE_TAG` | 应用镜像版本标签，默认 `latest`；升级/回滚切换为 `sha-<short>` 或 `v*` 版本标签 |
 
 > `.env` 已在 `.gitignore` 中，**不要提交**。密码若包含 `@ : / # ?` 等字符，需要 URL 编码（`DATABASE_URL` 由 Compose 自动拼接，未编码会连不上库）。
 
 `backend/.env` 是**本地零 Docker 开发**用的配置，云端不使用它（容器内配置全部来自 Compose 的 `environment`）。
 
-## 6. 构建并启动
+## 6. 拉取镜像并启动（推荐）
 
 ```bash
 cd /opt/manage_system
 docker compose config          # 静态校验（不连 daemon，配置错误会立即报出）
-docker compose up -d --build   # 首次构建 + 后台启动，约 3-8 分钟（视网络）
+docker login ghcr.io -u <GitHub 用户名>   # 私有包需要；公开包可跳过
+docker compose pull            # 拉取 ghcr.io/icefireicer/labstock-api 与 labstock-web
+docker compose up -d           # 后台启动
 docker compose ps              # 三个服务应为 running / healthy
+```
+
+### 6.1 本地自行构建（可选）
+
+不依赖 GHCR、直接从源码构建时使用：
+
+```bash
+docker compose up -d --build   # 首次构建 + 后台启动，约 3-8 分钟（视网络）
+docker compose ps
 ```
 
 首次启动时：
@@ -262,15 +279,16 @@ cd /opt/manage_system
 
 # 0) 升级前先备份数据库（见第 11 节）
 # 1) 记录当前运行版本，便于回滚
-docker inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' \
-  "$(docker compose ps -q backend)" 2>/dev/null || true
-docker image ls labstock-api labstock-web
+docker compose config | grep "image: ghcr.io"
+docker image ls ghcr.io/icefireicer/labstock-api ghcr.io/icefireicer/labstock-web
+git log --oneline -1
 
 # 2) 拉取新代码
 git pull --ff-only
 
-# 3) 重新构建并滚动重启（backend 会自动执行迁移）
-docker compose up -d --build
+# 3) 拉取新镜像并滚动重启（backend 会自动执行迁移）
+docker compose pull
+docker compose up -d
 
 # 4) 验证
 docker compose ps
@@ -289,20 +307,21 @@ docker image prune -f
 
 ### 11.1 镜像回滚（推荐）
 
-升级前先给当前镜像打版本标签，升级出问题时切换回来：
+GitHub Actions 每次推送都会生成 `sha-<short>` 标签，推送 `v*` 时另有版本标签；升级出问题时切回历史标签：
 
 ```bash
-# 升级前：给当前镜像打上版本标签，并记录到 .env 的 IMAGE_TAG（可选）
-TAG="v$(date +%Y%m%d-%H%M)"
-docker tag labstock-api:latest "labstock-api:${TAG}"
-docker tag labstock-web:latest "labstock-web:${TAG}"
+cd /opt/manage_system
 
-# 出问题时：用旧标签启动（注意不要加 --build，否则会覆盖标签镜像）
-IMAGE_TAG="${TAG}" docker compose up -d --no-build
+# 查看可用标签：GitHub Packages 页面，或本地 git tag
+# 使用历史 sha-<short> 或 v* 版本标签回滚
+IMAGE_TAG=sha-abc1234 docker compose pull
+IMAGE_TAG=sha-abc1234 docker compose up -d --no-build
 
 # 确认回滚成功
 docker compose ps
 ```
+
+使用本地构建（`--build`）时，回滚前先用 `docker tag` 给当前镜像打本地备份标签，再以 `IMAGE_TAG=<标签> docker compose up -d --no-build` 启动。
 
 > 数据库迁移通常是单向的：回滚镜像前请先确认旧版本代码兼容当前表结构；不确定时优先「修复新版本」或「恢复备份」。
 
@@ -311,7 +330,8 @@ docker compose ps
 ```bash
 git log --oneline -10
 git checkout <上一个稳定 commit 或 tag>
-docker compose up -d --build
+docker compose pull
+docker compose up -d --no-build
 ```
 
 ### 11.3 备份与恢复
@@ -346,6 +366,7 @@ docker compose start backend
 | 登录后立刻回到登录页 / 401 | 改过 `JWT_SECRET_KEY` 会使旧 Cookie 失效，重新登录；检查服务器时间是否准确 |
 | 补货建议只有模板文案 | `LLM_API_KEY` 为空或不可用，属预期降级；填好 key 后 `docker compose up -d` 生效 |
 | 镜像拉取 / 构建超慢 | 配置 Docker `registry-mirrors`；前端 Dockerfile 支持 `--build-arg NPM_REGISTRY=...`，后端支持 `--build-arg PIP_INDEX_URL=...` |
+| 拉取镜像报 `denied` / `unauthorized` | GHCR 包为私有：`docker login ghcr.io -u <GitHub 用户名>`（PAT 需 `read:packages`），或在 GitHub Packages 将 `labstock-api` / `labstock-web` 设为 public |
 | 磁盘占满 | `docker system df`；`docker image prune -af`；检查 `mysql_data` 增长与备份文件 |
 | 时间显示为 UTC | 容器已设 `TZ=Asia/Shanghai`；确认宿主机时区 `timedatectl` |
 
@@ -356,73 +377,71 @@ docker compose logs --no-color > /tmp/compose-logs.txt
 docker inspect --format '{{json .State.Health}}' "$(docker compose ps -q backend)"
 ```
 
-## 13. 可选：CodeArts 流水线三阶段
+## 13. 可选：GitHub Actions 与 GHCR 镜像发布
 
-赛事要求依托华为云 CodeArts 完成 CI/CD 发布。本节给出与仓库结构匹配的三个可执行脚本，**具体界面以 CodeArts 控制台为准**；不使用华为云时，也可用任意 CI（GitHub Actions / GitLab CI / Jenkins）照搬同一套脚本。
+仓库内置两条 GitHub Actions 工作流，推送到 GitHub 后自动运行，无需在服务器或平台侧搭建流水线。
 
-三个脚本均可本地直接执行，也可在 CodeArts 流水线中创建阶段并调用：
+### 13.1 CI（.github/workflows/ci.yml）
+
+- 触发：`push`（所有分支）与 `pull_request`
+- `backend` job：Python 3.12，`pip install -r backend/requirements.txt` → `pytest -q` → `ruff check .`
+- `frontend` job：Node 22，`npm ci` → `npm run build`
+- 同一 ref 的新推送会取消旧运行（`concurrency.cancel-in-progress`）
+
+### 13.2 镜像发布（.github/workflows/docker-publish.yml）
+
+- 触发：push 到 `main`、推送 `v*` 标签、`workflow_dispatch`
+- 权限：`contents: read`、`packages: write`；用 `GITHUB_TOKEN` 登录 `ghcr.io`，无需额外 secret
+- 构建上下文：`backend/` → `ghcr.io/icefireicer/labstock-api`；`frontend/` → `ghcr.io/icefireicer/labstock-web`
+- 标签：`latest`（仅默认分支 `main`）、`sha-<short>`（每次提交）；推送 `v*` 时附加版本标签
+- 使用 Buildx + GitHub Actions 缓存，重复构建更快
+
+推送发布版本：
+
+```bash
+git tag v20261127-1
+git push origin v20261127-1
+```
+
+发布后可在 GitHub 仓库的 Packages 页面查看 `labstock-api` / `labstock-web`。
+
+### 13.3 GHCR 包可见性与服务器拉取
+
+- GHCR 包默认私有：可在 GitHub Packages 将两个包设为 public；或使用带 `read:packages` 权限的 PAT 登录
+- 服务器上登录（私有包）：
+
+```bash
+docker login ghcr.io -u <GitHub 用户名>
+docker compose pull
+docker compose up -d
+```
+
+- 升级与回滚都通过 `IMAGE_TAG` 完成：
+
+```bash
+IMAGE_TAG=sha-abc1234 docker compose pull
+IMAGE_TAG=sha-abc1234 docker compose up -d --no-build
+```
+
+- 工作流在 GitHub 端执行，服务器只负责拉取与运行；构建失败时不会产生新标签，服务器继续运行上一个可用 `IMAGE_TAG`
+
+### 13.4 手动与其他平台备用
+
+`scripts/ci/` 保留三阶段脚本，可本地或任意 CI（Jenkins / GitLab CI 等）直接调用：
 
 | 阶段 | 脚本 | 说明 |
 | --- | --- | --- |
 | 1 前端构建 | `scripts/ci/stage1-frontend-build.sh` | `npm ci` + `npm run build`，校验 `frontend/dist` |
 | 2 后端测试 | `scripts/ci/stage2-backend-test.sh` | 创建/复用 venv，`pip install` + `pytest` + `ruff check .` |
-| 3 镜像发布 | `scripts/ci/stage3-image-publish.sh` | 构建并推送 backend/web 镜像，必需 `IMAGE_REGISTRY`、`IMAGE_TAG` |
-
-### 阶段 1：前端构建（node:22）
+| 3 镜像发布 | `scripts/ci/stage3-image-publish.sh` | 构建并推送 backend/web 镜像，默认仓库 `ghcr.io/icefireicer`，必需 `IMAGE_TAG` |
 
 ```bash
 bash scripts/ci/stage1-frontend-build.sh
-# 归档产物：frontend/dist
-# 可用 NPM_REGISTRY 覆盖依赖源（默认 https://registry.npmmirror.com）
-```
-
-### 阶段 2：后端测试（python:3.12）
-
-```bash
 bash scripts/ci/stage2-backend-test.sh
-# 可用 VENV_DIR 复用已有虚拟环境，PIP_INDEX_URL 覆盖依赖源
+IMAGE_TAG="$(date +%Y%m%d%H%M)" bash scripts/ci/stage3-image-publish.sh
 ```
 
-### 阶段 3：镜像构建推送 + 服务器发布
-
-前置：在 SWR（或任意镜像仓库）创建 `labstock-api`、`labstock-web` 两个仓库，并把登录凭据、服务器 SSH 私钥、host/端口配置为流水线**凭据/参数**，不要写进仓库。
-
-```bash
-IMAGE_REGISTRY="${SWR_REGISTRY}" \
-IMAGE_TAG="${BUILD_NUMBER:-$(date +%Y%m%d%H%M)}" \
-bash scripts/ci/stage3-image-publish.sh
-```
-
-`stage3` 缺少 `IMAGE_REGISTRY` 或 `IMAGE_TAG` 时会输出用法并以非零码退出，流水线会立即失败，避免误推镜像。
-
-仓库脚本只负责构建与推送；发布到 ECS 仍可在流水线追加一个 SSH 步骤：
-
-```bash
-ssh -o StrictHostKeyChecking=accept-new "${DEPLOY_USER}@${DEPLOY_HOST}" \
-  "cd /opt/manage_system && \
-   git pull --ff-only && \
-   IMAGE_TAG=${IMAGE_TAG} docker compose pull && \
-   IMAGE_TAG=${IMAGE_TAG} docker compose up -d --no-build && \
-   docker compose ps"
-```
-
-在校验发布结果时，流水线可追加：
-
-```bash
-ssh "${DEPLOY_USER}@${DEPLOY_HOST}" "curl -fsS http://127.0.0.1:4900/api/v1/health"
-```
-
-### 版本标签与回滚
-
-- 每次流水线都用 `BUILD_NUMBER`（或时间戳）作为 `IMAGE_TAG`，镜像与发布版本一一对应
-- 回滚 = 在服务器上以历史标签重启：
-
-```bash
-cd /opt/manage_system
-IMAGE_TAG=<上一次成功标签> docker compose up -d --no-build
-```
-
-- 若拉取的是远程镜像，需先 `IMAGE_TAG=<tag> docker compose pull` 再启动
+`stage3` 缺少 `IMAGE_TAG` 时会输出用法并以非零码退出，避免误推镜像。脚本推送后仍需在服务器执行 `docker compose pull && docker compose up -d`。
 
 ## 14. 上线安全清单
 
@@ -432,5 +451,7 @@ IMAGE_TAG=<上一次成功标签> docker compose up -d --no-build
 - [ ] 未将 `ADMIN_INIT_PASSWORD` 明文长期保留在 `.env` 或交付材料中
 - [ ] 安全组仅放行 22 / 4900（或自定义端口），不暴露 3306 / 8000
 - [ ] 配置数据库定期备份与磁盘快照
+- [ ] GHCR 包可见性已确认：公开拉取，或服务器已用带 `read:packages` 的 PAT 登录
+- [ ] GitHub Actions（`ci.yml`、`docker-publish.yml`）在 `main` 上通过，GHCR 存在可用 `sha-<short>` 或 `v*` 标签
 - [ ] 建议接入 HTTPS：在前置 nginx/Caddy 或云负载均衡上终止 TLS（当前 Compose 默认 HTTP）
 - [ ] 定期 `docker compose logs` 巡检与 `docker image prune` 清理
