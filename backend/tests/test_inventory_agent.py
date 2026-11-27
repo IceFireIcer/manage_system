@@ -255,7 +255,14 @@ def test_cache_reused_until_refresh(
 
     refreshed = admin_client.post(REFRESH_URL).json()
     assert stub.calls == 4
-    assert refreshed["items"] == first["items"]
+    assert [
+        {key: value for key, value in item.items() if key != "computed_at"}
+        for item in refreshed["items"]
+    ] == [
+        {key: value for key, value in item.items() if key != "computed_at"}
+        for item in first["items"]
+    ]
+    assert refreshed["items"][0]["computed_at"] >= first["items"][0]["computed_at"]
 
 
 def test_suggestions_generate_rationales_concurrently(

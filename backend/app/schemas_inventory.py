@@ -61,6 +61,9 @@ class SuggestionOut(BaseModel):
     ]
     consumption_note: str
     rationale: str
+    computed_at: datetime
+    rationale_source: Literal["llm", "rules"] = "rules"
+    rationale_degraded: bool = False
     disposition_status: Literal["pending", "awaiting", "partial", "resolved"] = "pending"
     disposition_handler_name: str | None = None
     disposition_order_no: str | None = None
@@ -69,6 +72,7 @@ class SuggestionOut(BaseModel):
 
 class SuggestionListOut(BaseModel):
     generated_at: datetime
+    generation: int = 0
     rules: RuleSpecOut
     items: list[SuggestionOut]
 
