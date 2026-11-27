@@ -171,6 +171,68 @@ class CorrectionCreate(BaseModel):
         return stripped
 
 
+class ReturnCreate(BaseModel):
+    quantity: int = Field(gt=0)
+    reason: str | None = Field(default=None, max_length=255)
+    remark: str | None = Field(default=None, max_length=255)
+    request_id: str | None = Field(default=None, max_length=64)
+
+    @field_validator("reason", "remark", mode="after")
+    @classmethod
+    def normalize_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        stripped = value.strip()
+        return stripped or None
+
+    @field_validator("request_id", mode="after")
+    @classmethod
+    def normalize_request_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        stripped = value.strip()
+        if not stripped:
+            return None
+        if any(ch not in "-_.:" and not ch.isalnum() for ch in stripped):
+            raise ValueError("请求标识仅支持字母、数字与 - _ . : 字符")
+        return stripped
+
+
+class ScrapCreate(BaseModel):
+    quantity: int = Field(gt=0)
+    reason: str = Field(min_length=1, max_length=500)
+    remark: str | None = Field(default=None, max_length=255)
+    request_id: str | None = Field(default=None, max_length=64)
+
+    @field_validator("reason", mode="after")
+    @classmethod
+    def normalize_reason(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("报损原因不能为空")
+        return stripped
+
+    @field_validator("remark", mode="after")
+    @classmethod
+    def normalize_remark(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        stripped = value.strip()
+        return stripped or None
+
+    @field_validator("request_id", mode="after")
+    @classmethod
+    def normalize_request_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        stripped = value.strip()
+        if not stripped:
+            return None
+        if any(ch not in "-_.:" and not ch.isalnum() for ch in stripped):
+            raise ValueError("请求标识仅支持字母、数字与 - _ . : 字符")
+        return stripped
+
+
 class CorrectionHandle(BaseModel):
     status: str = Field(pattern="^(rejected)$")
     handling_note: str = Field(min_length=1, max_length=500)
@@ -204,6 +266,48 @@ class CorrectionOut(BaseModel):
     reentry_order_no: str | None = None
     created_at: datetime
     handled_at: datetime | None = None
+
+
+class RequisitionReturnOut(BaseModel):
+    id: int
+    order_no: str
+    request_id: str
+    requisition_id: int
+    requisition_order_no: str | None = None
+    consumable_id: int
+    consumable_name: str
+    unit: str
+    quantity: int
+    stock_before: int
+    stock_after: int
+    reason: str | None = None
+    remark: str | None = None
+    operator_id: int
+    operator_name: str
+    operator_role: str
+    event_id: int | None = None
+    created_at: datetime
+
+
+class RequisitionScrapOut(BaseModel):
+    id: int
+    order_no: str
+    request_id: str
+    requisition_id: int
+    requisition_order_no: str | None = None
+    consumable_id: int
+    consumable_name: str
+    unit: str
+    quantity: int
+    stock_before: int
+    stock_after: int
+    reason: str
+    remark: str | None = None
+    operator_id: int
+    operator_name: str
+    operator_role: str
+    event_id: int | None = None
+    created_at: datetime
 
 
 class RequisitionRecordOut(BaseModel):
@@ -258,6 +362,7 @@ class RequisitionListItemOut(BaseModel):
     correction_status: str | None = None
 
 
+
 class RequisitionPageOut(BaseModel):
     items: list[RequisitionListItemOut]
     total: int
@@ -269,3 +374,8 @@ class RequisitionDetailOut(RequisitionRecordOut):
     origin: RequisitionRelatedOut | None = None
     reversal: RequisitionRelatedOut | None = None
     reentry: RequisitionRelatedOut | None = None
+    returned_quantity: int = 0
+    scrapped_quantity: int = 0
+    returnable_quantity: int = 0
+    returns: list[RequisitionReturnOut] = []
+    scraps: list[RequisitionScrapOut] = []

@@ -9,6 +9,7 @@ import EmptyState from '../components/EmptyState.vue'
 import RecordDetailDrawer from '../components/RecordDetailDrawer.vue'
 import ReversalDialog from '../components/ReversalDialog.vue'
 import CorrectionDialog from '../components/CorrectionDialog.vue'
+import ReturnScrapDialog from '../components/ReturnScrapDialog.vue'
 import { validateDateRange } from '../utils/businessDate'
 
 const QUICK_OPTIONS = [
@@ -83,6 +84,9 @@ const reversalVisible = ref(false)
 const reversalRecord = ref(null)
 const correctionVisible = ref(false)
 const correctionRecord = ref(null)
+const stockActionVisible = ref(false)
+const stockActionRecord = ref(null)
+const stockActionKind = ref('return')
 const receipt = ref(null)
 
 const tableRegion = ref(null)
@@ -247,6 +251,14 @@ function relatedLabel(row) {
 
 function canReverseRow(row) {
   return isStaff.value && row.type === 'normal' && row.status === 'active'
+}
+
+function canStockActionRow(row) {
+  return row.type === 'normal' && row.status === 'active'
+}
+
+function canScrapRow(row) {
+  return isStaff.value && canStockActionRow(row)
 }
 
 function rowClassName({ row }) {
@@ -479,6 +491,47 @@ function handleCorrectionSuccess() {
   detailRefresh.value += 1
   fetchRecords()
   ElMessage.success('纠错申请已提交，等待教师处理')
+}
+
+async function openStockAction(record, kind, event) {
+  if (event?.currentTarget) {
+    lastTrigger.value = event.currentTarget
+  }
+  let target = { ...record, unit: record.unit ?? rowUnit(record) }
+  if (target.returnable_quantity === undefined) {
+    try {
+      const { data } = await api.get(`/requisitions/${record.id}`)
+      target = { ...target, ...data }
+    } catch {
+      ElMessage.error('记录读取失败，请稍后重试')
+      return
+    }
+  }
+  if (Number(target.returnable_quantity ?? 0) <= 0) {
+    ElMessage.warning('该记录已无可退或可报损数量')
+    return
+  }
+  stockActionKind.value = kind
+  stockActionRecord.value = target
+  stockActionVisible.value = true
+}
+
+function handleDetailReturn(record) {
+  openStockAction(record, 'return')
+}
+
+function handleDetailScrap(record) {
+  openStockAction(record, 'scrap')
+}
+
+function handleStockActionSuccess() {
+  ElMessage.success(
+    stockActionKind.value === 'scrap' ? '报损已登记' : '退库已登记，库存已按实收数量回加',
+  )
+  stockActionVisible.value = false
+  stockActionRecord.value = null
+  detailRefresh.value += 1
+  fetchRecords()
 }
 
 function openReversal(row, event) {
@@ -850,9 +903,25 @@ onMounted(async () => {
               <span v-else class="records__muted">—</span>
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="180" fixed="right">
+          <el-table-column label="操作" width="260" fixed="right">
             <template #default="{ row }">
               <el-button link type="primary" @click="openDetail(row, $event)">查看详情</el-button>
+              <el-button
+                v-if="canStockActionRow(row)"
+                link
+                type="primary"
+                @click="openStockAction(row, 'return', $event)"
+              >
+                退库
+              </el-button>
+              <el-button
+                v-if="canScrapRow(row)"
+                link
+                type="warning"
+                @click="openStockAction(row, 'scrap', $event)"
+              >
+                报损
+              </el-button>
               <el-button
                 v-if="canReverseRow(row)"
                 link
@@ -897,6 +966,8 @@ onMounted(async () => {
       @closed="handleDetailClosed"
       @reverse="handleDetailReverse"
       @correct="handleDetailCorrect"
+      @return="handleDetailReturn"
+      @scrap="handleDetailScrap"
     />
 
     <ReversalDialog
@@ -910,6 +981,14 @@ onMounted(async () => {
       v-model="correctionVisible"
       :record="correctionRecord"
       @success="handleCorrectionSuccess"
+    />
+
+    <ReturnScrapDialog
+      v-model="stockActionVisible"
+      :record="stockActionRecord"
+      :action="stockActionKind"
+      @success="handleStockActionSuccess"
+      @refresh="fetchRecords"
     />
   </div>
 </template>

@@ -11,12 +11,16 @@ EVENT_REQUISITION = "requisition"
 EVENT_REVERSAL = "reversal"
 EVENT_RESTOCK = "restock"
 EVENT_RESTOCK_CORRECTION = "restock_correction"
+EVENT_RETURN = "return"
+EVENT_SCRAP = "scrap"
 
 SOURCE_OPENING = "opening"
 SOURCE_REQUISITION_ORDER = "requisition_order"
 SOURCE_REQUISITION_REVERSAL = "requisition_reversal"
 SOURCE_REQUISITION_REENTRY = "requisition_reentry"
 SOURCE_RESTOCK_ORDER = "restock_order"
+SOURCE_REQUISITION_RETURN = "requisition_return"
+SOURCE_REQUISITION_SCRAP = "requisition_scrap"
 
 EVIDENCE_TRUSTED = "trusted"
 EVIDENCE_INSUFFICIENT = "insufficient"
@@ -118,3 +122,10 @@ def reversal_order_no_for(requisition_id: int, business_at: datetime) -> str:
 
 def reentry_order_no_for(reversal_id: int, business_at: datetime) -> str:
     return f"REN-{business_at.strftime('%Y%m%d')}-{reversal_id:06d}"
+
+def return_order_no_for(request_id: str, business_at: datetime) -> str:
+    return order_no_for(request_id, business_at, prefix="RTN")
+
+
+def scrap_order_no_for(request_id: str, business_at: datetime) -> str:
+    return order_no_for(request_id, business_at, prefix="SCP")
