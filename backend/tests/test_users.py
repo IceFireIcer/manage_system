@@ -1,3 +1,5 @@
+import json
+
 import pytest
 from app.models import OperationLog, User
 from fastapi.testclient import TestClient
@@ -211,7 +213,10 @@ def test_user_create_written_to_logs(admin_client: TestClient, db_session) -> No
     assert len(logs) == 1
     log = logs[0]
     assert log.target_id is not None
-    assert log.after_value == "newstudent01"
+    snapshot = json.loads(log.after_value)
+    assert snapshot["account"] == "newstudent01"
+    assert snapshot["name"] == "新同学"
+    assert snapshot["role"] == "student"
     assert log.operator_id == _get_user_id(admin_client, "admin01")
 
     fields = [log.before_value, log.after_value, log.remark]

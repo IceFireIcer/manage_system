@@ -15,6 +15,7 @@ const menus = [
   { path: '/consumables', title: '耗材档案', roles: ['admin'] },
   { path: '/users', title: '用户管理', roles: ['admin'] },
   { path: '/restock', title: '补货建议', roles: ['teacher', 'admin'] },
+  { path: '/consumption', title: '消耗汇总', roles: ['teacher', 'admin'] },
   { path: '/logs', title: '操作日志', roles: ['teacher', 'admin'] },
 ]
 

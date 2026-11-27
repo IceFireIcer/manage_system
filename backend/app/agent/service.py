@@ -3,12 +3,13 @@
 import logging
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.agent import llm
 from app.agent.rules import WINDOW_DAYS, Evaluation, evaluate
-from app.models import Consumable, Requisition
+from app.consumption import local_day_start, window_net
+from app.models import Consumable
 from app.schemas_consumables import STATUS_ENABLED
 from app.schemas_inventory import SuggestionListOut, SuggestionOut
 
@@ -32,14 +33,6 @@ def clear_cache(consumable_id: int | None = None) -> None:
     _cache.pop(consumable_id, None)
 
 
-def local_day_start(days_ago: int = 0, now: datetime | None = None) -> datetime:
-    """Asia/Shanghai 自然日零点，转为系统本地 naive 时间以与流水存储口径一致。"""
-    reference = now or datetime.now(SHANGHAI_TZ)
-    day_start = reference.astimezone(SHANGHAI_TZ).replace(
-        hour=0, minute=0, second=0, microsecond=0
-    )
-    return (day_start - timedelta(days=days_ago)).astimezone().replace(tzinfo=None)
-
 
 def window_bounds(now: datetime | None = None) -> tuple[datetime, datetime, datetime]:
     """返回 (近 7 天窗口起点, 再前 7 天窗口起点, 当前本地时间)。"""
@@ -51,24 +44,8 @@ def window_bounds(now: datetime | None = None) -> tuple[datetime, datetime, date
 
 
 def _window_net(db: Session, consumable_id: int, start: datetime, end: datetime) -> int:
-    window_filters = (
-        Requisition.consumable_id == consumable_id,
-        Requisition.created_at >= start,
-        Requisition.created_at < end,
-    )
-    issued = db.scalar(
-        select(func.coalesce(func.sum(Requisition.quantity), 0)).where(
-            *window_filters, Requisition.type == "normal"
-        )
-    ) or 0
-    reversed_quantity = db.scalar(
-        select(func.coalesce(func.sum(Requisition.quantity), 0)).where(
-            *window_filters,
-            Requisition.type == "reversal",
-            Requisition.status == "active",
-        )
-    ) or 0
-    return max(issued - reversed_quantity, 0)
+    """与消耗汇总共用同一净消耗口径（领用 − 有效红冲，负值截断为 0）。"""
+    return window_net(db, consumable_id, start, end)
 
 
 def _cached(consumable_id: int, now: datetime) -> SuggestionOut | None:
