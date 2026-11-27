@@ -10,6 +10,14 @@ const api = axios.create({
 })
 
 let lastForbiddenAt = 0
+let lastServerErrorAt = 0
+
+function requestIdOf(error) {
+  const fromHeader = error.response?.headers?.['x-request-id']
+  const fromBody = error.response?.data?.request_id
+  const value = fromHeader || fromBody
+  return value ? `（请求编号 ${value}）` : ''
+}
 
 api.interceptors.request.use((config) => {
   if (config.skipAuthRedirect) return config
@@ -24,6 +32,7 @@ api.interceptors.response.use(
   (response) => response,
   (error) => {
     const status = error.response?.status
+    const requestIdSuffix = requestIdOf(error)
 
     if (status === 401 && !error.config?.skipAuthRedirect) {
       const userStore = useUserStore()
@@ -49,7 +58,13 @@ api.interceptors.response.use(
       const now = Date.now()
       if (now - lastForbiddenAt > 800) {
         lastForbiddenAt = now
-        ElMessage.error('你没有权限执行此操作')
+        ElMessage.error(`你没有权限执行此操作${requestIdSuffix}`)
+      }
+    } else if (status >= 500 && !error.config?.skipAuthRedirect) {
+      const now = Date.now()
+      if (now - lastServerErrorAt > 800) {
+        lastServerErrorAt = now
+        ElMessage.error(`服务暂时不可用，请稍后重试${requestIdSuffix}`)
       }
     }
 

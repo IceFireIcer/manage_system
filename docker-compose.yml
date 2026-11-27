@@ -57,9 +57,16 @@ services:
       LLM_API_KEY: ${LLM_API_KEY:-}
       LLM_BASE_URL: ${LLM_BASE_URL:-https://api.deepseek.com/v1}
       LLM_MODEL: ${LLM_MODEL:-deepseek-chat}
+      OPS_BACKUP_DIR: ${OPS_BACKUP_DIR:-/app/backups}
+      OPS_BACKUP_MAX_AGE_HOURS: ${OPS_BACKUP_MAX_AGE_HOURS:-36}
+      OPS_DISK_MIN_FREE_MB: ${OPS_DISK_MIN_FREE_MB:-500}
+      OPS_ERROR_WINDOW_SECONDS: ${OPS_ERROR_WINDOW_SECONDS:-300}
+      OPS_ERROR_ALERT_THRESHOLD: ${OPS_ERROR_ALERT_THRESHOLD:-5}
       TZ: Asia/Shanghai
     expose:
       - "8000"
+    volumes:
+      - ./backups:/app/backups:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request, sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=3).status == 200 else 1)"]
       interval: 30s

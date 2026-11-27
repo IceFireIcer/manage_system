@@ -8,6 +8,7 @@ from openai import OpenAI
 
 from app.agent.rules import Evaluation
 from app.config import Settings
+from app.request_context import log_tag
 
 logger = logging.getLogger(__name__)
 
@@ -207,19 +208,21 @@ def generate_rationale_result(context: RationaleContext) -> RationaleResult:
         text = (generator.generate(context) or "").strip()
     except Exception:
         logger.warning(
-            "补货判断依据生成失败，回退规则模板（耗时 %.2fs）",
+            "%s 补货判断依据生成失败，回退规则模板（耗时 %.2fs）",
+            log_tag(),
             time.perf_counter() - started,
             exc_info=True,
         )
         return RationaleResult(format_template(context), RATIONALE_SOURCE_RULES, True)
     if not text:
-        logger.warning("补货判断依据为空，回退规则模板")
+        logger.warning("%s 补货判断依据为空，回退规则模板", log_tag())
         return RationaleResult(format_template(context), RATIONALE_SOURCE_RULES, True)
     if not validate_rationale(text, context.evaluation):
-        logger.warning("补货判断依据与规则结果不一致，回退规则模板")
+        logger.warning("%s 补货判断依据与规则结果不一致，回退规则模板", log_tag())
         return RationaleResult(format_template(context), RATIONALE_SOURCE_RULES, True)
     logger.info(
-        "补货判断依据生成成功（%s，耗时 %.2fs）",
+        "%s 补货判断依据生成成功（%s，耗时 %.2fs）",
+        log_tag(),
         type(generator).__name__,
         time.perf_counter() - started,
     )

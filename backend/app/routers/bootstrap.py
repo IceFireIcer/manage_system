@@ -5,21 +5,27 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.provisioning import (
-    BOOTSTRAP_MESSAGES,
-    bootstrap_state,
-    enabled_admin_count,
-)
+from app.provisioning import BOOTSTRAP_MESSAGES, bootstrap_state
+from app.readiness import build_readiness
+from app.request_context import current_request_id
 
 router = APIRouter(prefix="/api/v1/bootstrap", tags=["bootstrap"])
 
-READY = "ready"
+
 NOT_READY_STATUS = status.HTTP_503_SERVICE_UNAVAILABLE
 
 
 class BootstrapStatus(BaseModel):
     state: str
     message: str
+
+
+class ReadinessStatus(BaseModel):
+    state: str
+    message: str
+    ready: bool
+    checks: dict[str, str]
+    request_id: str = ""
 
 
 @router.get("/status")
@@ -34,15 +40,14 @@ def get_bootstrap_status(
 def get_readiness(
     response: Response,
     db: Annotated[Session, Depends(get_db)],
-) -> BootstrapStatus:
-    state = bootstrap_state(db)
-    if state != READY:
+) -> ReadinessStatus:
+    report = build_readiness(db)
+    if not report.ready:
         response.status_code = NOT_READY_STATUS
-    return BootstrapStatus(
-        state=state,
-        message=(
-            f"{BOOTSTRAP_MESSAGES[state]}（可用管理员 {enabled_admin_count(db)} 个）"
-            if state != READY
-            else BOOTSTRAP_MESSAGES[state]
-        ),
+    return ReadinessStatus(
+        state=report.state,
+        message=report.message,
+        ready=report.ready,
+        checks=report.checks,
+        request_id=current_request_id(),
     )
