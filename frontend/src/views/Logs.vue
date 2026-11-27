@@ -1,88 +1,144 @@
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
+import { useRouter } from 'vue-router'
 import api from '../api'
-import { useUserStore } from '../stores/user'
+import PageHeader from '../components/PageHeader.vue'
+import EmptyState from '../components/EmptyState.vue'
+import InventoryAuditDrawer from '../components/InventoryAuditDrawer.vue'
+import LogDetailDrawer from '../components/LogDetailDrawer.vue'
 
 const ROLE_NAMES = { teacher: '教师', admin: '班委', student: '学生' }
 const STATUS_NAMES = { enabled: '启用', disabled: '停用' }
 const TARGET_NAMES = { user: '用户', consumable: '耗材', requisition: '领用流水' }
 
 const ACTIONS = [
-  { value: 'login', label: '登录', type: 'info' },
-  { value: 'logout', label: '退出登录', type: 'info' },
-  { value: 'requisition_create', label: '领用登记', type: 'primary' },
-  { value: 'requisition_reverse', label: '撤销领用', type: 'warning' },
-  { value: 'restock', label: '补货入库', type: 'success' },
-  { value: 'consumable_create', label: '耗材建档', type: 'primary' },
-  { value: 'consumable_update', label: '耗材修改', type: 'primary' },
-  { value: 'consumable_disable', label: '耗材停用', type: 'danger' },
-  { value: 'consumable_enable', label: '耗材启用', type: 'success' },
-  { value: 'user_create', label: '新增用户', type: 'primary' },
-  { value: 'user_enable', label: '启用用户', type: 'success' },
-  { value: 'user_disable', label: '停用用户', type: 'danger' },
+  { value: 'login', label: '登录', tagClass: 'status-tag--neutral' },
+  { value: 'logout', label: '退出登录', tagClass: 'status-tag--neutral' },
+  { value: 'requisition_create', label: '领用登记', tagClass: 'status-tag--info' },
+  { value: 'requisition_reverse', label: '撤销领用', tagClass: 'status-tag--reversal' },
+  { value: 'restock', label: '补货入库', tagClass: 'status-tag--success' },
+  { value: 'consumable_create', label: '耗材建档', tagClass: 'status-tag--info' },
+  { value: 'consumable_update', label: '耗材修改', tagClass: 'status-tag--info' },
+  { value: 'consumable_disable', label: '耗材停用', tagClass: 'status-tag--danger' },
+  { value: 'consumable_enable', label: '耗材启用', tagClass: 'status-tag--success' },
+  { value: 'user_create', label: '新增用户', tagClass: 'status-tag--info' },
+  { value: 'user_enable', label: '启用用户', tagClass: 'status-tag--success' },
+  { value: 'user_disable', label: '停用用户', tagClass: 'status-tag--danger' },
 ]
+
 const ACTION_MAP = Object.fromEntries(ACTIONS.map((item) => [item.value, item]))
 
-const userStore = useUserStore()
-const userOptions = ref([])
+const SUMMARY_FIELDS = {
+  name: '名称',
+  spec: '规格',
+  unit: '单位',
+  location: '存放位置',
+  safety_stock: '安全库存线',
+  current_stock: '当前库存',
+  status: '状态',
+  account: '账号',
+  role: '角色',
+}
+
+const router = useRouter()
+
 const logs = ref([])
 const loading = ref(false)
+const error = ref('')
+const staleError = ref(false)
+const userOptions = ref([])
+const optionsError = ref(false)
 
-const filters = reactive({
-  action: null,
-  operatorId: null,
-  dateRange: null,
-})
+const draft = reactive({ action: null, operatorId: null, dateRange: null })
+const applied = reactive({ action: null, operatorId: null, dateRange: null })
 
 const page = reactive({ current: 1, size: 20, total: 0 })
 
-const isStaff = computed(() => ['teacher', 'admin'].includes(userStore.user?.role))
+const detail = reactive({ visible: false, log: null })
+
+const audit = reactive({ visible: false, consumableId: null, consumableName: '' })
+
+let requestSeq = 0
+let active = true
+
+const hasFilters = computed(
+  () => Boolean(applied.action || applied.operatorId || applied.dateRange),
+)
 
 function buildParams() {
   const params = {}
-  if (filters.action) params.action = filters.action
-  if (filters.operatorId) params.operator_id = filters.operatorId
-  if (Array.isArray(filters.dateRange) && filters.dateRange.length === 2) {
-    params.start_date = filters.dateRange[0]
-    params.end_date = filters.dateRange[1]
+  if (applied.action) params.action = applied.action
+  if (applied.operatorId) params.operator_id = applied.operatorId
+  if (Array.isArray(applied.dateRange) && applied.dateRange.length === 2) {
+    params.start_date = applied.dateRange[0]
+    params.end_date = applied.dateRange[1]
   }
   return params
 }
 
+function applyFilters(source) {
+  applied.action = source.action
+  applied.operatorId = source.operatorId
+  applied.dateRange = Array.isArray(source.dateRange) ? [...source.dateRange] : null
+}
+
+function resetFilters(target) {
+  target.action = null
+  target.operatorId = null
+  target.dateRange = null
+}
+
 async function fetchLogs() {
+  const seq = ++requestSeq
   loading.value = true
+  error.value = ''
+  staleError.value = false
   try {
     const { data } = await api.get('/logs', {
       params: { ...buildParams(), page: page.current, page_size: page.size },
     })
-    logs.value = data.items
-    page.total = data.total
+    if (seq !== requestSeq || !active) return
+    logs.value = Array.isArray(data.items) ? data.items : []
+    page.total = data.total ?? 0
+    const maxPage = Math.max(1, Math.ceil(page.total / page.size))
+    if (!logs.value.length && page.current > maxPage) {
+      page.current = maxPage
+      await fetchLogs()
+      return
+    }
   } catch {
-    ElMessage.error('查询操作日志失败，请稍后重试')
+    if (seq !== requestSeq || !active) return
+    if (logs.value.length) {
+      staleError.value = true
+    } else {
+      error.value = '操作日志读取失败，请稍后重试。'
+    }
   } finally {
-    loading.value = false
+    if (seq === requestSeq) loading.value = false
   }
 }
 
 async function fetchUserOptions() {
+  optionsError.value = false
   try {
     const { data } = await api.get('/users/options')
-    userOptions.value = data
+    userOptions.value = Array.isArray(data) ? data : []
   } catch {
-    ElMessage.error('加载用户列表失败，请稍后重试')
+    optionsError.value = true
+    ElMessage.error('操作人选项加载失败')
   }
 }
 
 function handleSearch() {
+  applyFilters(draft)
   page.current = 1
   fetchLogs()
 }
 
 function handleReset() {
-  filters.action = null
-  filters.operatorId = null
-  filters.dateRange = null
+  resetFilters(draft)
+  resetFilters(applied)
   page.current = 1
   fetchLogs()
 }
@@ -99,234 +155,434 @@ function handleSizeChange(nextSize) {
 }
 
 function formatTime(value) {
-  return value ? String(value).replace('T', ' ').slice(0, 19) : '—'
+  if (!value) return '—'
+  const text = String(value).replace('T', ' ')
+  return text.length >= 19 ? text.slice(0, 19) : text
 }
 
 function actionMeta(action) {
-  return ACTION_MAP[action] ?? { label: action, type: 'info' }
+  return ACTION_MAP[action] ?? { label: action, tagClass: 'status-tag--neutral' }
+}
+
+function roleClass(role) {
+  return role && ROLE_NAMES[role] ? `role-tag--${role}` : 'status-tag--neutral'
+}
+
+function parseSnapshot(value) {
+  if (!value) return null
+  try {
+    const parsed = JSON.parse(value)
+    return parsed && typeof parsed === 'object' ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+function plainText(value) {
+  if (!value) return ''
+  try {
+    const parsed = JSON.parse(value)
+    return parsed && typeof parsed === 'object' ? '' : String(parsed)
+  } catch {
+    return String(value)
+  }
+}
+
+function nameFromSnapshot(row) {
+  const after = parseSnapshot(row.after_value)
+  const before = parseSnapshot(row.before_value)
+  return (
+    after?.name ||
+    before?.name ||
+    after?.account ||
+    before?.account ||
+    plainText(row.after_value) ||
+    plainText(row.before_value) ||
+    ''
+  )
 }
 
 function targetLabel(row) {
   const typeName = TARGET_NAMES[row.target_type] ?? row.target_type ?? '—'
-  return row.target_id ? `${typeName} #${row.target_id}` : typeName
+  if (!row.target_id) return typeName
+  const name = nameFromSnapshot(row)
+  return name ? `${typeName} #${row.target_id}（${name}）` : `${typeName} #${row.target_id}`
+}
+
+function describeItems(items) {
+  if (!Array.isArray(items) || !items.length) return ''
+  return items
+    .map((item) => {
+      const label = item.name || item.consumable_name || `耗材 #${item.consumable_id ?? ''}`
+      const quantity = item.quantity ?? ''
+      const unit = item.unit ?? ''
+      return `${label} ${quantity}${unit}`.trim()
+    })
+    .join('、')
+}
+
+function displaySummaryValue(key, value, unit) {
+  if (value === undefined || value === null) return '—'
+  if (key === 'status') return STATUS_NAMES[value] ?? value
+  if (key === 'role') return ROLE_NAMES[value] ?? value
+  if ((key === 'safety_stock' || key === 'current_stock') && unit) return `${value}${unit}`
+  return String(value)
+}
+
+function diffSummary(before, after) {
+  if (!before || !after) return ''
+  const unit = after.unit || before.unit || ''
+  const parts = []
+  for (const [key, label] of Object.entries(SUMMARY_FIELDS)) {
+    const oldValue = before[key]
+    const newValue = after[key]
+    if (oldValue === newValue) continue
+    parts.push(
+      `${label} ${displaySummaryValue(key, oldValue, unit)} → ${displaySummaryValue(key, newValue, unit)}`,
+    )
+    if (parts.length >= 3) break
+  }
+  return parts.join('；')
+}
+
+function summaryText(row) {
+  const before = parseSnapshot(row.before_value)
+  const after = parseSnapshot(row.after_value)
+  switch (row.action) {
+    case 'login':
+    case 'logout':
+      return row.remark || '账号会话事件'
+    case 'requisition_create': {
+      if (!after) return row.remark || '—'
+      const items = Array.isArray(after.items) ? after.items : []
+      const detailText = describeItems(items)
+      const count = items.length || after.row_count || 0
+      return `登记 ${count} 项${detailText ? `：${detailText}` : ''}`
+    }
+    case 'requisition_reverse': {
+      if (!after) return row.remark || '—'
+      const reason = after.reason ? `；原因：${after.reason}` : ''
+      return `回加 ${after.quantity}，库存 ${after.stock_before} → ${after.stock_after}${reason}`
+    }
+    case 'restock': {
+      if (!after) return row.remark || '—'
+      const beforeStock = before?.current_stock ?? after.stock_before
+      return `入库 ${after.quantity}，库存 ${beforeStock} → ${after.current_stock}`
+    }
+    case 'consumable_create':
+      return after
+        ? `新建档案：${after.name}${after.spec ? `（${after.spec}）` : ''}`
+        : row.remark || '—'
+    case 'consumable_update':
+      return diffSummary(before, after) || row.remark || '档案字段有更新'
+    case 'consumable_enable':
+    case 'consumable_disable':
+    case 'user_enable':
+    case 'user_disable':
+      return `状态 ${STATUS_NAMES[before?.status] ?? '—'} → ${STATUS_NAMES[after?.status] ?? '—'}`
+    case 'user_create':
+      return after ? `新增账号 ${after.account}（${after.name}）` : row.remark || '—'
+    default:
+      return diffSummary(before, after) || row.remark || '—'
+  }
 }
 
 function userOptionLabel(option) {
   return `${option.name}（${ROLE_NAMES[option.role] ?? option.role}）`
 }
 
-function formatValue(raw) {
-  if (raw === null || raw === undefined || raw === '') return '—'
-  const text = String(raw)
-  if (text === 'enabled' || text === 'disabled') return STATUS_NAMES[text]
-  try {
-    const parsed = JSON.parse(text)
-    if (!parsed || typeof parsed !== 'object') return text
-    const parts = []
-    if (parsed.name !== undefined) parts.push(`名称 ${parsed.name}`)
-    if (parsed.account !== undefined) parts.push(`账号 ${parsed.account}`)
-    if (parsed.role !== undefined) parts.push(`角色 ${ROLE_NAMES[parsed.role] ?? parsed.role}`)
-    if (parsed.status !== undefined) {
-      parts.push(`状态 ${STATUS_NAMES[parsed.status] ?? parsed.status}`)
-    }
-    if (parsed.stock_before !== undefined) parts.push(`库存 ${parsed.stock_before}`)
-    if (parsed.current_stock !== undefined) {
-      const extra = parsed.quantity !== undefined ? `（数量 ${parsed.quantity}）` : ''
-      parts.push(`库存 ${parsed.current_stock}${extra}`)
-    } else if (parsed.quantity !== undefined) {
-      parts.push(`数量 ${parsed.quantity}`)
-    }
-    if (parsed.total_quantity !== undefined) parts.push(`合计 ${parsed.total_quantity}`)
-    if (parsed.reason !== undefined) parts.push(`原因 ${parsed.reason}`)
-    return parts.length ? parts.join('，') : text
-  } catch {
-    return text
-  }
+function openDetail(row) {
+  detail.log = row
+  detail.visible = true
 }
 
-onMounted(async () => {
-  await fetchUserOptions()
+function handleViewConsumable(payload) {
+  detail.visible = false
+  audit.consumableId = payload.id
+  audit.consumableName = payload.name || ''
+  audit.visible = true
+}
+
+function handleViewRequisition(id) {
+  detail.visible = false
+  router.push({ path: '/records', query: { requisition_id: id } })
+}
+
+function handleAuditSource() {
+  const id = audit.consumableId
+  audit.visible = false
+  router.push({ path: '/records', query: { consumable_id: id } })
+}
+
+onMounted(() => {
+  fetchUserOptions()
   fetchLogs()
+})
+
+onBeforeUnmount(() => {
+  active = false
+  requestSeq += 1
 })
 </script>
 
 <template>
-  <el-card>
-    <div class="logs__intro">
-      <p>
-        操作日志覆盖登录/退出、领用与撤销、档案变更、用户管理与补货入库，
-        记录操作人、对象与变更前后值；仅教师/班委可查看，日志只读。
-      </p>
-    </div>
+  <div class="logs">
+    <PageHeader title="操作日志" :breadcrumb="['日常管理', '操作日志']" />
 
-    <div class="logs__filters">
-      <el-select
-        v-model="filters.action"
-        clearable
-        filterable
-        placeholder="全部操作类型"
-        class="logs__filter-action"
-      >
-        <el-option
-          v-for="option in ACTIONS"
-          :key="option.value"
-          :label="option.label"
-          :value="option.value"
-        />
-      </el-select>
-
-      <el-select
-        v-if="isStaff"
-        v-model="filters.operatorId"
-        clearable
-        filterable
-        placeholder="全部操作人"
-        class="logs__filter-operator"
-      >
-        <el-option
-          v-for="option in userOptions"
-          :key="option.id"
-          :label="userOptionLabel(option)"
-          :value="option.id"
-        />
-      </el-select>
-
-      <el-date-picker
-        v-model="filters.dateRange"
-        type="daterange"
-        start-placeholder="开始日期"
-        end-placeholder="结束日期"
-        value-format="YYYY-MM-DD"
-        class="logs__filter-date"
+    <div v-if="optionsError" class="logs__notice">
+      <el-alert
+        type="warning"
+        :closable="false"
+        show-icon
+        title="操作人选项加载失败"
+        description="仍可按操作类型与日期查询，操作人筛选暂不可用。"
       />
-
-      <el-button type="primary" @click="handleSearch">查询</el-button>
-      <el-button @click="handleReset">重置</el-button>
+      <el-button link type="primary" @click="fetchUserOptions">重试</el-button>
     </div>
 
-    <el-table v-loading="loading" :data="logs" class="logs__table">
-      <el-table-column label="时间" width="170">
-        <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
-      </el-table-column>
-      <el-table-column prop="operator_name" label="操作人" width="110">
-        <template #default="{ row }">{{ row.operator_name ?? '—' }}</template>
-      </el-table-column>
-      <el-table-column label="角色" width="90" align="center">
-        <template #default="{ row }">{{ ROLE_NAMES[row.role] ?? row.role ?? '—' }}</template>
-      </el-table-column>
-      <el-table-column label="操作类型" width="130" align="center">
-        <template #default="{ row }">
-          <el-tag :type="actionMeta(row.action).type" size="small">
-            {{ actionMeta(row.action).label }}
-          </el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column label="对象" min-width="130">
-        <template #default="{ row }">{{ targetLabel(row) }}</template>
-      </el-table-column>
-      <el-table-column label="变更前" min-width="180">
-        <template #default="{ row }">
-          <el-tooltip
-            v-if="row.before_value"
-            :content="row.before_value"
-            placement="top"
-            popper-class="logs__tooltip"
+    <section class="panel logs__panel">
+      <el-form inline class="logs__filters" @submit.prevent>
+        <el-form-item label="操作类型">
+          <el-select
+            v-model="draft.action"
+            clearable
+            filterable
+            placeholder="全部操作类型"
+            class="logs__filter-action"
           >
-            <span class="logs__value">{{ formatValue(row.before_value) }}</span>
-          </el-tooltip>
-          <span v-else class="logs__value">—</span>
-        </template>
-      </el-table-column>
-      <el-table-column label="变更后" min-width="180">
-        <template #default="{ row }">
-          <el-tooltip
-            v-if="row.after_value"
-            :content="row.after_value"
-            placement="top"
-            popper-class="logs__tooltip"
-          >
-            <span class="logs__value">{{ formatValue(row.after_value) }}</span>
-          </el-tooltip>
-          <span v-else class="logs__value">—</span>
-        </template>
-      </el-table-column>
-      <el-table-column prop="remark" label="备注" min-width="140" show-overflow-tooltip />
-    </el-table>
+            <el-option
+              v-for="option in ACTIONS"
+              :key="option.value"
+              :label="option.label"
+              :value="option.value"
+            />
+          </el-select>
+        </el-form-item>
 
-    <el-empty
-      v-if="!loading && !logs.length"
-      description="当前筛选条件下暂无操作日志"
-      class="logs__empty"
+        <el-form-item label="操作人">
+          <el-select
+            v-model="draft.operatorId"
+            clearable
+            filterable
+            placeholder="全部操作人"
+            class="logs__filter-operator"
+            :disabled="optionsError"
+          >
+            <el-option
+              v-for="option in userOptions"
+              :key="option.id"
+              :label="userOptionLabel(option)"
+              :value="option.id"
+            />
+          </el-select>
+        </el-form-item>
+
+        <el-form-item label="日期范围">
+          <el-date-picker
+            v-model="draft.dateRange"
+            type="daterange"
+            start-placeholder="开始日期"
+            end-placeholder="结束日期"
+            value-format="YYYY-MM-DD"
+            class="logs__filter-date"
+          />
+        </el-form-item>
+
+        <el-form-item class="logs__filter-actions">
+          <el-button type="primary" @click="handleSearch">查询</el-button>
+          <el-button @click="handleReset">重置</el-button>
+        </el-form-item>
+      </el-form>
+
+      <div v-if="staleError" class="logs__notice logs__notice--inline">
+        <el-alert
+          type="warning"
+          :closable="false"
+          show-icon
+          title="刷新失败，显示上次结果"
+        />
+        <el-button link type="primary" @click="fetchLogs">重试</el-button>
+      </div>
+
+      <div v-if="loading && !logs.length" class="logs__skeleton" aria-busy="true">
+        <p class="logs__placeholder">正在读取操作日志…</p>
+        <el-skeleton :rows="8" animated />
+      </div>
+
+      <EmptyState
+        v-else-if="!logs.length && error"
+        title="操作日志暂时不可用"
+        :description="error"
+      >
+        <template #action>
+          <el-button type="primary" @click="fetchLogs">重试</el-button>
+        </template>
+      </EmptyState>
+
+      <EmptyState
+        v-else-if="!logs.length"
+        :title="hasFilters ? '没有符合条件的记录' : '暂无操作日志'"
+        :description="
+          hasFilters
+            ? '当前筛选条件下没有操作日志，可调整条件后重新查询。'
+            : '登录、领用、档案变更等操作产生后会在这里留下记录。'
+        "
+      >
+        <template #action>
+          <el-button v-if="hasFilters" @click="handleReset">清除筛选</el-button>
+        </template>
+      </EmptyState>
+
+      <template v-else>
+        <el-table v-loading="loading" :data="logs" class="table-dense logs__table">
+          <el-table-column label="操作时间" width="170">
+            <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
+          </el-table-column>
+          <el-table-column label="操作人" width="110">
+            <template #default="{ row }">{{ row.operator_name ?? '—' }}</template>
+          </el-table-column>
+          <el-table-column label="角色" width="90" align="center">
+            <template #default="{ row }">
+              <span v-if="row.role" class="status-tag" :class="roleClass(row.role)">
+                {{ ROLE_NAMES[row.role] ?? row.role }}
+              </span>
+              <span v-else>—</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="操作类型" width="120" align="center">
+            <template #default="{ row }">
+              <span class="status-tag" :class="actionMeta(row.action).tagClass">
+                {{ actionMeta(row.action).label }}
+              </span>
+            </template>
+          </el-table-column>
+          <el-table-column label="对象" min-width="150">
+            <template #default="{ row }">{{ targetLabel(row) }}</template>
+          </el-table-column>
+          <el-table-column label="变更摘要" min-width="260" show-overflow-tooltip>
+            <template #default="{ row }">{{ summaryText(row) }}</template>
+          </el-table-column>
+          <el-table-column label="备注" min-width="150" show-overflow-tooltip>
+            <template #default="{ row }">{{ row.remark ?? '—' }}</template>
+          </el-table-column>
+          <el-table-column label="操作" width="100" fixed="right">
+            <template #default="{ row }">
+              <el-button link type="primary" @click="openDetail(row)">查看详情</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+
+        <div class="logs__pagination">
+          <el-pagination
+            v-model:current-page="page.current"
+            :page-size="page.size"
+            :page-sizes="[20, 50, 100]"
+            :total="page.total"
+            layout="total, sizes, prev, pager, next, jumper"
+            @current-change="handlePageChange"
+            @size-change="handleSizeChange"
+          />
+        </div>
+      </template>
+    </section>
+
+    <LogDetailDrawer
+      v-model="detail.visible"
+      :log="detail.log"
+      @view-requisition="handleViewRequisition"
+      @view-consumable="handleViewConsumable"
     />
 
-    <div class="logs__pagination">
-      <el-pagination
-        v-model:current-page="page.current"
-        :page-size="page.size"
-        :page-sizes="[10, 20, 50, 100]"
-        :total="page.total"
-        layout="total, sizes, prev, pager, next, jumper"
-        @current-change="handlePageChange"
-        @size-change="handleSizeChange"
-      />
-    </div>
-  </el-card>
+    <InventoryAuditDrawer
+      v-model="audit.visible"
+      :consumable-id="audit.consumableId"
+      :consumable-name="audit.consumableName"
+      @view-source="handleAuditSource"
+    />
+  </div>
 </template>
 
 <style scoped>
-.logs__intro {
+.logs__notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
   margin-bottom: 16px;
-  color: #606266;
 }
 
-.logs__intro p {
-  margin: 0;
-  font-size: 13px;
+.logs__notice .el-alert {
+  flex: 1 1 320px;
+}
+
+.logs__notice--inline {
+  margin-bottom: 12px;
+}
+
+.logs__panel {
+  padding: 20px;
 }
 
 .logs__filters {
   display: flex;
   flex-wrap: wrap;
-  gap: 12px;
-  align-items: center;
-  margin-bottom: 16px;
+  align-items: flex-end;
+  gap: 4px 8px;
+  margin-bottom: 4px;
 }
 
 .logs__filter-action {
-  width: 180px;
+  width: 170px;
 }
 
 .logs__filter-operator {
-  width: 190px;
+  width: 180px;
 }
 
 .logs__filter-date {
   width: 260px;
 }
 
+.logs__filter-actions {
+  margin-left: auto;
+}
+
+.logs__skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.logs__placeholder {
+  margin: 0;
+  font-size: 14px;
+  line-height: 22px;
+  color: var(--text-muted);
+}
+
 .logs__table {
   width: 100%;
-  margin-bottom: 16px;
-}
-
-.logs__value {
-  display: inline-block;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-family: Consolas, Monaco, 'Courier New', monospace;
-  font-size: 12px;
-  color: #606266;
-}
-
-.logs__empty {
-  margin-top: 24px;
 }
 
 .logs__pagination {
   display: flex;
   justify-content: flex-end;
   margin-top: 16px;
+}
+
+@media (max-width: 767px) {
+  .logs__panel {
+    padding: 16px;
+  }
+
+  .logs__filter-action,
+  .logs__filter-operator,
+  .logs__filter-date {
+    width: 100%;
+  }
+
+  .logs__filter-actions {
+    margin-left: 0;
+  }
 }
 </style>
