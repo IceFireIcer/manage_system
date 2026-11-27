@@ -70,7 +70,7 @@ docker compose logs backend | grep bootstrap
 
 后端容器每次启动都会执行 `alembic upgrade head`（幂等建表），随后运行 `backend/scripts/bootstrap_admin.py`：
 
-- 库中不存在启用的管理员时，自动创建 `role=admin` 账号并启用
+- 空库（没有任何账号）时自动创建 `role=admin` 账号并启用，首次登录强制改密
 - 默认账号 `admin`、姓名「系统管理员」，可用 `ADMIN_INIT_ACCOUNT` / `ADMIN_INIT_NAME` 覆盖
 - 密码取 `ADMIN_INIT_PASSWORD`；未设置时随机生成，并打印到后端日志：
 
@@ -81,28 +81,21 @@ docker compose logs backend | grep bootstrap
 
 - 初始化是幂等的：已存在启用的管理员时输出 `[bootstrap] 管理员账号已存在，跳过`，不会新建、也不会覆盖现有密码
 - `ADMIN_INIT_PASSWORD` 只对**首次创建**生效；账号已存在时修改该变量不会重置密码
+- 存在账号但没有可用管理员时输出 `[bootstrap] 需恢复...`，不会自动补建管理员
+- 自举状态可查：`GET /api/v1/bootstrap/status` 返回 `ready` / `needs_initialization` / `needs_recovery`；登录页对后两种显示“需初始化/需恢复”，不以可登录页面掩盖无管理员状态
 
-当前版本未提供网页端自助改密接口。如需重置管理员密码，可在后端容器内直接更新哈希（登录态即时生效，无需重启）：
+教师开通、班委交接与管理员恢复由校方授权人执行，写入操作日志（执行人由 `--actor` 或 `OPS_ACTOR` 指定，时间与结果随日志留存）：
 
 ```bash
-docker compose exec -T backend python - <<'PY'
-import sys
-sys.path.insert(0, "/app")
-from sqlalchemy import select
-from app.database import SessionLocal
-from app.models import User
-from app.security import hash_password
-
-new_password = "替换为新的强密码"
-with SessionLocal() as db:
-    user = db.scalar(select(User).where(User.account == "admin"))
-    user.password_hash = hash_password(new_password)
-    db.commit()
-print("已更新 admin 密码")
-PY
+docker compose exec backend python scripts/manage_accounts.py status
+docker compose exec backend python scripts/manage_accounts.py provision-teacher --account teacher01 --name 王老师
+docker compose exec backend python scripts/manage_accounts.py handover-admin --from admin --account admin2 --name 李班委
+docker compose exec backend python scripts/manage_accounts.py recover-admin --account admin --name 系统管理员
 ```
 
-> 管理员登录后应立即通过上述方式修改初始密码，并妥善保存。首次部署完成前请勿将 4900 端口暴露给不可信网络。
+未传 `--password` 时随机生成并只打印一次；新账号与恢复后的账号首次登录必须改密。管理员恢复会重置密码、启用账号并撤销旧会话；教师或学生账号不能通过开通或恢复流程提升为管理员。已有可用管理员时如需更换班委，使用 `handover-admin`。
+
+> 管理员登录后应立即修改初始密码，并妥善保存。首次部署完成前请勿将 4900 端口暴露给不可信网络。
 
 ## 配置
 

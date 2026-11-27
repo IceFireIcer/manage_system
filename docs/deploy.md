@@ -372,9 +372,24 @@ docker compose exec backend alembic history
 
 # 手动执行管理员自举（已存在启用的管理员时自动跳过）
 docker compose exec backend python scripts/bootstrap_admin.py
+
+# 查看自举状态：ready / needs_initialization / needs_recovery
+docker compose exec backend python scripts/manage_accounts.py status
+
+# 教师开通（已有班委时仍可执行）
+docker compose exec backend python scripts/manage_accounts.py provision-teacher \
+  --account teacher01 --name 王老师 --actor "校方授权人"
+
+# 班委交接：停用原班委并开通新班委
+docker compose exec backend python scripts/manage_accounts.py handover-admin \
+  --from admin --account admin2 --name 李班委 --actor "校方授权人"
+
+# 管理员恢复：重置密码、启用账号并撤销旧会话
+docker compose exec backend python scripts/manage_accounts.py recover-admin \
+  --account admin --name 系统管理员 --actor "校方授权人"
 ```
 
-> 系统不预置任何业务数据或账号。首次登录使用 bootstrap 创建的管理员；初始密码获取与修改见第 0.1 节第 4 步与 [README](../README.md#管理员初始化)。
+> 系统不预置任何业务数据或账号。首次登录使用 bootstrap 创建的管理员；初始密码获取与修改见第 0.1 节第 4 步与 [README](../README.md#管理员初始化)。新账号与恢复后的账号首次登录必须改密；教师、学生不能通过开通或恢复流程提升为管理员；自举失败时 `GET /api/v1/bootstrap/status` 与登录页会显示“需初始化/需恢复”。
 
 ## 8. 访问验证
 

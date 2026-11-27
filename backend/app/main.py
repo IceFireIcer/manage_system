@@ -2,7 +2,16 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from app.config import get_settings
-from app.routers import auth, consumables, consumption, inventory, logs, requisitions, users
+from app.routers import (
+    auth,
+    bootstrap,
+    consumables,
+    consumption,
+    inventory,
+    logs,
+    requisitions,
+    users,
+)
 from app.security import host_is_allowed, resolve_forwarded_scheme
 
 HTTPS_REQUIRED_DETAIL = "生产环境必须通过 HTTPS 访问"
@@ -55,6 +64,7 @@ def create_app() -> FastAPI:
         return response
 
     app.include_router(auth.router)
+    app.include_router(bootstrap.router)
     app.include_router(users.router)
     app.include_router(consumables.router)
     app.include_router(requisitions.router)
