@@ -1,10 +1,11 @@
-from datetime import date, datetime, time, timedelta
+from datetime import date
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app import business_time
 from app.database import get_db
 from app.deps import require_role
 from app.models import OperationLog, User
@@ -29,18 +30,20 @@ def list_operation_logs(
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
 ) -> OperationLogPageOut:
+    if business_time.reversed_range(start_date, end_date):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=business_time.REVERSE_RANGE_DETAIL,
+        )
     filters = []
     if action is not None and action.strip():
         filters.append(OperationLog.action.contains(action.strip()))
     if operator_id is not None:
         filters.append(OperationLog.operator_id == operator_id)
     if start_date is not None:
-        filters.append(OperationLog.created_at >= datetime.combine(start_date, time.min))
+        filters.append(OperationLog.created_at >= business_time.day_start(start_date))
     if end_date is not None:
-        filters.append(
-            OperationLog.created_at
-            <= datetime.combine(end_date, time.min) + timedelta(days=1) - timedelta(seconds=1)
-        )
+        filters.append(OperationLog.created_at < business_time.next_day_start(end_date))
 
     total = db.scalar(
         select(func.count()).select_from(OperationLog).where(*filters)

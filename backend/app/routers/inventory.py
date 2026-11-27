@@ -1,11 +1,11 @@
 import json
-from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
+from app import business_time
 from app.agent import service
 from app.database import get_db
 from app.deps import CurrentUser, require_role
@@ -22,16 +22,8 @@ from app.schemas_inventory import (
 
 router = APIRouter(prefix="/api/v1/inventory", tags=["inventory"])
 
-SHANGHAI_TZ = timezone(timedelta(hours=8))
-
 StaffUser = Annotated[User, Depends(require_role("teacher", "admin"))]
 AdminUser = Annotated[User, Depends(require_role("admin"))]
-
-
-def _today_start_local() -> datetime:
-    now = datetime.now(SHANGHAI_TZ)
-    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    return today_start.astimezone().replace(tzinfo=None)
 
 
 @router.get("/overview")
@@ -68,7 +60,8 @@ def get_inventory_overview(
 
     items.sort(key=lambda item: (not item.low_stock, not item.is_out, item.name))
 
-    today_start = _today_start_local()
+    today_start = business_time.day_start(business_time.today())
+    tomorrow_start = business_time.next_day_start(business_time.today())
     today_requisitions = (
         db.scalar(
             select(func.count())
@@ -77,6 +70,7 @@ def get_inventory_overview(
                 Requisition.type == "normal",
                 Requisition.status == "active",
                 Requisition.created_at >= today_start,
+                Requisition.created_at < tomorrow_start,
             )
         )
         or 0
@@ -144,7 +138,7 @@ def restock_consumable(
         db.flush()
         db.refresh(consumable)
         stock_after = consumable.current_stock
-        consumable.updated_at = datetime.now()
+        consumable.updated_at = business_time.now()
 
         db.add(
             OperationLog(

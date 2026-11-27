@@ -7,6 +7,7 @@ import PageHeader from '../components/PageHeader.vue'
 import EmptyState from '../components/EmptyState.vue'
 import InventoryAuditDrawer from '../components/InventoryAuditDrawer.vue'
 import LogDetailDrawer from '../components/LogDetailDrawer.vue'
+import { validateDateRange } from '../utils/businessDate'
 
 const ROLE_NAMES = { teacher: '教师', admin: '班委', student: '学生' }
 const STATUS_NAMES = { enabled: '启用', disabled: '停用' }
@@ -46,6 +47,7 @@ const router = useRouter()
 const logs = ref([])
 const loading = ref(false)
 const error = ref('')
+const filterError = ref('')
 const staleError = ref(false)
 const userOptions = ref([])
 const optionsError = ref(false)
@@ -131,6 +133,12 @@ async function fetchUserOptions() {
 }
 
 function handleSearch() {
+  const dateError = validateDateRange(draft.dateRange)
+  if (dateError) {
+    filterError.value = dateError
+    return
+  }
+  filterError.value = ''
   applyFilters(draft)
   page.current = 1
   fetchLogs()
@@ -139,6 +147,7 @@ function handleSearch() {
 function handleReset() {
   resetFilters(draft)
   resetFilters(applied)
+  filterError.value = ''
   page.current = 1
   fetchLogs()
 }
@@ -394,6 +403,8 @@ onBeforeUnmount(() => {
         </el-form-item>
       </el-form>
 
+      <p v-if="filterError" class="logs__filter-error" role="alert">{{ filterError }}</p>
+
       <div v-if="staleError" class="logs__notice logs__notice--inline">
         <el-alert
           type="warning"
@@ -545,6 +556,13 @@ onBeforeUnmount(() => {
 
 .logs__filter-actions {
   margin-left: auto;
+}
+
+.logs__filter-error {
+  margin: 4px 0 0;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--danger);
 }
 
 .logs__skeleton {

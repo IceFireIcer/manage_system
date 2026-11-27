@@ -6,6 +6,7 @@ import api from '../api'
 import { useUserStore } from '../stores/user'
 import PageHeader from '../components/PageHeader.vue'
 import EmptyState from '../components/EmptyState.vue'
+import { businessDate, businessNowInput, businessToday } from '../utils/businessDate'
 
 const MAX_ROWS = 5
 const MAX_BACKFILL_DAYS = 30
@@ -61,28 +62,14 @@ const timePickerRef = ref(null)
 const addButtonRef = ref(null)
 
 
-function nowMinuteValue() {
-  const date = new Date()
+function dateKey(date) {
   const pad = (value) => String(value).padStart(2, '0')
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}:00`
-}
-
-function backfillBoundary() {
-  const date = new Date()
-  date.setHours(0, 0, 0, 0)
-  date.setDate(date.getDate() - MAX_BACKFILL_DAYS)
-  return date
-}
-
-function todayStart() {
-  const date = new Date()
-  date.setHours(0, 0, 0, 0)
-  return date
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
 }
 
 function disabledBackfillDate(date) {
-  const time = date.getTime()
-  return time < backfillBoundary().getTime() || time > todayStart().getTime()
+  const key = dateKey(date)
+  return key < businessDate(-MAX_BACKFILL_DAYS) || key > businessToday()
 }
 
 function findConsumable(consumableId) {
@@ -218,17 +205,18 @@ function handleTimeModeChange() {
   metaErrors.time = ''
   clearUncertain()
   if (form.timeMode === 'backfill') {
-    if (!form.backfillAt) form.backfillAt = nowMinuteValue()
+    if (!form.backfillAt) form.backfillAt = businessNowInput()
     focusTime()
   }
 }
 
 function validateBackfillTime() {
   if (!form.backfillAt) return '请选择补录时间'
-  const time = new Date(form.backfillAt).getTime()
-  if (Number.isNaN(time)) return '请选择有效的补录时间'
-  if (time > Date.now()) return '领用时间不能晚于当前时间'
-  if (time < backfillBoundary().getTime()) {
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(form.backfillAt)) {
+    return '请选择有效的补录时间'
+  }
+  if (form.backfillAt > businessNowInput()) return '领用时间不能晚于当前时间'
+  if (form.backfillAt < `${businessDate(-MAX_BACKFILL_DAYS)}T00:00:00`) {
     return `领用时间不能早于 ${MAX_BACKFILL_DAYS} 天前`
   }
   return ''

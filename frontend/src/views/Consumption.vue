@@ -9,6 +9,7 @@ import api from '../api'
 import PageHeader from '../components/PageHeader.vue'
 import EmptyState from '../components/EmptyState.vue'
 import InventoryAuditDrawer from '../components/InventoryAuditDrawer.vue'
+import { businessDate } from '../utils/businessDate'
 
 echarts.use([BarChart, GridComponent, TooltipComponent, CanvasRenderer])
 
@@ -86,17 +87,11 @@ const rangeText = computed(() => {
 
 const failedWindowText = computed(() => `近 ${windowDays.value} 天`)
 
-function toDateInput(date) {
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
-}
-
 function rangeOf(windowSize) {
-  const end = new Date()
-  const start = new Date(end.getFullYear(), end.getMonth(), end.getDate() - (windowSize - 1))
-  return { start: toDateInput(start), end: toDateInput(end) }
+  return {
+    start: businessDate(-(windowSize - 1)),
+    end: businessDate(0),
+  }
 }
 
 function cssVar(name) {

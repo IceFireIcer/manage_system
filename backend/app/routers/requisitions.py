@@ -1,13 +1,14 @@
 import csv
 import io
 import json
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
+from app import business_time
 from app.agent import service
 from app.database import get_db
 from app.deps import CurrentUser, require_role
@@ -70,12 +71,9 @@ def _build_query(
     if consumable_id is not None:
         query = query.where(Requisition.consumable_id == consumable_id)
     if start_date is not None:
-        query = query.where(Requisition.created_at >= datetime.combine(start_date, time.min))
+        query = query.where(Requisition.created_at >= business_time.day_start(start_date))
     if end_date is not None:
-        query = query.where(
-            Requisition.created_at
-            <= datetime.combine(end_date, time.min) + timedelta(days=1) - timedelta(seconds=1)
-        )
+        query = query.where(Requisition.created_at < business_time.next_day_start(end_date))
     if req_type is not None:
         query = query.where(Requisition.type == req_type)
     if req_status is not None:
@@ -172,6 +170,11 @@ def _consume_params(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="status 参数仅支持 active/reversed",
         )
+    if business_time.reversed_range(start_date, end_date):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=business_time.REVERSE_RANGE_DETAIL,
+        )
     return {
         "consumable_id": consumable_id,
         "user_id": user_id,
@@ -244,7 +247,7 @@ def export_requisitions_csv(
             ]
         )
 
-    filename = f"requisitions_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    filename = f"requisitions_{business_time.now().strftime('%Y%m%d_%H%M%S')}.csv"
     return Response(
         content="\ufeff" + buffer.getvalue(),
         media_type="text/csv; charset=utf-8",
@@ -252,25 +255,19 @@ def export_requisitions_csv(
     )
 
 
-def _backfill_earliest(now: datetime) -> datetime:
-    return (now - timedelta(days=MAX_BACKFILL_DAYS)).replace(
-        hour=0, minute=0, second=0, microsecond=0
-    )
-
-
 def _validate_created_at(value: datetime) -> datetime:
-    now = datetime.now()
-    if value > now:
+    normalized = business_time.normalize(value)
+    if normalized > business_time.now():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="领用时间不能晚于当前时间",
         )
-    if value < _backfill_earliest(now):
+    if normalized < business_time.backfill_earliest(MAX_BACKFILL_DAYS):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"领用时间不能早于 {MAX_BACKFILL_DAYS} 天前，不支持补录更早的记录",
         )
-    return value.replace(microsecond=0)
+    return normalized.replace(microsecond=0)
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
@@ -282,7 +279,7 @@ def create_requisition(
     created_at = (
         _validate_created_at(payload.created_at)
         if payload.created_at is not None
-        else datetime.now().replace(microsecond=0)
+        else business_time.now().replace(microsecond=0)
     )
 
     owner_id = current_user.id
@@ -484,7 +481,7 @@ def reverse_requisition(
             reversal_of=requisition.id,
             reversal_reason=payload.reason,
             class_id=requisition.class_id,
-            created_at=datetime.now().replace(microsecond=0),
+            created_at=business_time.now().replace(microsecond=0),
             remark=payload.remark,
         )
         db.add(reversal)
