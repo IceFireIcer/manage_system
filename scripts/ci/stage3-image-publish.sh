@@ -29,8 +29,8 @@ command -v docker >/dev/null 2>&1 || {
   exit 1
 }
 
-BACKEND_IMAGE="${IMAGE_REGISTRY%/}/manage-system-backend:${IMAGE_TAG}"
-WEB_IMAGE="${IMAGE_REGISTRY%/}/manage-system-web:${IMAGE_TAG}"
+BACKEND_IMAGE="${IMAGE_REGISTRY%/}/labstock-api:${IMAGE_TAG}"
+WEB_IMAGE="${IMAGE_REGISTRY%/}/labstock-web:${IMAGE_TAG}"
 
 info() { printf '[stage3] %s\n' "$*"; }
 

@@ -51,9 +51,9 @@ docker compose ps
 docker compose logs backend | grep bootstrap
 ```
 
-浏览器访问 `http://<服务器IP>/`（或 `http://<服务器IP>:<WEB_PORT>/`），使用上一步打印的管理员账号登录。
+浏览器访问 `http://<服务器IP>:4900/`（或 `http://<服务器IP>:<WEB_PORT>/`），使用上一步打印的管理员账号登录。
 
-- 健康检查：`curl -fsS http://127.0.0.1/api/v1/health` 应返回 `{"status":"ok"}`
+- 健康检查：`curl -fsS http://127.0.0.1:4900/api/v1/health` 应返回 `{"status":"ok"}`
 - 完整部署、运维、备份恢复、升级回滚与排错见 **[docs/deploy.md](docs/deploy.md)**
 - 交付范围与已知限制见 **[docs/delivery.md](docs/delivery.md)**，逐项验收见 **[docs/acceptance-checklist.md](docs/acceptance-checklist.md)**
 
@@ -93,7 +93,7 @@ print("已更新 admin 密码")
 PY
 ```
 
-> 管理员登录后应立即通过上述方式修改初始密码，并妥善保存。首次部署完成前请勿将 80 端口暴露给不可信网络。
+> 管理员登录后应立即通过上述方式修改初始密码，并妥善保存。首次部署完成前请勿将 4900 端口暴露给不可信网络。
 
 ## 配置
 
@@ -107,7 +107,7 @@ PY
 | `ADMIN_INIT_PASSWORD` | 否 | 首次创建的管理员密码，留空则随机生成并打印到日志 |
 | `ADMIN_INIT_NAME` | 否 | 管理员姓名，默认「系统管理员」 |
 | `LLM_API_KEY` / `LLM_BASE_URL` / `LLM_MODEL` | 否 | OpenAI 兼容接口（如 DeepSeek）；留空则智能补货只使用规则引擎 |
-| `WEB_PORT` | 否 | 对外 HTTP 端口，默认 `80` |
+| `WEB_PORT` | 否 | 对外 HTTP 端口，默认 `4900` |
 | `IMAGE_TAG` | 否 | 镜像版本标签，默认 `latest`，升级/回滚时切换 |
 
 **内置默认密钥只用于首次开箱启动，不具备生产安全性。** 生产部署必须通过 `.env` 覆盖 `MYSQL_ROOT_PASSWORD` 与 `JWT_SECRET_KEY`（可用 `openssl rand -hex 32` 生成）。
@@ -209,7 +209,7 @@ cd frontend && npm run build
 
 - **密钥**：生产必须覆盖 `MYSQL_ROOT_PASSWORD` 与 `JWT_SECRET_KEY`；`.env` 权限设为 600 且不提交
 - **管理员密码**：首次启动后立即修改随机初始密码；丢弃该密码后按上文容器内脚本重置
-- **网络**：仅暴露 `WEB_PORT`（默认 80），不对外开放 3306 / 8000；HTTPS 建议在前置 nginx/Caddy 或云负载均衡终止
+- **网络**：仅暴露 `WEB_PORT`（默认 4900），不对外开放 3306 / 8000；HTTPS 建议在前置 nginx/Caddy 或云负载均衡终止
 - **备份**：定期 `mysqldump` 或对数据卷做快照，升级前必须先备份
 - **升级/回滚**：升级用 `docker compose up -d --build`；回滚优先切换历史 `IMAGE_TAG` 启动，数据库迁移通常单向，回滚前确认表结构兼容
 - **日志**：`docker compose logs -f backend` 查看运行与 `[bootstrap]` 记录；定期巡检并清理旧镜像

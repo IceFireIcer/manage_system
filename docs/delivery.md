@@ -34,7 +34,7 @@ cp .env.example .env
 # 编辑 .env：MYSQL_ROOT_PASSWORD、JWT_SECRET_KEY 填随机强值
 docker compose up -d --build
 docker compose logs backend | grep bootstrap   # 获取管理员初始密码
-curl -fsS http://127.0.0.1/api/v1/health
+curl -fsS http://127.0.0.1:4900/api/v1/health
 ```
 
 云端资源（ECS、公网 IP、DeepSeek Key）需在部署前开通；本仓库不包含任何真实密钥。
@@ -49,7 +49,7 @@ curl -fsS http://127.0.0.1/api/v1/health
 | `JWT_SECRET_KEY` | 生产必填 | JWT 签名密钥，至少 32 位随机字符 |
 | `ADMIN_INIT_ACCOUNT` / `ADMIN_INIT_PASSWORD` / `ADMIN_INIT_NAME` | 否 | 首次创建的管理员账号/密码/姓名，默认 `admin` / 随机 / 系统管理员 |
 | `LLM_API_KEY` / `LLM_BASE_URL` / `LLM_MODEL` | 否 | OpenAI 兼容接口，留空则智能补货只用规则引擎 |
-| `WEB_PORT` | 否 | 对外 HTTP 端口，默认 80 |
+| `WEB_PORT` | 否 | 对外 HTTP 端口，默认 4900 |
 | `IMAGE_TAG` | 否 | 镜像版本标签，默认 latest |
 
 内置默认密钥仅用于首次开箱启动；生产必须覆盖数据库密码与 JWT 密钥。

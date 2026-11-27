@@ -1,6 +1,6 @@
 # 云端部署手册：通用 Ubuntu 云服务器 + Docker Compose
 
-本手册面向**任意一台 Ubuntu 云服务器**（阿里云 / 腾讯云 / 华为云 / 自建虚拟机均可），从零完成本系统的部署、验证、升级与回滚。不依赖任何云厂商控制台，控制台操作仅限「开放 80 端口 / 拿到公网 IP」这类通用步骤。
+本手册面向**任意一台 Ubuntu 云服务器**（阿里云 / 腾讯云 / 华为云 / 自建虚拟机均可），从零完成本系统的部署、验证、升级与回滚。不依赖任何云厂商控制台，控制台操作仅限「开放 4900 端口 / 拿到公网 IP」这类通用步骤。
 
 - 本地零 Docker 开发：见 [README](../README.md#本地开发) 与 `scripts/dev-start.sh`、`scripts/dev-start.ps1`
 - CodeArts 流水线（可选）：见本文 [第 13 节](#13-可选codearts-流水线三阶段)
@@ -29,7 +29,7 @@ docker compose up -d --build
 
 1. `db` 容器初始化 `manage_system` 库（utf8mb4），健康检查通过后才启动 `backend`
 2. `backend` 执行 `alembic upgrade head` 建四张核心表，再执行 `scripts/bootstrap_admin.py` 创建管理员（幂等）
-3. `web`（nginx）等待 `backend` 健康后启动并监听 `WEB_PORT`（默认 80）
+3. `web`（nginx）等待 `backend` 健康后启动并监听 `WEB_PORT`（默认 4900）
 
 ### 0.1 获取管理员初始密码
 
@@ -44,21 +44,21 @@ docker compose logs backend | grep bootstrap
 - 已存在启用的管理员时日志为 `[bootstrap] 管理员账号已存在，跳过`；`ADMIN_INIT_PASSWORD` 不会重置已有账号密码
 - 修改初始密码的方法见 [README「管理员初始化」](../README.md#管理员初始化)
 
-访问 `http://<服务器IP>/` 登录；新建耗材档案与用户后即可开始日常使用。
+访问 `http://<服务器IP>:4900/` 登录；新建耗材档案与用户后即可开始日常使用。
 
 > **安全提示**：Compose 内置的默认 `MYSQL_ROOT_PASSWORD` 与 `JWT_SECRET_KEY` 仅用于首次开箱启动，**不具备生产安全性**。生产部署必须通过 `.env` 覆盖。第 `1`~`14` 节为完整部署与运维说明：安装与首次启动已包含在本节，可跳过第 `3`~`6` 节；后续运维、升级、备份与排错仍按下文执行。
 
 ## 1. 部署拓扑
 
 ```
-浏览器 ──HTTP:80──> web 容器（nginx:alpine，托管 Vue 静态产物）
+浏览器 ──HTTP:4900──> web 容器（nginx:alpine，托管 Vue 静态产物）
                        └──/api/──> backend 容器（python:3.12-slim，uvicorn 单进程, 8000）
                                         └──> db 容器（mysql:8.0, 3306）
 ```
 
-- 仅 `web` 暴露宿主机 `80` 端口（可通过 `WEB_PORT` 改为其他端口）
+- 仅 `web` 暴露宿主机 `4900` 端口（可通过 `WEB_PORT` 改为其他端口）
 - `backend` 与 `db` 只在 Compose 内部网络中可达，不对外开放 8000 / 3306
-- 数据持久化在命名卷 `manage-system_mysql_data`
+- 数据持久化在命名卷 `labstock_mysql_data`
 - 推荐配置：2 核 4G、磁盘 ≥ 20G、Ubuntu 22.04/24.04
 
 ## 2. 前置条件
@@ -67,11 +67,11 @@ docker compose logs backend | grep bootstrap
 | --- | --- |
 | 操作系统 | Ubuntu 20.04+（本文以 22.04/24.04 为准） |
 | 硬件 | 2C4G 起，磁盘 ≥ 20G |
-| 网络 | 安全组 / 防火墙放行 TCP 80（或自定义 `WEB_PORT`） |
+| 网络 | 安全组 / 防火墙放行 TCP 4900（或自定义 `WEB_PORT`） |
 | 账号 | 具备 `sudo` 权限的 SSH 账号 |
 | 代码 | AtomGit 仓库 `https://atomgit.com/IceFire_Icer/manage_system.git` 访问权限 |
 
-> 本文不涉及开通云主机、创建镜像仓库等操作，请先在云厂商控制台完成，并在安全组放行 80 端口。
+> 本文不涉及开通云主机、创建镜像仓库等操作，请先在云厂商控制台完成，并在安全组放行 4900 端口。
 
 ## 3. 安装 Docker Engine 与 Compose 插件
 
@@ -161,7 +161,7 @@ vi .env
 | `JWT_SECRET_KEY` | JWT 签名密钥，至少 32 位随机字符；变更后旧登录态失效；生产必填 |
 | `ADMIN_INIT_ACCOUNT` / `ADMIN_INIT_PASSWORD` / `ADMIN_INIT_NAME` | 首次创建的管理员账号、密码、姓名；仅首次创建生效 |
 | `LLM_API_KEY` / `LLM_BASE_URL` / `LLM_MODEL` | OpenAI 兼容接口；留空则只用规则引擎 |
-| `WEB_PORT` | 对外 HTTP 端口，默认 `80` |
+| `WEB_PORT` | 对外 HTTP 端口，默认 `4900` |
 | `IMAGE_TAG` | 镜像版本标签，默认 `latest`，升级/回滚时切换 |
 
 > `.env` 已在 `.gitignore` 中，**不要提交**。密码若包含 `@ : / # ?` 等字符，需要 URL 编码（`DATABASE_URL` 由 Compose 自动拼接，未编码会连不上库）。
@@ -211,18 +211,18 @@ docker compose exec backend python scripts/bootstrap_admin.py
 
 ```bash
 # 服务器本机健康检查
-curl -fsS http://127.0.0.1/api/v1/health
+curl -fsS http://127.0.0.1:4900/api/v1/health
 # 期望：{"status":"ok"}
 
 # 检查首页
-curl -sI http://127.0.0.1/ | head -1
+curl -sI http://127.0.0.1:4900/ | head -1
 # 期望：HTTP/1.1 200 OK
 
 # 确认管理员已初始化
 docker compose logs backend | grep bootstrap
 ```
 
-浏览器访问 `http://<服务器公网IP>/`（或 `http://<IP>:<WEB_PORT>/`）：
+浏览器访问 `http://<服务器公网IP>:4900/`（或 `http://<IP>:<WEB_PORT>/`）：
 
 1. 自动跳转 `/login`
 2. 用 bootstrap 打印的管理员账号登录，进入「库存总览」
@@ -264,7 +264,7 @@ cd /opt/manage_system
 # 1) 记录当前运行版本，便于回滚
 docker inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' \
   "$(docker compose ps -q backend)" 2>/dev/null || true
-docker image ls manage-system-backend manage-system-web
+docker image ls labstock-api labstock-web
 
 # 2) 拉取新代码
 git pull --ff-only
@@ -274,7 +274,7 @@ docker compose up -d --build
 
 # 4) 验证
 docker compose ps
-curl -fsS http://127.0.0.1/api/v1/health
+curl -fsS http://127.0.0.1:4900/api/v1/health
 ```
 
 升级后清理旧镜像：
@@ -294,8 +294,8 @@ docker image prune -f
 ```bash
 # 升级前：给当前镜像打上版本标签，并记录到 .env 的 IMAGE_TAG（可选）
 TAG="v$(date +%Y%m%d-%H%M)"
-docker tag manage-system-backend:latest "manage-system-backend:${TAG}"
-docker tag manage-system-web:latest "manage-system-web:${TAG}"
+docker tag labstock-api:latest "labstock-api:${TAG}"
+docker tag labstock-web:latest "labstock-web:${TAG}"
 
 # 出问题时：用旧标签启动（注意不要加 --build，否则会覆盖标签镜像）
 IMAGE_TAG="${TAG}" docker compose up -d --no-build
@@ -337,7 +337,7 @@ docker compose start backend
 | 现象 | 排查与处理 |
 | --- | --- |
 | `permission denied /var/run/docker.sock` | 未加入 docker 组：`sudo usermod -aG docker $USER` 后**重新登录** |
-| `docker compose up` 报 `port is already allocated` | 80 被宿主机 nginx/apache 占用：`sudo ss -lntp \| grep :80`；或把 `.env` 的 `WEB_PORT` 改为 8080 并放行安全组 |
+| `docker compose up` 报 `port is already allocated` | 4900 被宿主机 nginx/apache 占用：`sudo ss -lntp \| grep :4900`；或把 `.env` 的 `WEB_PORT` 改为 4901 并放行安全组 |
 | `db` 反复重启 / `Access denied for user 'root'` | 初始化时的密码已固化在数据卷；改过 `.env` 密码需要 `docker compose down -v`（**会删数据**）或进入容器 `ALTER USER` |
 | `backend` 一直 `unhealthy` | `docker compose logs backend`；常见原因：密码含特殊字符导致 `DATABASE_URL` 非法、db 尚未就绪、迁移失败 |
 | 日志中看不到 `[bootstrap]` 初始密码 | 多为管理员已存在（`管理员账号已存在，跳过`）；如确实缺失，执行 `docker compose exec backend python scripts/bootstrap_admin.py` 查看输出 |
@@ -385,7 +385,7 @@ bash scripts/ci/stage2-backend-test.sh
 
 ### 阶段 3：镜像构建推送 + 服务器发布
 
-前置：在 SWR（或任意镜像仓库）创建 `manage-system-backend`、`manage-system-web` 两个仓库，并把登录凭据、服务器 SSH 私钥、host/端口配置为流水线**凭据/参数**，不要写进仓库。
+前置：在 SWR（或任意镜像仓库）创建 `labstock-api`、`labstock-web` 两个仓库，并把登录凭据、服务器 SSH 私钥、host/端口配置为流水线**凭据/参数**，不要写进仓库。
 
 ```bash
 IMAGE_REGISTRY="${SWR_REGISTRY}" \
@@ -409,7 +409,7 @@ ssh -o StrictHostKeyChecking=accept-new "${DEPLOY_USER}@${DEPLOY_HOST}" \
 在校验发布结果时，流水线可追加：
 
 ```bash
-ssh "${DEPLOY_USER}@${DEPLOY_HOST}" "curl -fsS http://127.0.0.1/api/v1/health"
+ssh "${DEPLOY_USER}@${DEPLOY_HOST}" "curl -fsS http://127.0.0.1:4900/api/v1/health"
 ```
 
 ### 版本标签与回滚
@@ -430,7 +430,7 @@ IMAGE_TAG=<上一次成功标签> docker compose up -d --no-build
 - [ ] `MYSQL_ROOT_PASSWORD` 与 `JWT_SECRET_KEY` 均为随机强值，未使用内置默认值
 - [ ] 已从日志获取管理员初始密码并**立即修改**，新密码妥善保存
 - [ ] 未将 `ADMIN_INIT_PASSWORD` 明文长期保留在 `.env` 或交付材料中
-- [ ] 安全组仅放行 22 / 80（或自定义端口），不暴露 3306 / 8000
+- [ ] 安全组仅放行 22 / 4900（或自定义端口），不暴露 3306 / 8000
 - [ ] 配置数据库定期备份与磁盘快照
 - [ ] 建议接入 HTTPS：在前置 nginx/Caddy 或云负载均衡上终止 TLS（当前 Compose 默认 HTTP）
 - [ ] 定期 `docker compose logs` 巡检与 `docker image prune` 清理
