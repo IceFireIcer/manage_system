@@ -86,13 +86,17 @@ function formatTime(value) {
   return matched ? `${matched[1]} ${matched[2]}` : text
 }
 
+function unitLabel(record) {
+  return record.unit || '待核对'
+}
+
 function quantityText(record) {
   const prefix = record.type === 'reversal' ? '+' : ''
-  return `${prefix}${record.quantity}${record.unit ? ` ${record.unit}` : ''}`
+  return `${prefix}${record.quantity} ${unitLabel(record)}`
 }
 
 function stockText(record) {
-  return `${record.stock_after}${record.unit ? ` ${record.unit}` : ''}`
+  return `${record.stock_after} ${unitLabel(record)}`
 }
 
 async function loadRecord(id) {
@@ -217,7 +221,7 @@ onBeforeUnmount(() => {
           </div>
           <div class="record-drawer__field">
             <dt>耗材</dt>
-            <dd>{{ detail.consumable_name }}<span v-if="detail.unit" class="record-drawer__unit">（{{ detail.unit }}）</span></dd>
+            <dd>{{ detail.consumable_name }}<span class="record-drawer__unit">（{{ unitLabel(detail) }}）</span></dd>
           </div>
           <div class="record-drawer__field">
             <dt>数量</dt>
@@ -249,7 +253,7 @@ onBeforeUnmount(() => {
           <div v-if="detail.type === 'normal'" class="record-drawer__field record-drawer__field--full">
             <dt>可退 / 可报损数量</dt>
             <dd>
-              {{ detail.returnable_quantity }}<span v-if="detail.unit"> {{ detail.unit }}</span>
+              {{ detail.returnable_quantity }}<span> {{ unitLabel(detail) }}</span>
               <span class="record-drawer__hint">
                 已退 {{ detail.returned_quantity }} · 已报损 {{ detail.scrapped_quantity }}
               </span>
@@ -310,7 +314,7 @@ onBeforeUnmount(() => {
             <div>
               <span class="record-drawer__related-label">原领用 #{{ detail.origin.id }}</span>
               <span class="record-drawer__related-meta">
-                {{ formatTime(detail.origin.created_at) }} · {{ detail.origin.quantity }}{{ detail.unit ? ` ${detail.unit}` : '' }}
+                {{ formatTime(detail.origin.created_at) }} · {{ detail.origin.quantity }} {{ unitLabel(detail) }}
                 <template v-if="detail.origin.order_no"> · {{ detail.origin.order_no }}</template>
               </span>
             </div>
@@ -320,7 +324,7 @@ onBeforeUnmount(() => {
             <div>
               <span class="record-drawer__related-label">红冲 #{{ detail.reversal.id }}</span>
               <span class="record-drawer__related-meta">
-                {{ formatTime(detail.reversal.created_at) }} · +{{ detail.reversal.quantity }}{{ detail.unit ? ` ${detail.unit}` : '' }}
+                {{ formatTime(detail.reversal.created_at) }} · +{{ detail.reversal.quantity }} {{ unitLabel(detail) }}
                 <template v-if="detail.reversal.order_no"> · {{ detail.reversal.order_no }}</template>
               </span>
             </div>
@@ -330,7 +334,7 @@ onBeforeUnmount(() => {
             <div>
               <span class="record-drawer__related-label">关联重登 #{{ detail.reentry.id }}</span>
               <span class="record-drawer__related-meta">
-                {{ formatTime(detail.reentry.created_at) }} · -{{ detail.reentry.quantity }}{{ detail.unit ? ` ${detail.unit}` : '' }}
+                {{ formatTime(detail.reentry.created_at) }} · -{{ detail.reentry.quantity }} {{ unitLabel(detail) }}
                 <template v-if="detail.reentry.order_no"> · {{ detail.reentry.order_no }}</template>
               </span>
             </div>
@@ -348,7 +352,7 @@ onBeforeUnmount(() => {
             <div>
               <span class="record-drawer__related-label">实物退库 #{{ item.id }}</span>
               <span class="record-drawer__related-meta">
-                {{ formatTime(item.created_at) }} · +{{ item.quantity }}{{ detail.unit ? ` ${detail.unit}` : '' }}
+                {{ formatTime(item.created_at) }} · +{{ item.quantity }} {{ unitLabel(detail) }}
                 · 原领用 #{{ item.requisition_id }}
                 <template v-if="item.order_no"> · {{ item.order_no }}</template>
                 <template v-if="item.reason"> · 原因：{{ item.reason }}</template>
@@ -365,7 +369,7 @@ onBeforeUnmount(() => {
             <div>
               <span class="record-drawer__related-label">报损 #{{ item.id }}</span>
               <span class="record-drawer__related-meta">
-                {{ formatTime(item.created_at) }} · 损耗 {{ item.quantity }}{{ detail.unit ? ` ${detail.unit}` : '' }}
+                {{ formatTime(item.created_at) }} · 损耗 {{ item.quantity }} {{ unitLabel(detail) }}
                 · 原领用 #{{ item.requisition_id }}
                 <template v-if="item.order_no"> · {{ item.order_no }}</template>
                 · 原因：{{ item.reason }}

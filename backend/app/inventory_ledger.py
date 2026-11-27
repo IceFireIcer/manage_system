@@ -50,6 +50,8 @@ def append_event(
     requisition_id: int | None = None,
     line_no: int | None = None,
     operator: User | None = None,
+    name_snapshot: str | None = None,
+    spec_snapshot: str | None = None,
     unit_snapshot: str | None = None,
     evidence_status: str = EVIDENCE_TRUSTED,
 ) -> InventoryEvent:
@@ -69,6 +71,12 @@ def append_event(
         operator_id=operator.id if operator else None,
         operator_name=operator.name if operator else None,
         operator_role=operator.role if operator else None,
+        name_snapshot=(
+            name_snapshot if name_snapshot is not None else consumable.name
+        ),
+        spec_snapshot=(
+            spec_snapshot if spec_snapshot is not None else consumable.spec
+        ),
         unit_snapshot=unit_snapshot if unit_snapshot is not None else consumable.unit,
         evidence_status=evidence_status,
         class_id=consumable.class_id,

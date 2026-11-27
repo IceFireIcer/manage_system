@@ -116,6 +116,9 @@ class Requisition(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     consumable_id: Mapped[int] = mapped_column(ForeignKey("consumables.id"), nullable=False)
+    name_snapshot: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    spec_snapshot: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    unit_snapshot: Mapped[str] = mapped_column(String(16), nullable=False, default="")
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
     quantity: Mapped[int] = mapped_column(Integer, nullable=False)
     stock_after: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -254,6 +257,8 @@ class InventoryEvent(Base):
     )
     operator_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
     operator_role: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    name_snapshot: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    spec_snapshot: Mapped[str] = mapped_column(String(128), nullable=False, default="")
     unit_snapshot: Mapped[str] = mapped_column(String(16), nullable=False, default="")
     evidence_status: Mapped[str] = mapped_column(
         String(16), nullable=False, default="trusted"

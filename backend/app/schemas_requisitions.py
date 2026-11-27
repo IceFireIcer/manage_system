@@ -347,6 +347,7 @@ class RequisitionListItemOut(BaseModel):
     created_at: datetime
     consumable_name: str
     consumable_spec: str
+    unit: str = ""
     quantity: int
     user_id: int
     user_name: str
@@ -368,6 +369,14 @@ class RequisitionPageOut(BaseModel):
     total: int
     page: int
     page_size: int
+
+
+class RequisitionConsumableOptionOut(BaseModel):
+    id: int
+    name: str
+    spec: str
+    unit: str
+    status: str
 
 
 class RequisitionDetailOut(RequisitionRecordOut):
