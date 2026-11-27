@@ -26,13 +26,16 @@ StaffUser = Annotated[User, Depends(require_role("teacher", "admin"))]
 AdminUser = Annotated[User, Depends(require_role("admin"))]
 
 
-@router.get("/overview")
+@router.get("/overview", response_model_exclude_none=True)
 def get_inventory_overview(
     db: Annotated[Session, Depends(get_db)],
-    _current_user: CurrentUser,
+    current_user: CurrentUser,
 ) -> InventoryOverviewOut:
     consumables = db.scalars(
-        select(Consumable).where(Consumable.status == STATUS_ENABLED)
+        select(Consumable).where(
+            Consumable.status == STATUS_ENABLED,
+            Consumable.class_id == current_user.class_id,
+        )
     ).all()
 
     items: list[InventoryItemOut] = []
@@ -71,10 +74,14 @@ def get_inventory_overview(
                 Requisition.status == "active",
                 Requisition.created_at >= today_start,
                 Requisition.created_at < tomorrow_start,
+                Requisition.class_id == current_user.class_id,
             )
         )
         or 0
     )
+
+    if current_user.role == "student":
+        return InventoryOverviewOut(items=items)
 
     return InventoryOverviewOut(
         summary=InventorySummary(

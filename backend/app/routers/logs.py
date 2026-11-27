@@ -15,6 +15,7 @@ router = APIRouter(prefix="/api/v1/logs", tags=["logs"])
 
 DEFAULT_PAGE_SIZE = 20
 MAX_PAGE_SIZE = 100
+SENSITIVE_LOG_ACTIONS = ("login", "logout")
 
 StaffUser = Annotated[User, Depends(require_role("teacher", "admin"))]
 
@@ -22,7 +23,7 @@ StaffUser = Annotated[User, Depends(require_role("teacher", "admin"))]
 @router.get("")
 def list_operation_logs(
     db: Annotated[Session, Depends(get_db)],
-    _staff: StaffUser,
+    current_user: StaffUser,
     action: Annotated[str | None, Query()] = None,
     operator_id: Annotated[int | None, Query()] = None,
     start_date: Annotated[date | None, Query()] = None,
@@ -36,6 +37,15 @@ def list_operation_logs(
             detail=business_time.REVERSE_RANGE_DETAIL,
         )
     filters = []
+    if current_user.role != "admin":
+        if action is not None and any(
+            sensitive in action.strip().lower() for sensitive in SENSITIVE_LOG_ACTIONS
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="无权限访问敏感登录审计",
+            )
+        filters.append(OperationLog.action.notin_(SENSITIVE_LOG_ACTIONS))
     if action is not None and action.strip():
         filters.append(OperationLog.action.contains(action.strip()))
     if operator_id is not None:

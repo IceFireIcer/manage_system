@@ -66,8 +66,10 @@ def _build_query(
     )
     if current_user.role == "student":
         query = query.where(Requisition.user_id == current_user.id)
-    elif user_id is not None:
-        query = query.where(Requisition.user_id == user_id)
+    else:
+        query = query.where(Requisition.class_id == current_user.class_id)
+        if user_id is not None:
+            query = query.where(Requisition.user_id == user_id)
     if consumable_id is not None:
         query = query.where(Requisition.consumable_id == consumable_id)
     if start_date is not None:
@@ -428,6 +430,10 @@ def reverse_requisition(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="流水不存在"
         )
+    if requisition.class_id != manager.class_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="无权限处理该流水"
+        )
     if requisition.type == "reversal":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="红冲流水不可被撤销"
@@ -535,9 +541,16 @@ def get_requisition(
     current_user: CurrentUser,
 ) -> RequisitionDetailOut:
     requisition = db.get(Requisition, requisition_id)
-    if requisition is None or (
-        current_user.role == "student" and requisition.user_id != current_user.id
-    ):
+    if requisition is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="流水不存在"
+        )
+    if current_user.role == "student":
+        if requisition.user_id != current_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="流水不存在"
+            )
+    elif requisition.class_id != current_user.class_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="流水不存在"
         )
