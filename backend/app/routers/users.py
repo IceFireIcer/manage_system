@@ -128,6 +128,7 @@ def create_user(
         name=payload.name,
         role="student",
         status="enabled",
+        must_change_password=True,
     )
     db.add(user)
     db.flush()
@@ -170,6 +171,7 @@ def update_user_status(
         action = "user_enable" if payload.status == "enabled" else "user_disable"
         _log_operation(db, current_user, action, user, user.status, payload.status)
         user.status = payload.status
+        user.session_version += 1
         db.commit()
     db.refresh(user)
     return user

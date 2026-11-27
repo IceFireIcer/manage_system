@@ -262,6 +262,11 @@ def test_receipt_lookup_by_request_and_order_number(
     assert by_order.json() == receipt
 
     _login_student(admin_client, "student02")
+    changed = admin_client.post(
+        "/api/v1/auth/change-password",
+        json={"old_password": "Student@123", "new_password": "Student@4567"},
+    )
+    assert changed.status_code == 200, changed.text
     assert admin_client.get(f"{BASE_URL}/requests/ledger-receipt-1").status_code == 404
 
 

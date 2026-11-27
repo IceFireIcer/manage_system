@@ -2,6 +2,7 @@ from datetime import datetime
 
 from sqlalchemy import (
     DATETIME,
+    Boolean,
     CheckConstraint,
     ForeignKey,
     Integer,
@@ -25,6 +26,10 @@ class User(Base):
     role: Mapped[str] = mapped_column(String(16), nullable=False, default="student")
     class_id: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="enabled")
+    must_change_password: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+    session_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
 
 

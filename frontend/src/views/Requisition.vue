@@ -1,5 +1,5 @@
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '../api'
@@ -11,6 +11,13 @@ import { businessDate, businessNowInput, businessToday } from '../utils/business
 const MAX_ROWS = 5
 const MAX_BACKFILL_DAYS = 30
 const PENDING_KEY = 'manage_system.requisition.pending'
+const DRAFT_TTL = 30 * 60 * 1000
+
+const draftOwnerId = ref(null)
+const draftNotice = ref('')
+const recentItems = ref([])
+let draftReady = false
+let draftTimer = null
 
 const ROLE_NAMES = { teacher: '教师', admin: '班委', student: '学生' }
 const STATUS_NAMES = { processing: '处理中', submitted: '已提交', rejected: '已拒绝' }
@@ -21,6 +28,13 @@ const router = useRouter()
 
 const isStudent = computed(() => userStore.user?.role === 'student')
 const isAdmin = computed(() => userStore.user?.role === 'admin')
+
+const locked = computed(() => {
+  if (userStore.identityLocked) return true
+  if (!userStore.isLoggedIn) return true
+  if (draftOwnerId.value === null) return false
+  return (userStore.user?.id ?? null) !== draftOwnerId.value
+})
 
 const consumables = ref([])
 const userOptions = ref([])
@@ -299,6 +313,149 @@ function resetFormState() {
   uncertain.value = false
 }
 
+function draftKey(userId) {
+  return `requisition-draft:${userId}`
+}
+
+function recentKey(userId) {
+  return `recent-items:${userId}`
+}
+
+function removeDraft() {
+  const ownerId = draftOwnerId.value
+  if (!ownerId) return
+  try {
+    localStorage.removeItem(draftKey(ownerId))
+  } catch {
+    draftNotice.value = ''
+  }
+}
+
+function saveDraft() {
+  if (!draftReady) return
+  const ownerId = draftOwnerId.value
+  if (!ownerId) return
+  if (locked.value) return
+  try {
+    if (result.value || !hasDraft()) {
+      localStorage.removeItem(draftKey(ownerId))
+      return
+    }
+    const payload = {
+      savedAt: Date.now(),
+      userId: form.userId,
+      timeMode: form.timeMode,
+      backfillAt: form.backfillAt,
+      remark: form.remark,
+      rows: rows.value.map((row) => ({
+        consumableId: row.consumableId,
+        quantity: row.quantity,
+      })),
+    }
+    localStorage.setItem(draftKey(ownerId), JSON.stringify(payload))
+  } catch {
+    draftNotice.value = ''
+  }
+}
+
+function restoreDraft() {
+  const ownerId = draftOwnerId.value
+  if (!ownerId) return
+  let draft = null
+  try {
+    const raw = localStorage.getItem(draftKey(ownerId))
+    if (!raw) return
+    draft = JSON.parse(raw)
+  } catch {
+    removeDraft()
+    return
+  }
+  if (!draft || Date.now() - Number(draft.savedAt) > DRAFT_TTL) {
+    removeDraft()
+    return
+  }
+  const restoredRows = Array.isArray(draft.rows)
+    ? draft.rows.filter(
+        (row) =>
+          row &&
+          Number.isInteger(row.consumableId) &&
+          Number.isInteger(row.quantity) &&
+          row.quantity > 0,
+      )
+    : []
+  if (!restoredRows.length && !draft.remark) return
+  rows.value = restoredRows.length
+    ? restoredRows.slice(0, MAX_ROWS).map((row) => createRow(row.consumableId, row.quantity))
+    : [createRow()]
+  if (consumables.value.length) {
+    rows.value.forEach((row) => {
+      if (row.consumableId && !findConsumable(row.consumableId)) {
+        row.consumableId = null
+      }
+    })
+  }
+  form.userId = isStudent.value
+    ? ownerId
+    : Number.isInteger(draft.userId)
+      ? draft.userId
+      : ownerId
+  form.timeMode = draft.timeMode === 'backfill' ? 'backfill' : 'now'
+  form.backfillAt = typeof draft.backfillAt === 'string' ? draft.backfillAt : ''
+  form.remark = typeof draft.remark === 'string' ? draft.remark : ''
+  draftNotice.value = '已恢复上次未提交的领用草稿，提交前请重新核对库存与领用人。'
+}
+
+function loadRecent() {
+  const ownerId = draftOwnerId.value
+  if (!ownerId) return
+  try {
+    const raw = localStorage.getItem(recentKey(ownerId))
+    if (!raw) return
+    const data = JSON.parse(raw)
+    if (!Array.isArray(data?.items)) return
+    recentItems.value = data.items.filter(
+      (item) =>
+        item &&
+        Number.isInteger(item.consumableId) &&
+        Number.isInteger(item.quantity) &&
+        item.quantity > 0,
+    )
+  } catch {
+    recentItems.value = []
+  }
+}
+
+function rememberRecent(snapshot) {
+  const ownerId = draftOwnerId.value
+  if (!ownerId) return
+  const items = snapshot
+    .filter((row) => row.consumableId)
+    .map((row) => ({ consumableId: row.consumableId, quantity: row.quantity }))
+  if (!items.length) return
+  recentItems.value = items
+  try {
+    localStorage.setItem(recentKey(ownerId), JSON.stringify({ savedAt: Date.now(), items }))
+  } catch {
+    recentItems.value = items
+  }
+}
+
+function applyRecent() {
+  if (!recentItems.value.length || locked.value) return
+  rows.value = recentItems.value
+    .slice(0, MAX_ROWS)
+    .map((item) => createRow(item.consumableId, item.quantity))
+  clearRowErrors()
+  clearUncertain()
+  draftNotice.value = '已填入最近明细，提交前请重新核对库存、业务时间与领用人。'
+}
+
+function scheduleDraftSave() {
+  if (!draftReady) return
+  if (draftTimer) window.clearTimeout(draftTimer)
+  draftTimer = window.setTimeout(saveDraft, 400)
+}
+
 async function fetchConsumables() {
   consumableLoading.value = true
   consumableError.value = ''
@@ -364,6 +521,19 @@ async function applyPrefill() {
   prefillMessage.value = ''
   await nextTick()
   rowQtyRefs.get(0)?.focus?.()
+}
+
+function buildSnapshot() {
+  return rows.value.map((row) => {
+    const item = rowItem(row)
+    return {
+      consumableId: row.consumableId,
+      quantity: row.quantity,
+      name: item?.name ?? '',
+      spec: item?.spec ?? '',
+      unit: item?.unit ?? '',
+    }
+  })
 }
 
 function createRequestId() {
@@ -562,29 +732,54 @@ async function handleSubmitError(error) {
 
 async function handleSubmit() {
   if (submitting.value || uncertain.value) return
+  if (locked.value) {
+    submitError.value = '当前页面已失效，请重新登录后再提交。'
+    return
+  }
   result.value = null
   submitError.value = ''
   if (!validateMeta()) return
   if (!validateRows()) return
   const requestId = createRequestId()
-  const payload = {
-    items: rows.value.map((row) => ({
-      consumable_id: row.consumableId,
-      quantity: row.quantity,
-    })),
-    remark: form.remark.trim() || null,
-    request_id: requestId,
-  }
-  if (!isStudent.value) payload.user_id = form.userId
-  if (form.timeMode === 'backfill') payload.created_at = form.backfillAt
-  savePending(requestId, payload)
-
   submitting.value = true
   try {
+    const [freshConsumables, freshUsers] = await Promise.all([
+      fetchConsumables(),
+      fetchUserOptions(),
+    ])
+    if (!freshConsumables || !freshUsers) {
+      refreshWarning.value = '未能刷新最新库存或领用人，将由服务端在提交时再次校验。'
+    }
+    if (!validateMeta()) return
+    if (!validateRows()) return
+    if (locked.value) {
+      submitError.value = '当前页面已失效，请重新登录后再提交。'
+      return
+    }
+    const snapshot = buildSnapshot()
+    const payload = {
+      items: rows.value.map((row) => ({
+        consumable_id: row.consumableId,
+        quantity: row.quantity,
+      })),
+      remark: form.remark.trim() || null,
+      request_id: requestId,
+    }
+    if (!isStudent.value) payload.user_id = form.userId
+    if (form.timeMode === 'backfill') payload.created_at = form.backfillAt
+    savePending(requestId, payload)
+
     const { data } = await api.post('/requisitions', payload)
-    if (data.receipt) showReceipt(data.receipt)
-    else {
-      result.value = { count: data.count, items: data.items, orderNo: data.order_no }
+if (data.receipt) {
+      showReceipt(data.receipt)
+      result.value = { ...result.value, rows: snapshot }
+    } else {
+      result.value = {
+        count: data.count,
+        items: data.items,
+        orderNo: data.order_no,
+        rows: snapshot,
+      }
       requestStatus.value = {
         request_id: requestId,
         order_no: data.order_no,
@@ -594,6 +789,8 @@ async function handleSubmit() {
       }
       clearPending()
     }
+    rememberRecent(snapshot)
+    removeDraft()
     refreshWarning.value = ''
     const [consumablesOk, usersOk] = await Promise.all([fetchConsumables(), fetchUserOptions()])
     if (!consumablesOk || !usersOk) {
@@ -626,6 +823,7 @@ async function handleReset() {
     if (!confirmed) return
   }
   resetFormState()
+  removeDraft()
   router.replace({ query: {} })
 }
 
@@ -634,6 +832,7 @@ function handleContinue() {
   requestStatus.value = null
   refreshWarning.value = ''
   resetFormState()
+  removeDraft()
   router.replace({ query: {} })
 }
 
@@ -677,22 +876,43 @@ onBeforeRouteLeave(async () => {
     .catch(() => false)
 })
 
+watch(
+  () => ({
+    rows: rows.value.map((row) => [row.consumableId, row.quantity]),
+    userId: form.userId,
+    timeMode: form.timeMode,
+    backfillAt: form.backfillAt,
+    remark: form.remark,
+  }),
+  scheduleDraftSave,
+  { deep: true },
+)
+
 onMounted(async () => {
   window.addEventListener('beforeunload', handleBeforeUnload)
+  draftOwnerId.value = userStore.user?.id ?? null
   form.userId = userStore.user?.id ?? null
   const pending = readPending()
+  loadRecent()
 
   const [consumablesOk] = await Promise.all([fetchConsumables(), fetchUserOptions()])
   if (pending) {
     applyPendingDraft(pending)
     await checkPendingRequest({ silent: true })
   } else if (consumablesOk) {
+    if (!route.query.consumable_id) restoreDraft()
     await applyPrefill()
   }
+  draftReady = true
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('beforeunload', handleBeforeUnload)
+  saveDraft()
+  if (draftTimer) {
+    window.clearTimeout(draftTimer)
+    draftTimer = null
+  }
 })
 </script>
 
@@ -793,6 +1013,22 @@ onBeforeUnmount(() => {
           :model="form"
           @submit.prevent="handleSubmit"
         >
+          <el-alert
+            v-if="locked"
+            type="error"
+            :closable="false"
+            show-icon
+            title="账号已在其它标签页切换或退出，本页已锁定，请重新登录。"
+            class="requisition__alert"
+          />
+          <el-alert
+            v-else-if="draftNotice"
+            type="info"
+            :closable="false"
+            show-icon
+            :title="draftNotice"
+            class="requisition__alert"
+          />
           <el-alert
             v-if="prefillMessage"
             type="warning"
@@ -1016,6 +1252,9 @@ onBeforeUnmount(() => {
             <el-button ref="addButtonRef" :disabled="submitting || rows.length >= MAX_ROWS" @click="addRow">
               添加明细
             </el-button>
+            <el-button v-if="recentItems.length" :disabled="submitting || locked" @click="applyRecent">
+              复用最近明细
+            </el-button>
             <span v-if="rows.length >= MAX_ROWS" class="requisition__rows-limit">
               每次最多登记 {{ MAX_ROWS }} 种耗材
             </span>
@@ -1036,12 +1275,12 @@ onBeforeUnmount(() => {
           </el-form-item>
 
           <div class="requisition__actions">
-            <el-button :disabled="submitting" @click="handleReset">重置</el-button>
+            <el-button :disabled="submitting || locked" @click="handleReset">重置</el-button>
             <el-button
               type="primary"
               native-type="submit"
               :loading="submitting"
-              :disabled="submitting || uncertain"
+              :disabled="submitting || uncertain || locked"
             >
               提交领用
             </el-button>

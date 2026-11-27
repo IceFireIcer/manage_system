@@ -2,7 +2,7 @@
 import { computed, nextTick, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useRouter } from 'vue-router'
-import api from '../api'
+
 import { useUserStore } from '../stores/user'
 
 const router = useRouter()
@@ -91,15 +91,10 @@ async function handleSubmit() {
   }
   submitting.value = true
   try {
-    const { data } = await api.post(
-      '/auth/login',
-      { account: form.account, password: form.password },
-      { skipAuthRedirect: true },
-    )
-    userStore.user = data
-    userStore.fetched = true
-    userStore.status = 'ready'
-    userStore.sessionExpired = false
+    const data = await userStore.login({
+      account: form.account,
+      password: form.password,
+    })
     ElMessage.success(`欢迎，${data.name}`)
     await router.replace(resolveRedirect())
   } catch (error) {

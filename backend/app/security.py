@@ -22,12 +22,13 @@ def verify_password(password: str, password_hash: str) -> bool:
         return False
 
 
-def create_access_token(user_id: int, role: str) -> tuple[str, int]:
+def create_access_token(user_id: int, role: str, session_version: int = 0) -> tuple[str, int]:
     settings = get_settings()
     expire_seconds = settings.jwt_expire_minutes * 60
     payload: dict[str, Any] = {
         "sub": str(user_id),
         "role": role,
+        "sv": session_version,
         "exp": datetime.now(UTC) + timedelta(seconds=expire_seconds),
     }
     token = jwt.encode(payload, settings.jwt_secret_key, algorithm=ALGORITHM)
