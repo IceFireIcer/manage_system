@@ -113,7 +113,7 @@ manage_system/
 ├─ backend/
 │  ├─ app/                 # FastAPI 应用（models、routers、agent、consumption）
 │  ├─ alembic/versions/    # 数据库迁移（建表、种子用户、种子耗材）
-│  ├─ tests/               # pytest 232 项
+│  ├─ tests/               # pytest 242 项
 │  ├─ scripts/seed_demo.py # 演示数据初始化（T11）
 │  ├─ requirements.txt
 │  └─ alembic.ini
@@ -144,7 +144,7 @@ cd backend && ruff check .
 cd frontend && npm run build
 ```
 
-当前基线：**232 passed**；ruff 通过；前端构建成功；真实 API 冒烟主线（登录 → 领用 → 撤销 → 建议 → 处置 → 统计 → 日志）通过。
+当前基线：**242 passed**；ruff 通过；前端构建成功；真实 API 冒烟主线（登录 → 领用 → 撤销 → 建议 → 处置 → 统计 → 日志）通过。
 
 ## 8. 已知限制与用户待办
 
@@ -157,10 +157,21 @@ cd frontend && npm run build
 | HTTPS / 域名 | SPEC 明确本期采用公网 IP + HTTP，不含证书配置 | 范围外 |
 | 前端自动化测试 | SPEC 明确不写，由演示脚本人工冒烟覆盖 | 范围外 |
 | 多班级 / 采购 / 通知 | 见 SPEC「Out of Scope」 | 范围外 |
+| 补录与审计口径 | `stock_after` 为执行时快照；补录按执行顺序（流水 id）入账，审计按执行顺序重建，展示时间仍为业务时间 | 已知限制 |
+| 登录失败日志 | 登录失败会留痕，属合理安全增强（Spec 轴标为轻微越界），保留 | 已知限制 |
 
-## 9. 交付物清单
+## 9. 技术债（本迭代明确不做）
 
-- 源代码：后端、前端、迁移、测试、启动脚本、Docker Compose
+以下为评审识别出的判断性重构项，收尾阶段执行会显著引入回归风险，保留现有行为与测试，记入后续迭代：
+
+- `backend/app/routers/requisitions.py`（约 500 行）职责拆分：查询、登记、撤销、导出各自独立模块
+- 前端 `Records.vue` / `Logs.vue` 的筛选与分页 composable 抽取
+- `ROLE_NAMES` 等常量单源化、菜单/路由双源合并、枚举常量单源
+- `OperationLog` 写入统一封装（当前各路由内联写日志，口径已一致）
+
+## 10. 交付物清单
+
+- 源代码：后端、前端、迁移、测试、启动脚本、Docker Compose、CI 三阶段脚本（`scripts/ci/`）
 - 演示数据脚本：`backend/scripts/seed_demo.py`
 - 演示脚本：`docs/demo-script.md`
 - 验收清单：`docs/acceptance-checklist.md`

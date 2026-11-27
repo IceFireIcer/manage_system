@@ -85,7 +85,10 @@ def _build_query(
 
 
 def _serialize_row(
-    requisition: Requisition, consumable: Consumable, user: User
+    requisition: Requisition,
+    consumable: Consumable,
+    user: User,
+    related: RequisitionRelatedOut | None = None,
 ) -> RequisitionListItemOut:
     return RequisitionListItemOut(
         id=requisition.id,
@@ -101,7 +104,59 @@ def _serialize_row(
         reversal_of=requisition.reversal_of,
         reversal_reason=requisition.reversal_reason,
         remark=requisition.remark,
+        related=related,
     )
+
+
+def _related_records(
+    db: Session, records: list[Requisition]
+) -> tuple[dict[int, Requisition], dict[int, Requisition]]:
+    """批量装载当前页的红冲/原流水关联，避免逐行查询。
+
+    返回 (原流水按红冲流水 id 索引, 红冲流水按原流水 id 索引)。
+    """
+    origin_ids = {record.reversal_of for record in records if record.reversal_of is not None}
+    reversed_ids = [
+        record.id
+        for record in records
+        if record.type == "normal" and record.status == "reversed"
+    ]
+
+    origins = (
+        {
+            item.id: item
+            for item in db.scalars(
+                select(Requisition).where(Requisition.id.in_(origin_ids))
+            )
+        }
+        if origin_ids
+        else {}
+    )
+    reversals = (
+        {
+            item.reversal_of: item
+            for item in db.scalars(
+                select(Requisition).where(Requisition.reversal_of.in_(reversed_ids))
+            )
+        }
+        if reversed_ids
+        else {}
+    )
+    return origins, reversals
+
+
+def _list_related(
+    record: Requisition,
+    origins: dict[int, Requisition],
+    reversals: dict[int, Requisition],
+) -> RequisitionRelatedOut | None:
+    if record.reversal_of is not None:
+        origin = origins.get(record.reversal_of)
+        return _related_out(origin) if origin is not None else None
+    if record.type == "normal" and record.status == "reversed":
+        reversal = reversals.get(record.id)
+        return _related_out(reversal) if reversal is not None else None
+    return None
 
 
 def _consume_params(
@@ -155,7 +210,17 @@ def list_requisitions(
         .offset((page - 1) * page_size)
         .limit(page_size)
     ).all()
-    items = [_serialize_row(record, consumable, user) for record, consumable, user in rows]
+    records = [record for record, _consumable, _user in rows]
+    origins, reversals = _related_records(db, records)
+    items = [
+        _serialize_row(
+            record,
+            consumable,
+            user,
+            related=_list_related(record, origins, reversals),
+        )
+        for record, consumable, user in rows
+    ]
     return RequisitionPageOut(items=items, total=total, page=page, page_size=page_size)
 
 
@@ -398,6 +463,24 @@ def reverse_requisition(
     stock_before = consumable.current_stock
 
     try:
+        # 数据库层原子占位：仅当流水仍为有效领用时才允许本次撤销，
+        # 并发双撤销时只有一个事务能拿到 rowcount=1，避免库存被回加两次。
+        claimed = db.execute(
+            update(Requisition)
+            .where(
+                Requisition.id == requisition_id,
+                Requisition.type == "normal",
+                Requisition.status == "active",
+            )
+            .values(status="reversed")
+        )
+        if claimed.rowcount == 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="该流水已撤销，不可重复撤销",
+            )
+        db.expire(requisition)
+
         # 条件原子回加：不校验耗材状态，停用档案同样回加
         db.execute(
             update(Consumable)
@@ -408,7 +491,6 @@ def reverse_requisition(
         db.refresh(consumable)
         stock_after = consumable.current_stock
 
-        requisition.status = "reversed"
         reversal = Requisition(
             consumable_id=requisition.consumable_id,
             user_id=requisition.user_id,

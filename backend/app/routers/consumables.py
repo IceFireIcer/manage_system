@@ -87,7 +87,7 @@ def list_consumables(
     """耗材档案列表。
 
     - 三角色均可查看，默认只返回启用（enabled）耗材。
-    - ?status=enabled/disabled/all；disabled 与 all 仅班委可见（逻辑删除数据不外露）。
+    - ?status=enabled/disabled/all；disabled 与 all 仅教师/班委可见（逻辑删除数据不对学生外露）。
     """
     if status_filter is None:
         status_filter = STATUS_ENABLED
@@ -97,7 +97,7 @@ def list_consumables(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="status 参数仅支持 enabled/disabled/all",
         )
-    if status_filter in ("disabled", "all") and current_user.role != "admin":
+    if status_filter in ("disabled", "all") and current_user.role == "student":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="无权限访问",

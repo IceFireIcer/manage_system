@@ -76,6 +76,16 @@ class RequisitionRecordOut(BaseModel):
     remark: str | None
 
 
+class RequisitionRelatedOut(BaseModel):
+    id: int
+    type: str
+    status: str
+    quantity: int
+    stock_after: int
+    created_at: datetime
+    reversal_reason: str | None
+
+
 class RequisitionListItemOut(BaseModel):
     id: int
     created_at: datetime
@@ -90,6 +100,7 @@ class RequisitionListItemOut(BaseModel):
     reversal_of: int | None
     reversal_reason: str | None
     remark: str | None
+    related: RequisitionRelatedOut | None = None
 
 
 class RequisitionPageOut(BaseModel):
@@ -97,16 +108,6 @@ class RequisitionPageOut(BaseModel):
     total: int
     page: int
     page_size: int
-
-
-class RequisitionRelatedOut(BaseModel):
-    id: int
-    type: str
-    status: str
-    quantity: int
-    stock_after: int
-    created_at: datetime
-    reversal_reason: str | None
 
 
 class RequisitionDetailOut(RequisitionRecordOut):

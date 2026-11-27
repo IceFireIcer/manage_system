@@ -5,7 +5,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
-from app import consumption
+from app import consumption as consumption_core
 from app.database import get_db
 from app.deps import require_role
 from app.models import Consumable, User
@@ -26,19 +26,19 @@ StaffUser = Annotated[User, Depends(require_role("teacher", "admin"))]
 def get_consumption_summary(
     db: Annotated[Session, Depends(get_db)],
     _staff: StaffUser,
-    window: Annotated[int, Query()] = consumption.DEFAULT_WINDOW,
+    window: Annotated[int, Query()] = consumption_core.DEFAULT_WINDOW,
 ) -> ConsumptionSummaryOut:
     """近 7/30 天净消耗汇总：仅列窗口内出现过领用/红冲流水的耗材。"""
-    if window not in consumption.VALID_WINDOWS:
+    if window not in consumption_core.VALID_WINDOWS:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="window 参数仅支持 7 或 30",
         )
-    start = consumption.window_start(window)
-    end = consumption.window_end()
+    start = consumption_core.window_start(window)
+    end = consumption_core.window_end()
 
     items: list[ConsumptionItemOut] = []
-    for consumable_id, quantity in consumption.net_by_consumable(db, start, end):
+    for consumable_id, quantity in consumption_core.net_by_consumable(db, start, end):
         consumable = db.get(Consumable, consumable_id)
         if consumable is None:
             continue
@@ -49,7 +49,7 @@ def get_consumption_summary(
                 spec=consumable.spec,
                 unit=consumable.unit,
                 quantity=quantity,
-                daily_rate=consumption.daily_rate(quantity, window),
+                daily_rate=consumption_core.daily_rate(quantity, window),
             )
         )
 
@@ -59,7 +59,7 @@ def get_consumption_summary(
         items=items,
         totals=ConsumptionTotalsOut(
             quantity=total_quantity,
-            daily_rate=consumption.daily_rate(total_quantity, window),
+            daily_rate=consumption_core.daily_rate(total_quantity, window),
         ),
     )
 
@@ -77,8 +77,8 @@ def get_consumption_audit(
             status_code=status.HTTP_404_NOT_FOUND, detail="耗材不存在"
         )
 
-    events = consumption.audit_events(db, consumable_id)
-    reconstruction = consumption.reconstruct_stock(events)
+    events = consumption_core.audit_events(db, consumable_id)
+    reconstruction = consumption_core.reconstruct_stock(events)
     return ConsumptionAuditOut(
         consumable_id=consumable.id,
         name=consumable.name,

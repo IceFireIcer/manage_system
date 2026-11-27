@@ -22,9 +22,9 @@ class Settings(BaseSettings):
     jwt_expire_minutes: int = 120
     jwt_expire_hours: int = 8
 
-    llm_api_key: str = "sk-your-api-key-here"
-    llm_base_url: str = "https://api.example.com/v1"
-    llm_model: str = "your-model-name"
+    llm_api_key: str = ""
+    llm_base_url: str = "https://api.deepseek.com/v1"
+    llm_model: str = "deepseek-chat"
 
 
 @lru_cache

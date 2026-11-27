@@ -125,7 +125,11 @@ def _parse_snapshot(value: str | None) -> dict:
 def audit_events(
     db: Session, consumable_id: int
 ) -> list[dict[str, object]]:
-    """按时间正序返回该耗材的库存变动序列（领用/红冲/补货）。"""
+    """按执行顺序返回该耗材的库存变动序列（领用/红冲/补货）。
+
+    库存变动的真实执行顺序是流水自增 id（补录流水的 created_at 可能是过去时间，
+    不能作为执行顺序）；补货从操作日志的库存快照定位插入位置。时间字段仅用于展示。
+    """
     events: list[dict[str, object]] = []
 
     records = db.scalars(
@@ -142,7 +146,6 @@ def audit_events(
                 "source": source,
                 "delta": delta,
                 "stock_after": record.stock_after,
-                "_priority": 0,
                 "_order": record.id,
             }
         )
@@ -164,13 +167,37 @@ def audit_events(
                 "source": "restock",
                 "delta": after_stock - before_stock,
                 "stock_after": after_stock,
-                "_priority": 1,
                 "_order": log.id,
+                "_before": before_stock,
             }
         )
 
-    events.sort(key=lambda event: (event["time"], event["_priority"], event["_order"]))
-    return events
+    return _sort_by_execution_order(events)
+
+
+def _sort_by_execution_order(
+    events: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    """领用/红冲按流水 id，补货按执行前库存快照插入，最后标记连续执行序号。"""
+    flow_events = [
+        event for event in events if event["source"] in ("requisition", "reversal")
+    ]
+    restock_events = [event for event in events if event["source"] == "restock"]
+
+    flow_events.sort(key=lambda event: event["_order"])
+    ordered = list(flow_events)
+    for restock in sorted(
+        restock_events, key=lambda event: (event["time"], event["_order"])
+    ):
+        insert_at = len(ordered)
+        for index, event in enumerate(ordered):
+            if event["stock_after"] == restock["_before"]:
+                insert_at = index + 1
+        ordered.insert(insert_at, restock)
+
+    for index, event in enumerate(ordered):
+        event["seq"] = index
+    return ordered
 
 
 @dataclass(frozen=True)
@@ -181,8 +208,13 @@ class Reconstruction:
 
 
 def reconstruct_stock(events: Iterable[Mapping[str, object]]) -> Reconstruction:
-    """从首条事件反推期初库存，逐条累加 delta 并与 stock_after 比对。"""
+    """按执行顺序（seq）反推期初库存，逐条累加 delta 并与 stock_after 比对。
+
+    未提供 seq 时按传入顺序处理（纯函数调用/单测场景）。
+    """
     ordered = list(events)
+    if ordered and "seq" in ordered[0]:
+        ordered.sort(key=lambda event: event["seq"])
     if not ordered:
         return Reconstruction(opening_stock=None, stocks=[], consistent=True)
 

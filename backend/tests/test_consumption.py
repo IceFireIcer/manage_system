@@ -349,3 +349,61 @@ def test_audit_reconstructs_stock_from_all_sources(
     ]
     assert [event["delta"] for event in data["events"]] == [-3, 3, 10]
     assert [event["stock_after"] for event in data["events"]] == [97, 100, 110]
+
+def test_audit_uses_execution_order_for_backdated_flow(
+    admin_client: TestClient, db_session
+) -> None:
+    """补录流水的 created_at 早于已有流水，但库存链按执行顺序（id）而非展示时间。"""
+    item = _create_consumable(admin_client, current_stock=100)
+    student_id = _student_id(db_session)
+    now = datetime.now().replace(microsecond=0)
+
+    normal = admin_client.post(
+        REQUISITIONS_URL,
+        json={
+            "user_id": student_id,
+            "created_at": (now - timedelta(minutes=2)).isoformat(),
+            "items": [{"consumable_id": item["id"], "quantity": 3}],
+        },
+    )
+    assert normal.status_code == 201, normal.text
+
+    backdated_at = (now - timedelta(days=5)).isoformat()
+    backfill = admin_client.post(
+        REQUISITIONS_URL,
+        json={
+            "user_id": student_id,
+            "created_at": backdated_at,
+            "items": [{"consumable_id": item["id"], "quantity": 5}],
+        },
+    )
+    assert backfill.status_code == 201, backfill.text
+
+    listed = admin_client.get(
+        REQUISITIONS_URL, params={"consumable_id": item["id"], "page_size": 100}
+    ).json()["items"]
+    normal_id = next(row["id"] for row in listed if row["quantity"] == 3)
+    reversed_response = admin_client.post(
+        f"{REQUISITIONS_URL}/{normal_id}/reversal", json={"reason": "登记错误"}
+    )
+    assert reversed_response.status_code == 200, reversed_response.text
+    restock = admin_client.post(
+        "/api/v1/inventory/restock",
+        json={"consumable_id": item["id"], "quantity": 10},
+    )
+    assert restock.status_code == 200, restock.text
+
+    data = admin_client.get(AUDIT_URL, params={"consumable_id": item["id"]}).json()
+
+    assert data["consistent"] is True
+    assert data["opening_stock"] == 100
+    assert data["current_stock"] == 105
+    assert [event["source"] for event in data["events"]] == [
+        "requisition",
+        "requisition",
+        "reversal",
+        "restock",
+    ]
+    assert [event["delta"] for event in data["events"]] == [-3, -5, 3, 10]
+    assert [event["stock_after"] for event in data["events"]] == [97, 92, 95, 105]
+    assert data["events"][1]["time"].startswith(backdated_at[:10])

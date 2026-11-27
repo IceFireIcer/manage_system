@@ -30,6 +30,7 @@ class _StubGenerator:
 
 @pytest.fixture(autouse=True)
 def _isolate_agent_state(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     service.clear_cache()
     yield
@@ -101,7 +102,16 @@ def test_suggestions_forbidden_for_student(student_client: TestClient) -> None:
 def test_suggestions_available_for_teacher(teacher_client: TestClient) -> None:
     response = teacher_client.get(SUGGESTIONS_URL)
     assert response.status_code == 200
-    assert response.json()["items"] == []
+    body = response.json()
+    assert body["items"] == []
+    assert body["generated_at"]
+
+
+def test_refresh_updates_generated_at(teacher_client: TestClient) -> None:
+    first = teacher_client.get(SUGGESTIONS_URL).json()
+    refreshed = teacher_client.post(REFRESH_URL).json()
+
+    assert refreshed["generated_at"] >= first["generated_at"]
 
 
 def test_suggestions_sorted_tiers_with_metrics(

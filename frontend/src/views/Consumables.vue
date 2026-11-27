@@ -133,7 +133,7 @@ async function submitForm() {
 async function disableConsumable(row) {
   try {
     await ElMessageBox.confirm(
-      `确定停用「${row.name}」吗？停用后不再出现在领用与巡检中，历史流水保留。`,
+      `确定停用「${row.name}」吗？建议先盘点库存再停用：停用后不再出现在领用与巡检中，历史流水保留。`,
       '停用耗材',
       { type: 'warning', confirmButtonText: '停用', cancelButtonText: '取消' },
     )

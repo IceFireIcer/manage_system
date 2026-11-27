@@ -16,7 +16,7 @@ const WINDOWS = [
 
 const windowDays = ref(7)
 const items = ref([])
-const totals = ref({ quantity: 0, daily_rate: 0 })
+
 const loading = ref(false)
 const chartRef = ref(null)
 let chart = null
@@ -55,7 +55,7 @@ async function fetchSummary() {
       params: { window: windowDays.value },
     })
     items.value = data.items
-    totals.value = data.totals
+
     renderChart()
   } catch {
     ElMessage.error('加载消耗汇总失败，请稍后重试')
@@ -103,9 +103,7 @@ onBeforeUnmount(() => {
           {{ option.label }}
         </el-radio-button>
       </el-radio-group>
-      <span class="consumption__totals">
-        合计（跨单位仅参考）：{{ totals.quantity }}，日均 {{ totals.daily_rate.toFixed(2) }}
-      </span>
+
     </div>
 
     <el-table v-loading="loading" :data="items" class="consumption__table">
@@ -148,10 +146,6 @@ onBeforeUnmount(() => {
   margin-bottom: 16px;
 }
 
-.consumption__totals {
-  font-size: 13px;
-  color: #909399;
-}
 
 .consumption__table {
   width: 100%;

@@ -37,7 +37,7 @@ function nowMinute() {
 function resetForm() {
   rows.value = [{ consumableId: null, quantity: 1 }]
   Object.keys(rowErrors).forEach((key) => delete rowErrors[key])
-  form.userId = isStudent.value ? userStore.user?.id : userStore.user?.id
+  form.userId = userStore.user?.id
   form.createdAt = nowMinute()
   form.remark = ''
 }

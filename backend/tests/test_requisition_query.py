@@ -330,6 +330,7 @@ def test_list_item_fields(admin_client: TestClient, db_session) -> None:
         "reversal_of": None,
         "reversal_reason": None,
         "remark": "实训课领用",
+        "related": None,
     }
 
 
