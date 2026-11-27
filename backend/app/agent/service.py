@@ -19,6 +19,7 @@ from app.agent.rules import (
     REPLENISHMENT_FORMULA,
     RULES_VERSION,
     SKIP_CONDITIONS,
+    SORT_RULE,
     TIER_RULES,
     WINDOW_DAYS,
     WINDOW_RULE,
@@ -218,6 +219,17 @@ def rule_spec() -> RuleSpecOut:
         tiers=[RuleTierOut(**tier) for tier in TIER_RULES],
         formula=REPLENISHMENT_FORMULA,
         skip_conditions=list(SKIP_CONDITIONS),
+        sort_rule=SORT_RULE,
+    )
+
+
+def _suggestion_sort_key(item: SuggestionOut) -> tuple:
+    supply = item.days_of_supply
+    return (
+        TIER_ORDER[item.tier],
+        (supply is None, supply if supply is not None else 0.0),
+        -item.recommended_quantity,
+        item.name,
     )
 
 
@@ -253,10 +265,10 @@ def _inspect(db: Session, now: datetime | None) -> SuggestionListOut:
         evaluation = evaluate(
             current_stock=consumable.current_stock,
             safety_stock=consumable.safety_stock,
-            q7=q7_flow.net,
-            prev_q7=prev_flow.net,
+            q7=q7_flow.attributed_net,
+            prev_q7=prev_flow.attributed_net,
             issued=q7_flow.issued,
-            reversed_quantity=q7_flow.reversed_quantity,
+            reversed_quantity=q7_flow.attributed_reversed,
             records=q7_flow.records,
         )
         if evaluation is None:
@@ -291,9 +303,7 @@ def _inspect(db: Session, now: datetime | None) -> SuggestionListOut:
             _last_inspection_at = now_local
         generated_at = _last_inspection_at
 
-    items.sort(
-        key=lambda item: (TIER_ORDER[item.tier], -item.recommended_quantity, item.name)
-    )
+    items.sort(key=_suggestion_sort_key)
     return SuggestionListOut(
         generated_at=generated_at,
         generation=epoch,

@@ -9,19 +9,29 @@ class ConsumptionItemOut(BaseModel):
     name: str
     spec: str
     unit: str
+    issued_quantity: int
+    reversed_quantity: int
+    cross_period_reversed_quantity: int
+    net_quantity: int
     quantity: int
     daily_rate: float
 
 
-class ConsumptionTotalsOut(BaseModel):
-    quantity: int
+class ConsumptionUnitTotalOut(BaseModel):
+    unit: str
+    issued_quantity: int
+    reversed_quantity: int
+    cross_period_reversed_quantity: int
+    net_quantity: int
     daily_rate: float
+    consumables: int
 
 
 class ConsumptionSummaryOut(BaseModel):
     window: int
     items: list[ConsumptionItemOut]
-    totals: ConsumptionTotalsOut
+    unit_totals: list[ConsumptionUnitTotalOut]
+    provisioning_scope: str
 
 
 class AuditEventOut(BaseModel):
