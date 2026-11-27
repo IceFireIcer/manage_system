@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
 from typing import Any
 
+from app.consumption import local_day_start
 from app.models import Requisition, User
 from fastapi.testclient import TestClient
 from sqlalchemy import select
@@ -96,7 +97,7 @@ def test_overview_today_requisitions(admin_client: TestClient, db_session) -> No
     )
     assert response.status_code == 201, response.text
 
-    today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    today_start = local_day_start(0)
     _insert_requisition(
         db_session,
         consumable_id=consumable["id"],
