@@ -1,14 +1,14 @@
 import json
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 from sqlalchemy import and_, case, func, select
 from sqlalchemy.orm import Session
 
+from app import business_time
 from app.models import OperationLog, Requisition
 
-SHANGHAI_TZ = timezone(timedelta(hours=8))
 VALID_WINDOWS = (7, 30)
 DEFAULT_WINDOW = 7
 
@@ -16,11 +16,8 @@ REQUISITION_SOURCES = {"normal": "requisition", "reversal": "reversal"}
 
 
 def local_day_start(days_ago: int = 0, now: datetime | None = None) -> datetime:
-    reference = now or datetime.now(SHANGHAI_TZ)
-    day_start = reference.astimezone(SHANGHAI_TZ).replace(
-        hour=0, minute=0, second=0, microsecond=0
-    )
-    return (day_start - timedelta(days=days_ago)).astimezone().replace(tzinfo=None)
+    reference = business_time.normalize(now) if now is not None else business_time.now()
+    return business_time.day_start(reference.date() - timedelta(days=days_ago))
 
 
 def window_start(window: int, now: datetime | None = None) -> datetime:
@@ -28,7 +25,7 @@ def window_start(window: int, now: datetime | None = None) -> datetime:
 
 
 def window_end(now: datetime | None = None) -> datetime:
-    return (now or datetime.now(SHANGHAI_TZ)).astimezone().replace(tzinfo=None)
+    return business_time.normalize(now) if now is not None else business_time.now()
 
 
 def daily_rate(quantity: int, window: int) -> float:

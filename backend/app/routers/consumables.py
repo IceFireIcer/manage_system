@@ -1,10 +1,10 @@
-from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app import business_time
 from app.agent import service
 from app.database import get_db
 from app.deps import CurrentUser, require_role
@@ -154,7 +154,7 @@ def update_consumable(
     if "safety_stock" in data:
         consumable.safety_stock = data["safety_stock"]
 
-    consumable.updated_at = datetime.now()
+    consumable.updated_at = business_time.now()
     _log(db, admin, "consumable_update", consumable, before)
     db.commit()
     service.clear_cache()
@@ -175,7 +175,7 @@ def toggle_consumable_status(
 
     before = snapshot(consumable)
     consumable.status = payload.status
-    consumable.updated_at = datetime.now()
+    consumable.updated_at = business_time.now()
     action = "consumable_disable" if payload.status == "disabled" else "consumable_enable"
     _log(db, admin, action, consumable, before)
     db.commit()

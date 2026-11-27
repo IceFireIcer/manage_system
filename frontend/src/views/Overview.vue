@@ -7,6 +7,7 @@ import EmptyState from '../components/EmptyState.vue'
 import InventoryAuditDrawer from '../components/InventoryAuditDrawer.vue'
 import OverviewGettingStarted from '../components/OverviewGettingStarted.vue'
 import { useUserStore } from '../stores/user'
+import { businessToday } from '../utils/businessDate'
 
 const POLL_INTERVAL_MS = 30000
 const SEARCH_DEBOUNCE_MS = 300
@@ -260,14 +261,8 @@ function goRequisition(row) {
   router.push({ path: '/requisition', query })
 }
 
-function localDateString() {
-  const now = new Date()
-  const pad = (value) => String(value).padStart(2, '0')
-  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`
-}
-
 function goTodayRecords() {
-  const today = localDateString()
+  const today = businessToday()
   router.push({
     path: '/records',
     query: { start_date: today, end_date: today, type: 'normal', status: 'active' },

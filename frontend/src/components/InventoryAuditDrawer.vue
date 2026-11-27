@@ -46,11 +46,16 @@ const drawerTitle = computed(() => {
 
 const unit = computed(() => audit.value?.unit ?? '')
 
+function timeKey(value) {
+  if (!value) return ''
+  return String(value).replace('T', ' ').slice(0, 19)
+}
+
 const displayEvents = computed(() => {
   const events = audit.value?.events ?? []
   if (!cutoff.value) return events
-  const limit = new Date(cutoff.value).getTime()
-  return events.filter((event) => new Date(event.time).getTime() <= limit)
+  const limit = timeKey(cutoff.value)
+  return events.filter((event) => timeKey(event.time) <= limit)
 })
 
 const cutoffStock = computed(() => {
@@ -198,6 +203,7 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
           <el-date-picker
             v-model="cutoff"
             type="datetime"
+            value-format="YYYY-MM-DD HH:mm:ss"
             placeholder="选择时点"
             clearable
           />

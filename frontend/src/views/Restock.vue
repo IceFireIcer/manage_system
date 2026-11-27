@@ -6,6 +6,7 @@ import api from '../api'
 import { useUserStore } from '../stores/user'
 import PageHeader from '../components/PageHeader.vue'
 import EmptyState from '../components/EmptyState.vue'
+import { businessToday } from '../utils/businessDate'
 
 const TIER_META = {
   urgent: { label: '紧急', tagClass: 'status-tag--danger' },
@@ -101,15 +102,11 @@ const expectedStock = computed(() => {
 
 function formatGeneratedAt(value) {
   if (!value) return '—'
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return String(value).replace('T', ' ').slice(0, 16)
-  const now = new Date()
-  const time = `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
-  const sameDay =
-    date.getFullYear() === now.getFullYear() &&
-    date.getMonth() === now.getMonth() &&
-    date.getDate() === now.getDate()
-  return sameDay ? time : `${date.getMonth() + 1}-${date.getDate()} ${time}`
+  const text = String(value).replace('T', ' ')
+  const day = text.slice(0, 10)
+  const time = text.slice(11, 16)
+  if (!day || !time) return text.slice(0, 16)
+  return day === businessToday() ? time : `${day.slice(5)} ${time}`
 }
 
 function formatDecimal(value) {

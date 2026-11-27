@@ -8,6 +8,7 @@ import PageHeader from '../components/PageHeader.vue'
 import EmptyState from '../components/EmptyState.vue'
 import RecordDetailDrawer from '../components/RecordDetailDrawer.vue'
 import ReversalDialog from '../components/ReversalDialog.vue'
+import { validateDateRange } from '../utils/businessDate'
 
 const QUICK_OPTIONS = [
   { key: 'all', label: '全部' },
@@ -263,12 +264,6 @@ function syncRouteQuery() {
   router.replace({ query: buildRouteQuery() }).catch(() => {})
 }
 
-function validateDateRange(range) {
-  if (!Array.isArray(range) || range.length !== 2) return ''
-  const [start, end] = range
-  if (start && end && start > end) return '开始日期应早于或等于结束日期'
-  return ''
-}
 
 function applyDraftFilters() {
   applied.consumableId = draft.consumableId

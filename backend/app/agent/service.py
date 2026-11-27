@@ -1,10 +1,11 @@
 import concurrent.futures
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app import business_time
 from app.agent import llm
 from app.agent.rules import WINDOW_DAYS, Evaluation, evaluate
 from app.consumption import local_day_start, window_net
@@ -14,7 +15,6 @@ from app.schemas_inventory import SuggestionListOut, SuggestionOut
 
 logger = logging.getLogger(__name__)
 
-SHANGHAI_TZ = timezone(timedelta(hours=8))
 CACHE_TTL = timedelta(minutes=10)
 TIER_ORDER = {"urgent": 0, "moderate": 1, "observe": 2}
 LLM_BUDGET_SECONDS = 5.0
@@ -34,8 +34,8 @@ def clear_cache(consumable_id: int | None = None) -> None:
 
 
 def window_bounds(now: datetime | None = None) -> tuple[datetime, datetime, datetime]:
-    reference = now or datetime.now(SHANGHAI_TZ)
-    now_local = reference.astimezone().replace(tzinfo=None)
+    reference = business_time.normalize(now) if now is not None else business_time.now()
+    now_local = business_time.normalize(reference)
     q7_start = local_day_start(WINDOW_DAYS - 1, reference)
     prev_start = local_day_start(2 * WINDOW_DAYS - 1, reference)
     return q7_start, prev_start, now_local
@@ -100,8 +100,8 @@ def _build_suggestion(
 
 def inspect(db: Session, now: datetime | None = None) -> SuggestionListOut:
     global _last_inspection_at
-    reference = now or datetime.now(SHANGHAI_TZ)
-    now_local = reference.astimezone().replace(tzinfo=None)
+    reference = business_time.normalize(now) if now is not None else business_time.now()
+    now_local = business_time.normalize(reference)
     q7_start, prev_start, window_end = window_bounds(reference)
 
     consumables = db.scalars(

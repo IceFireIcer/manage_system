@@ -3,6 +3,7 @@ from datetime import datetime
 from sqlalchemy import DATETIME, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.business_time import now as business_now
 from app.database import Base
 
 
@@ -16,7 +17,7 @@ class User(Base):
     role: Mapped[str] = mapped_column(String(16), nullable=False, default="student")
     class_id: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="enabled")
-    created_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=datetime.now)
+    created_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
 
 
 class Consumable(Base):
@@ -31,8 +32,8 @@ class Consumable(Base):
     current_stock: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     class_id: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="enabled")
-    created_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=datetime.now)
-    updated_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=datetime.now)
+    created_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
+    updated_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
 
 
 class Requisition(Base):
@@ -48,7 +49,7 @@ class Requisition(Base):
     reversal_of: Mapped[int | None] = mapped_column(Integer, nullable=True)
     reversal_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     class_id: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
-    created_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=datetime.now)
+    created_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
     remark: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
 
@@ -64,4 +65,4 @@ class OperationLog(Base):
     before_value: Mapped[str | None] = mapped_column(Text, nullable=True)
     after_value: Mapped[str | None] = mapped_column(Text, nullable=True)
     remark: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=datetime.now)
+    created_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
