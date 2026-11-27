@@ -7,6 +7,7 @@ RETENTION_DAYS="${RETENTION_DAYS:-14}"
 COMPOSE_FILE="${COMPOSE_FILE:-$ROOT/docker-compose.yml}"
 SERVICE="${SERVICE:-db}"
 DATABASE="${DATABASE:-manage_system}"
+BACKUP_USER="${MYSQL_BACKUP_USER:-labstock_backup}"
 DRY_RUN=0
 
 info() { printf '[db-backup] %s\n' "$*"; }
@@ -55,6 +56,7 @@ if [ "$DRY_RUN" -eq 1 ]; then
   info "Compose 文件: $COMPOSE_FILE"
   info "MySQL 服务: $SERVICE"
   info "数据库: $DATABASE"
+  info "备份账号: $BACKUP_USER（最小权限：SELECT/LOCK TABLES/PROCESS）"
   info "备份目录: $BACKUP_DIR"
   info "独立副本目录: $BACKUP_DIR/copies"
   info "保留天数: $RETENTION_DAYS"
@@ -75,10 +77,14 @@ read_env() {
   grep -E "^${key}=" "$file" 2>/dev/null | tail -1 | cut -d= -f2- || true
 }
 
-if [ -z "${MYSQL_ROOT_PASSWORD:-}" ]; then
-  MYSQL_ROOT_PASSWORD="$(read_env MYSQL_ROOT_PASSWORD)"
+if [ -z "${MYSQL_BACKUP_USER:-}" ]; then
+  MYSQL_BACKUP_USER="$(read_env MYSQL_BACKUP_USER)"
 fi
-[ -n "${MYSQL_ROOT_PASSWORD:-}" ] || fail "缺少 MYSQL_ROOT_PASSWORD（环境变量或 .env）"
+BACKUP_USER="${MYSQL_BACKUP_USER:-$BACKUP_USER}"
+if [ -z "${MYSQL_BACKUP_PASSWORD:-}" ]; then
+  MYSQL_BACKUP_PASSWORD="$(read_env MYSQL_BACKUP_PASSWORD)"
+fi
+[ -n "${MYSQL_BACKUP_PASSWORD:-}" ] || fail "缺少 MYSQL_BACKUP_PASSWORD（环境变量或 .env）"
 
 if [ -z "${IMAGE_TAG:-}" ]; then
   IMAGE_TAG="$(read_env IMAGE_TAG)"
@@ -92,12 +98,14 @@ TS="$(date +%Y%m%d_%H%M%S)"
 BACKUP_FILE="$BACKUP_DIR/${DATABASE}_${TS}.sql"
 MANIFEST_FILE="$BACKUP_DIR/${DATABASE}_${TS}.manifest"
 
-MIGRATION_VERSION="$(compose exec -T "$SERVICE" mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -N -B \
+MIGRATION_VERSION="$(compose exec -T "$SERVICE" env MYSQL_PWD="$MYSQL_BACKUP_PASSWORD" \
+  mysql -u"$BACKUP_USER" -N -B \
   -e "SELECT version_num FROM alembic_version LIMIT 1" "$DATABASE" 2>/dev/null | tr -d '\r' || true)"
 MIGRATION_VERSION="${MIGRATION_VERSION:-unknown}"
 
 info "开始备份数据库 $DATABASE -> $BACKUP_FILE"
-if ! compose exec -T "$SERVICE" mysqldump -uroot -p"$MYSQL_ROOT_PASSWORD" \
+if ! compose exec -T "$SERVICE" env MYSQL_PWD="$MYSQL_BACKUP_PASSWORD" \
+  mysqldump -u"$BACKUP_USER" \
   --single-transaction --routines --triggers --databases "$DATABASE" >"$BACKUP_FILE"; then
   rm -f "$BACKUP_FILE"
   printf '[db-backup] 失败时间 %s：mysqldump 执行失败\n' "$(date -Iseconds)" >>"$BACKUP_DIR/backup-failed.log"

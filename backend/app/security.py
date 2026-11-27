@@ -79,6 +79,23 @@ def resolve_forwarded_scheme(
     return forwarded_proto.split(",")[0].strip().lower(), None
 
 
+def resolve_client_source(
+    direct_host: str,
+    forwarded_for: str | None,
+    trusted_proxies: set[str],
+) -> str:
+    host = (direct_host or "").strip() or "unknown"
+    if not forwarded_for or not trusted_proxies:
+        return host
+    if not client_is_trusted_proxy(host, trusted_proxies):
+        return host
+    hops = [item.strip() for item in forwarded_for.split(",") if item.strip()]
+    for hop in reversed(hops):
+        if not client_is_trusted_proxy(hop, trusted_proxies):
+            return hop
+    return hops[0] if hops else host
+
+
 def host_is_allowed(host_header: str, allowed_hosts: set[str]) -> bool:
     """校验 Host 来源；未配置允许清单时不限制。"""
     if not allowed_hosts:

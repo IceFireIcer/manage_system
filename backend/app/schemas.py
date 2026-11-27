@@ -4,8 +4,8 @@ from pydantic import BaseModel, Field
 
 
 class LoginRequest(BaseModel):
-    account: str
-    password: str
+    account: str = Field(min_length=1, max_length=64)
+    password: str = Field(min_length=1, max_length=128)
 
 
 class UserOut(BaseModel):

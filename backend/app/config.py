@@ -19,6 +19,7 @@ DATABASE_PLACEHOLDER_MARKERS = (
     "managesystem2026",
 )
 PRODUCTION_ENVS = {"prod", "production"}
+DATABASE_ROOT_DETAIL = "数据库连接不得使用 root 账号"
 
 
 class ProductionConfigError(RuntimeError):
@@ -38,10 +39,20 @@ class Settings(BaseSettings):
     debug: bool = True
 
     database_url: str = "mysql+pymysql://user:password@127.0.0.1:3306/manage_system"
+    migration_database_url: str = ""
 
     jwt_secret_key: str = "change-me-to-a-random-secret"
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 480
+
+    login_throttle_account_max_attempts: int = 5
+    login_throttle_account_window_seconds: int = 900
+    login_throttle_source_max_attempts: int = 100
+    login_throttle_source_window_seconds: int = 300
+    login_throttle_block_seconds: int = 300
+
+    auth_log_retention_days: int = 90
+    auth_log_max_rows: int = 20000
 
     llm_api_key: str = ""
     llm_base_url: str = "https://api.deepseek.com/v1"
@@ -80,6 +91,25 @@ class Settings(BaseSettings):
         parts = urlsplit(self.database_url)
         return parts.username or "", parts.password or ""
 
+    @property
+    def resolved_migration_database_url(self) -> str:
+        return self.migration_database_url.strip() or self.database_url.strip()
+
+    @staticmethod
+    def _database_url_errors(label: str, url: str) -> list[str]:
+        errors: list[str] = []
+        if not url:
+            errors.append(f"{label} 缺失")
+            return errors
+        parts = urlsplit(url)
+        if not parts.password:
+            errors.append(f"{label} 缺少数据库密码")
+        if (parts.username or "").strip().lower() == "root":
+            errors.append(f"{label} {DATABASE_ROOT_DETAIL}")
+        if any(marker in url.lower() for marker in DATABASE_PLACEHOLDER_MARKERS):
+            errors.append(f"{label} 仍为占位凭据")
+        return errors
+
     def production_config_errors(self) -> list[str]:
         errors: list[str] = []
         if not self.is_production:
@@ -95,16 +125,13 @@ class Settings(BaseSettings):
             if any(marker in jwt_lower for marker in JWT_PLACEHOLDER_MARKERS):
                 errors.append("JWT_SECRET_KEY 仍为占位值")
 
-        database_url = self.database_url.strip()
-        if not database_url:
-            errors.append("DATABASE_URL 缺失")
-        else:
-            _, password = self.database_credentials()
-            if not password:
-                errors.append("DATABASE_URL 缺少数据库密码")
-            database_lower = database_url.lower()
-            if any(marker in database_lower for marker in DATABASE_PLACEHOLDER_MARKERS):
-                errors.append("DATABASE_URL 仍为占位凭据")
+        errors.extend(self._database_url_errors("DATABASE_URL", self.database_url.strip()))
+        if self.migration_database_url.strip():
+            errors.extend(
+                self._database_url_errors(
+                    "MIGRATION_DATABASE_URL", self.migration_database_url.strip()
+                )
+            )
 
         return errors
 
