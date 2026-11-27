@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app import business_time, inventory_ledger
 from app.agent import rules
-from app.consumption import local_day_start, window_net
+from app.consumption import local_day_start, window_flow
 from app.models import (
     Consumable,
     InventoryEvent,
@@ -113,13 +113,18 @@ def _evaluate(db: Session, consumable: Consumable) -> rules.Evaluation | None:
     reference = business_time.now()
     q7_start = local_day_start(rules.WINDOW_DAYS - 1, reference)
     prev_start = local_day_start(2 * rules.WINDOW_DAYS - 1, reference)
-    q7 = window_net(db, consumable.id, q7_start, reference)
-    prev_q7 = window_net(db, consumable.id, prev_start, q7_start)
+    q7_flow = window_flow(db, consumable.id, q7_start, reference)
+    prev_flow = window_flow(
+        db, consumable.id, prev_start, q7_start, end_inclusive=False
+    )
     return rules.evaluate(
         current_stock=consumable.current_stock,
         safety_stock=consumable.safety_stock,
-        q7=q7,
-        prev_q7=prev_q7,
+        q7=q7_flow.net,
+        prev_q7=prev_flow.net,
+        issued=q7_flow.issued,
+        reversed_quantity=q7_flow.reversed_quantity,
+        records=q7_flow.records,
     )
 
 

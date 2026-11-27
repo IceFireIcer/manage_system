@@ -35,6 +35,7 @@ const userStore = useUserStore()
 const isAdmin = computed(() => userStore.user?.role === 'admin')
 
 const items = ref([])
+const ruleSpec = ref(null)
 const generatedAt = ref('')
 const loading = ref(false)
 const requestError = ref('')
@@ -151,6 +152,7 @@ async function fetchSuggestions(force = false) {
       : await api.get('/inventory/suggestions')
     if (seq !== requestSeq || !active) return
     items.value = Array.isArray(data.items) ? data.items : []
+    ruleSpec.value = data.rules ?? null
     generatedAt.value = data.generated_at ?? ''
     handledAll.value = false
     if (force) ElMessage.success('已完成库存巡检')
@@ -300,6 +302,30 @@ onBeforeUnmount(() => {
       </el-radio-group>
     </div>
 
+    <details v-if="ruleSpec" class="panel restock__rules">
+      <summary class="restock__rules-summary">
+        补货规则说明 · 规则版本 {{ ruleSpec.version }}
+      </summary>
+      <div class="restock__rules-body">
+        <p class="restock__rules-text">{{ ruleSpec.window_rule }}</p>
+        <ul class="restock__rules-list">
+          <li v-for="tier in ruleSpec.tiers" :key="tier.code">
+            <span
+              class="status-tag"
+              :class="TIER_META[tier.code]?.tagClass"
+            >
+              {{ tier.label }}
+            </span>
+            {{ tier.condition }}
+          </li>
+        </ul>
+        <p class="restock__rules-text"><strong>计算：</strong>{{ ruleSpec.formula }}</p>
+        <p class="restock__rules-text">
+          <strong>跳过条件：</strong>{{ ruleSpec.skip_conditions.join('；') }}
+        </p>
+      </div>
+    </details>
+
     <div v-if="loading && items.length" class="restock__notice">
       <el-alert
         type="info"
@@ -422,8 +448,19 @@ onBeforeUnmount(() => {
           </div>
         </dl>
 
-        <p v-if="item.days_of_supply === null || item.days_of_supply === undefined" class="restock__hint">
-          近 7 天无净消耗
+        <div v-if="item.reasons?.length" class="restock__reasons">
+          <span class="restock__reasons-title">命中原因</span>
+          <span
+            v-for="reason in item.reasons"
+            :key="reason"
+            class="status-tag status-tag--info"
+          >
+            {{ reason }}
+          </span>
+        </div>
+
+        <p v-if="item.consumption_note" class="restock__hint">
+          {{ item.consumption_note }}
         </p>
 
         <div class="restock__rationale">
@@ -717,6 +754,65 @@ onBeforeUnmount(() => {
   font-weight: 600;
   color: var(--text);
   font-variant-numeric: tabular-nums;
+}
+
+.restock__rules {
+  margin-bottom: 16px;
+  padding: 16px 20px;
+}
+
+.restock__rules-summary {
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 22px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.restock__rules-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.restock__rules-text {
+  margin: 0;
+  font-size: 13px;
+  line-height: 21px;
+  color: var(--text-secondary);
+}
+
+.restock__rules-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding-left: 0;
+  list-style: none;
+  font-size: 13px;
+  line-height: 21px;
+  color: var(--text-secondary);
+}
+
+.restock__rules-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.restock__reasons {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.restock__reasons-title {
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--text-muted);
 }
 
 .restock__hint {

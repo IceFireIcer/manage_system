@@ -7,11 +7,25 @@ from sqlalchemy.orm import Session
 
 from app import business_time, restock
 from app.agent import llm
-from app.agent.rules import WINDOW_DAYS, Evaluation, evaluate
-from app.consumption import local_day_start, window_net
+from app.agent.rules import (
+    REPLENISHMENT_FORMULA,
+    RULES_VERSION,
+    SKIP_CONDITIONS,
+    TIER_RULES,
+    WINDOW_DAYS,
+    WINDOW_RULE,
+    Evaluation,
+    evaluate,
+)
+from app.consumption import local_day_start, window_flow
 from app.models import Consumable
 from app.schemas_consumables import STATUS_ENABLED
-from app.schemas_inventory import SuggestionListOut, SuggestionOut
+from app.schemas_inventory import (
+    RuleSpecOut,
+    RuleTierOut,
+    SuggestionListOut,
+    SuggestionOut,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -94,7 +108,21 @@ def _build_suggestion(
         days_of_supply=evaluation.days_of_supply,
         tier=evaluation.tier,
         recommended_quantity=evaluation.recommended_quantity,
+        reasons=list(evaluation.reasons),
+        consumption_state=evaluation.consumption_state,
+        consumption_note=evaluation.consumption_note,
         rationale=rationale,
+    )
+
+
+def rule_spec() -> RuleSpecOut:
+    return RuleSpecOut(
+        version=RULES_VERSION,
+        window_days=WINDOW_DAYS,
+        window_rule=WINDOW_RULE,
+        tiers=[RuleTierOut(**tier) for tier in TIER_RULES],
+        formula=REPLENISHMENT_FORMULA,
+        skip_conditions=list(SKIP_CONDITIONS),
     )
 
 
@@ -117,11 +145,18 @@ def inspect(db: Session, now: datetime | None = None) -> SuggestionListOut:
         if suggestion is not None:
             items.append(suggestion)
             continue
+        q7_flow = window_flow(db, consumable.id, q7_start, window_end)
+        prev_flow = window_flow(
+            db, consumable.id, prev_start, q7_start, end_inclusive=False
+        )
         evaluation = evaluate(
             current_stock=consumable.current_stock,
             safety_stock=consumable.safety_stock,
-            q7=window_net(db, consumable.id, q7_start, window_end),
-            prev_q7=window_net(db, consumable.id, prev_start, q7_start),
+            q7=q7_flow.net,
+            prev_q7=prev_flow.net,
+            issued=q7_flow.issued,
+            reversed_quantity=q7_flow.reversed_quantity,
+            records=q7_flow.records,
         )
         if evaluation is None:
             continue
@@ -151,5 +186,6 @@ def inspect(db: Session, now: datetime | None = None) -> SuggestionListOut:
     )
     return SuggestionListOut(
         generated_at=_last_inspection_at,
+        rules=rule_spec(),
         items=restock.attach_dispositions(db, items),
     )

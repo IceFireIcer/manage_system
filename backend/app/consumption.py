@@ -39,15 +39,44 @@ def _type_totals(issued_condition, reversed_condition):
     )
 
 
-def window_net(
-    db: Session, consumable_id: int, start: datetime, end: datetime
-) -> int:
-    window_filters = (
+@dataclass(frozen=True)
+class WindowFlow:
+    issued: int
+    reversed_quantity: int
+    records: int
+
+    @property
+    def net(self) -> int:
+        return max(self.issued - self.reversed_quantity, 0)
+
+
+def _window_filters(
+    consumable_id: int,
+    start: datetime,
+    end: datetime,
+    end_inclusive: bool,
+) -> tuple:
+    end_filter = (
+        Requisition.created_at <= end
+        if end_inclusive
+        else Requisition.created_at < end
+    )
+    return (
         Requisition.consumable_id == consumable_id,
         Requisition.created_at >= start,
-        Requisition.created_at <= end,
+        end_filter,
     )
-    issued, reversed_quantity = db.execute(
+
+
+def window_flow(
+    db: Session,
+    consumable_id: int,
+    start: datetime,
+    end: datetime,
+    *,
+    end_inclusive: bool = True,
+) -> WindowFlow:
+    issued, reversed_quantity, records = db.execute(
         select(
             *_type_totals(
                 Requisition.type == "normal",
@@ -55,10 +84,28 @@ def window_net(
                     Requisition.type == "reversal",
                     Requisition.status == "active",
                 ),
-            )
-        ).where(*window_filters)
+            ),
+            func.count(),
+        ).where(*_window_filters(consumable_id, start, end, end_inclusive))
     ).one()
-    return max(issued - reversed_quantity, 0)
+    return WindowFlow(
+        issued=int(issued),
+        reversed_quantity=int(reversed_quantity),
+        records=int(records),
+    )
+
+
+def window_net(
+    db: Session,
+    consumable_id: int,
+    start: datetime,
+    end: datetime,
+    *,
+    end_inclusive: bool = True,
+) -> int:
+    return window_flow(
+        db, consumable_id, start, end, end_inclusive=end_inclusive
+    ).net
 
 
 def net_by_consumable(
