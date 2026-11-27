@@ -42,20 +42,20 @@ class RationaleGenerator(Protocol):
 def format_template(context: RationaleContext) -> str:
     evaluation = context.evaluation
     unit = context.unit
-    if evaluation.q7 == 0:
-        consumption = "近 7 天无领用流水"
+    if evaluation.consumption_state == "none":
+        consumption = evaluation.consumption_note
     else:
         consumption = (
-            f"近 7 天净消耗 {evaluation.q7}{unit}"
+            f"{evaluation.consumption_note}"
             f"（日均 {evaluation.rate:.2f}{unit}）"
         )
+    reasons = "；".join(evaluation.reasons) or "库存状态触发"
 
     if evaluation.current_stock >= evaluation.safety_stock:
         return (
             f"{context.name}当前库存 {evaluation.current_stock}{unit}，不低于安全库存线 "
-            f"{evaluation.safety_stock}{unit}；{consumption}，较前 7 天 "
-            f"{evaluation.prev_q7}{unit} 明显上升，按一周用量建议补货 "
-            f"{evaluation.recommended_quantity}{unit}。"
+            f"{evaluation.safety_stock}{unit}；{consumption}，命中「{reasons}」，"
+            f"按一周用量建议补货 {evaluation.recommended_quantity}{unit}。"
         )
 
     summary = (
@@ -69,7 +69,7 @@ def format_template(context: RationaleContext) -> str:
     else:
         summary += f"，仅可支撑 {evaluation.days_of_supply:.1f} 天"
     return (
-        f"{summary}，{TIER_KEYWORDS[evaluation.tier]} "
+        f"{summary}，命中「{reasons}」，{TIER_KEYWORDS[evaluation.tier]} "
         f"{evaluation.recommended_quantity}{unit}。"
     )
 

@@ -27,6 +27,21 @@ class InventoryOverviewOut(BaseModel):
     items: list[InventoryItemOut]
 
 
+class RuleTierOut(BaseModel):
+    code: Literal["urgent", "moderate", "observe"]
+    label: str
+    condition: str
+
+
+class RuleSpecOut(BaseModel):
+    version: str
+    window_days: int
+    window_rule: str
+    tiers: list[RuleTierOut]
+    formula: str
+    skip_conditions: list[str]
+
+
 class SuggestionOut(BaseModel):
     consumable_id: int
     name: str
@@ -40,6 +55,11 @@ class SuggestionOut(BaseModel):
     days_of_supply: float | None
     tier: Literal["urgent", "moderate", "observe"]
     recommended_quantity: int
+    reasons: list[str]
+    consumption_state: Literal[
+        "none", "reversed_to_zero", "partially_reversed", "normal"
+    ]
+    consumption_note: str
     rationale: str
     disposition_status: Literal["pending", "awaiting", "partial", "resolved"] = "pending"
     disposition_handler_name: str | None = None
@@ -49,6 +69,7 @@ class SuggestionOut(BaseModel):
 
 class SuggestionListOut(BaseModel):
     generated_at: datetime
+    rules: RuleSpecOut
     items: list[SuggestionOut]
 
 
