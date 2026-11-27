@@ -52,6 +52,8 @@ class Consumable(Base):
     current_stock: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     class_id: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="enabled")
+    disabled_reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     created_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
     updated_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
 
