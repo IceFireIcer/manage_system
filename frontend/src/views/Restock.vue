@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useRoute, useRouter } from 'vue-router'
 import api from '../api'
@@ -44,6 +44,8 @@ const staleError = ref(false)
 const handledAll = ref(false)
 const tierFilter = ref('all')
 const quantityRef = ref(null)
+const focusId = ref(0)
+const hasFetched = ref(false)
 
 const restockDialog = reactive({
   visible: false,
@@ -97,6 +99,13 @@ const visibleItems = computed(() =>
 
 const currentTierLabel = computed(
   () => TIER_FILTERS.find((option) => option.value === tierFilter.value)?.label ?? '',
+)
+
+const focusedMissing = computed(
+  () =>
+    Boolean(focusId.value) &&
+    hasFetched.value &&
+    !items.value.some((item) => item.consumable_id === focusId.value),
 )
 
 const generatedAtText = computed(() => formatGeneratedAt(generatedAt.value))
@@ -172,7 +181,10 @@ async function fetchSuggestions(force = false) {
       requestError.value = '库存巡检暂时不可用，请稍后重试。'
     }
   } finally {
-    if (seq === requestSeq) loading.value = false
+    if (seq === requestSeq) {
+      loading.value = false
+      hasFetched.value = true
+    }
   }
 }
 
@@ -277,6 +289,15 @@ function goLogs() {
   router.push('/logs')
 }
 
+function goArchiveItem() {
+  if (!focusId.value) return
+  router.push({ path: '/consumables', query: { consumable_id: String(focusId.value) } })
+}
+
+function goOverview() {
+  router.push('/overview')
+}
+
 function formatReceiptTime(value) {
   if (!value) return '—'
   const matched = String(value)
@@ -310,7 +331,29 @@ async function openRouteReceipt() {
   }
 }
 
+function parseFocusId(value) {
+  const parsed = Number(value)
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : 0
+}
+
+watch(
+  () => route.query.consumable_id,
+  (value) => {
+    focusId.value = parseFocusId(value)
+  },
+)
+
+watch(visibleItems, async (list) => {
+  if (!focusId.value) return
+  if (!list.some((item) => item.consumable_id === focusId.value)) return
+  await nextTick()
+  document
+    .getElementById(`restock-suggestion-${focusId.value}`)
+    ?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+})
+
 onMounted(() => {
+  focusId.value = parseFocusId(route.query.consumable_id)
   fetchSuggestions()
   openRouteReceipt()
 })
@@ -342,6 +385,20 @@ onBeforeUnmount(() => {
           {{ option.label }} {{ counts[option.value] }}
         </el-radio-button>
       </el-radio-group>
+    </div>
+
+    <div v-if="focusedMissing" class="restock__notice">
+      <el-alert
+        type="warning"
+        :closable="false"
+        show-icon
+        title="该耗材当前没有补货建议"
+        description="库存已补足，或安全库存线为 0（未设预警线）而不进入补货巡检。"
+      />
+      <el-button v-if="isAdmin" link type="primary" @click="goArchiveItem">
+        查看档案
+      </el-button>
+      <el-button v-else link type="primary" @click="goOverview">返回库存总览</el-button>
     </div>
 
     <details v-if="ruleSpec" class="panel restock__rules">
@@ -420,9 +477,13 @@ onBeforeUnmount(() => {
     <div v-else class="restock__grid" :aria-busy="loading">
       <article
         v-for="item in visibleItems"
+        :id="`restock-suggestion-${item.consumable_id}`"
         :key="item.consumable_id"
         class="panel restock__card"
-        :class="`restock__card--${item.tier}`"
+        :class="[
+          `restock__card--${item.tier}`,
+          { 'restock__card--focus': item.consumable_id === focusId },
+        ]"
       >
         <header class="restock__card-head">
           <div class="restock__card-heading">
@@ -774,6 +835,11 @@ onBeforeUnmount(() => {
 
 .restock__card--observe {
   border-left-color: var(--info);
+}
+
+.restock__card--focus {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
 }
 
 .restock__card-head {

@@ -1,6 +1,6 @@
 <script setup>
 import { computed, h, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '../api'
 import PageHeader from '../components/PageHeader.vue'
@@ -9,6 +9,8 @@ import RestockDialog from '../components/RestockDialog.vue'
 import LedgerImportDialog from '../components/LedgerImportDialog.vue'
 
 const router = useRouter()
+const route = useRoute()
+const focusId = ref(0)
 
 const UNIT_OPTIONS = ['卷', '张', '支', '个', '米', '根']
 
@@ -455,6 +457,10 @@ function goRecords(row) {
   router.push({ path: '/records', query: { consumable_id: String(row.id) } })
 }
 
+function rowClassName({ row }) {
+  return row.id === focusId.value ? 'consumables__row--focus' : ''
+}
+
 function openReceive(row) {
   receive.row = row
   receive.visible = true
@@ -475,6 +481,8 @@ function handleResize() {
 }
 
 onMounted(() => {
+  const focus = Number(route.query.consumable_id)
+  focusId.value = Number.isInteger(focus) && focus > 0 ? focus : 0
   window.addEventListener('resize', handleResize)
   fetchList()
 })
@@ -544,7 +552,7 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
     <template v-else>
       <p v-if="loading" class="consumables__refreshing" role="status">正在刷新…</p>
       <div class="consumables__table panel">
-        <el-table :data="visibleItems" class="table-dense" row-key="id" :aria-busy="loading">
+        <el-table :data="visibleItems" class="table-dense" row-key="id" :row-class-name="rowClassName" :aria-busy="loading">
           <el-table-column label="名称／规格" min-width="180">
             <template #default="{ row }">
               <div class="cell-main">{{ row.name }}</div>
@@ -941,5 +949,9 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
 
 .confirm-body__warn {
   color: var(--warning);
+}
+
+.consumables__row--focus td.el-table__cell {
+  background: var(--primary-soft);
 }
 </style>

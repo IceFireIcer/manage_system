@@ -197,7 +197,7 @@ def get_inventory_overview(
             )
         )
 
-    items.sort(key=lambda item: (not item.low_stock, not item.is_out, item.name))
+    items.sort(key=lambda item: (not item.is_out, not item.low_stock, item.name))
 
     today_start = business_time.day_start(business_time.today())
     tomorrow_start = business_time.next_day_start(business_time.today())
