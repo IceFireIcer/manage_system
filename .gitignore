@@ -1,0 +1,14 @@
+.codeartsdoer/
+.arts/
+node_modules/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.env
+venv/
+.venv/
+dist/
+*.sqlite
+*.db
+.coverage
