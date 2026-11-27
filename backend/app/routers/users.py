@@ -34,6 +34,14 @@ class UserListItem(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class UserOption(BaseModel):
+    """领用登记代填下拉的精简用户信息（无敏感字段）。"""
+
+    id: int
+    name: str
+    role: str
+
+
 class StatusUpdate(BaseModel):
     status: str
 
@@ -71,6 +79,16 @@ def list_users(
         statement = statement.where(User.role == role)
     if user_status is not None:
         statement = statement.where(User.status == user_status)
+    return db.scalars(statement).all()
+
+
+@router.get("/options")
+def list_user_options(
+    db: Annotated[Session, Depends(get_db)],
+    _current_user: Annotated[User, Depends(require_role("teacher", "admin"))],
+) -> list[UserOption]:
+    """领用登记代填下拉：返回启用用户精简列表（无敏感字段），教师与班委可用。"""
+    statement = select(User).where(User.status == "enabled").order_by(User.id)
     return db.scalars(statement).all()
 
 
