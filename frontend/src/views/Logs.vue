@@ -10,7 +10,7 @@ import LogDetailDrawer from '../components/LogDetailDrawer.vue'
 import { validateDateRange } from '../utils/businessDate'
 import { useUserStore } from '../stores/user'
 
-const ROLE_NAMES = { teacher: '教师', admin: '班委', student: '学生' }
+const ROLE_NAMES = { teacher: '教师', admin: '班委', student: '学生', operator: '校方授权人' }
 const STATUS_NAMES = { enabled: '启用', disabled: '停用' }
 const TARGET_NAMES = { user: '用户', consumable: '耗材', requisition: '领用流水' }
 
@@ -27,6 +27,19 @@ const ACTIONS = [
   { value: 'user_create', label: '新增用户', tagClass: 'status-tag--info' },
   { value: 'user_enable', label: '启用用户', tagClass: 'status-tag--success' },
   { value: 'user_disable', label: '停用用户', tagClass: 'status-tag--danger' },
+  { value: 'admin_bootstrap', label: '初始化管理员', tagClass: 'status-tag--info' },
+  { value: 'teacher_provision', label: '开通教师', tagClass: 'status-tag--info' },
+  { value: 'admin_handover', label: '班委交接', tagClass: 'status-tag--info' },
+  { value: 'admin_handover_create', label: '开通班委', tagClass: 'status-tag--info' },
+  { value: 'admin_recover', label: '管理员恢复', tagClass: 'status-tag--success' },
+  { value: 'admin_bootstrap_rejected', label: '初始化被拒', tagClass: 'status-tag--danger' },
+  {
+    value: 'teacher_provision_rejected',
+    label: '开通教师被拒',
+    tagClass: 'status-tag--danger',
+  },
+  { value: 'admin_handover_rejected', label: '班委交接被拒', tagClass: 'status-tag--danger' },
+  { value: 'admin_recover_rejected', label: '管理员恢复被拒', tagClass: 'status-tag--danger' },
 ]
 
 const ACTION_MAP = Object.fromEntries(ACTIONS.map((item) => [item.value, item]))
@@ -299,6 +312,10 @@ function summaryText(row) {
       return `状态 ${STATUS_NAMES[before?.status] ?? '—'} → ${STATUS_NAMES[after?.status] ?? '—'}`
     case 'user_create':
       return after ? `新增账号 ${after.account}（${after.name}）` : row.remark || '—'
+    case 'admin_handover':
+      return after
+        ? `交接 ${after.previous_account} → ${after.new_account}（执行人：${after.actor}）`
+        : row.remark || '—'
     default:
       return diffSummary(before, after) || row.remark || '—'
   }

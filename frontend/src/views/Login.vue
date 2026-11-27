@@ -3,6 +3,7 @@ import { computed, nextTick, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useRouter } from 'vue-router'
 
+import api from '../api'
 import { useUserStore } from '../stores/user'
 
 const router = useRouter()
@@ -23,6 +24,20 @@ const connectionError = ref(false)
 const passwordVisible = ref(false)
 const formError = ref('')
 const formErrorHint = ref('')
+const bootstrapState = ref('')
+const bootstrapMessage = ref('')
+
+const bootstrapNotice = computed(
+  () =>
+    bootstrapState.value === 'needs_initialization' ||
+    bootstrapState.value === 'needs_recovery',
+)
+
+const bootstrapTitle = computed(() =>
+  bootstrapState.value === 'needs_recovery'
+    ? '系统需恢复：暂无可用管理员'
+    : '系统需初始化：尚无任何账号',
+)
 
 const rules = {
   account: [{ required: true, message: '请输入账号', trigger: 'blur' }],
@@ -64,6 +79,17 @@ async function checkSession() {
   }
   if (user) {
     await router.replace(resolveRedirect())
+  }
+}
+
+async function loadBootstrapStatus() {
+  try {
+    const { data } = await api.get('/bootstrap/status', { skipAuthRedirect: true })
+    bootstrapState.value = data.state ?? ''
+    bootstrapMessage.value = data.message ?? ''
+  } catch {
+    bootstrapState.value = ''
+    bootstrapMessage.value = ''
   }
 }
 
@@ -115,6 +141,7 @@ async function handleSubmit() {
 
 
 onMounted(() => {
+  loadBootstrapStatus()
   if (userStore.status === 'ready') {
     checking.value = false
     if (userStore.isLoggedIn) {
@@ -142,6 +169,16 @@ onMounted(() => {
         <span>暂时无法连接系统</span>
         <el-button link type="primary" @click="checkSession">重试</el-button>
       </div>
+
+      <el-alert
+        v-if="bootstrapNotice"
+        :title="bootstrapTitle"
+        :description="bootstrapMessage"
+        type="warning"
+        :closable="false"
+        show-icon
+        class="login__bootstrap"
+      />
 
       <el-form
         ref="formRef"
@@ -285,6 +322,10 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.login__bootstrap {
+  margin-bottom: 0;
 }
 
 .login__form :deep(.el-form-item) {

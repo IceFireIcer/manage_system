@@ -15,7 +15,7 @@ const props = defineProps({
 
 const emit = defineEmits(['update:modelValue', 'view-requisition', 'view-consumable'])
 
-const ROLE_NAMES = { teacher: '教师', admin: '班委', student: '学生' }
+const ROLE_NAMES = { teacher: '教师', admin: '班委', student: '学生', operator: '校方授权人' }
 const STATUS_NAMES = { enabled: '启用', disabled: '停用' }
 const TARGET_NAMES = { user: '用户', consumable: '耗材', requisition: '领用流水' }
 
@@ -32,6 +32,15 @@ const ACTION_NAMES = {
   user_create: '新增用户',
   user_enable: '启用用户',
   user_disable: '停用用户',
+  admin_bootstrap: '初始化管理员',
+  teacher_provision: '开通教师',
+  admin_handover: '班委交接',
+  admin_handover_create: '开通班委',
+  admin_recover: '管理员恢复',
+  admin_bootstrap_rejected: '初始化被拒',
+  teacher_provision_rejected: '开通教师被拒',
+  admin_handover_rejected: '班委交接被拒',
+  admin_recover_rejected: '管理员恢复被拒',
 }
 
 const FIELD_LABELS = {
