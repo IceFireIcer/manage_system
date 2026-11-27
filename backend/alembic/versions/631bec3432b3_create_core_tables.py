@@ -1,4 +1,4 @@
-"""create core tables and seed demo users
+"""create core tables
 
 Revision ID: 631bec3432b3
 Revises:
@@ -7,9 +7,7 @@ Create Date: 2026-11-27 09:14:28.816938
 """
 
 from collections.abc import Sequence
-from datetime import datetime
 
-import bcrypt
 import sqlalchemy as sa
 from alembic import op
 
@@ -18,56 +16,6 @@ revision: str = '631bec3432b3'
 down_revision: str | None = None
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
-
-
-def _hash_password(plain: str) -> str:
-    return bcrypt.hashpw(plain.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
-
-
-def _seed_users() -> None:
-    users_table = sa.table(
-        "users",
-        sa.column("account", sa.String),
-        sa.column("password_hash", sa.String),
-        sa.column("name", sa.String),
-        sa.column("role", sa.String),
-        sa.column("class_id", sa.Integer),
-        sa.column("status", sa.String),
-        sa.column("created_at", sa.DateTime),
-    )
-    now = datetime.now()
-    op.bulk_insert(
-        users_table,
-        [
-            {
-                "account": "teacher01",
-                "password_hash": _hash_password("Teacher@123"),
-                "name": "王老师",
-                "role": "teacher",
-                "class_id": 1,
-                "status": "enabled",
-                "created_at": now,
-            },
-            {
-                "account": "admin01",
-                "password_hash": _hash_password("Admin@123"),
-                "name": "李班委",
-                "role": "admin",
-                "class_id": 1,
-                "status": "enabled",
-                "created_at": now,
-            },
-            {
-                "account": "student01",
-                "password_hash": _hash_password("Student@123"),
-                "name": "张同学",
-                "role": "student",
-                "class_id": 1,
-                "status": "enabled",
-                "created_at": now,
-            },
-        ],
-    )
 
 
 def upgrade() -> None:
@@ -130,8 +78,6 @@ def upgrade() -> None:
     sa.PrimaryKeyConstraint('id')
     )
     # ### end Alembic commands ###
-
-    _seed_users()
 
 
 def downgrade() -> None:

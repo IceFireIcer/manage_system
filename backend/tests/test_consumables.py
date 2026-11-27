@@ -1,16 +1,9 @@
-import os
-import sqlite3
-import subprocess
-import sys
-from pathlib import Path
 from typing import Any
 
 import pytest
 from app.models import OperationLog, User
 from fastapi.testclient import TestClient
 from sqlalchemy import select
-
-BACKEND_DIR = Path(__file__).resolve().parents[1]
 
 LIST_URL = "/api/v1/consumables"
 
@@ -315,37 +308,3 @@ def test_low_stock_derived_field(admin_client: TestClient) -> None:
     assert items[equal["id"]]["low_stock"] is False
     assert items[zero_line["id"]]["low_stock"] is False
 
-
-# ---------- 种子数据迁移 ----------
-
-
-def test_seed_migration_creates_five_demo_consumables(tmp_path: Path) -> None:
-    db_path = tmp_path / "alembic_seed_check.db"
-    env = {**os.environ, "DATABASE_URL": f"sqlite:///{db_path.as_posix()}"}
-
-    result = subprocess.run(
-        [sys.executable, "-m", "alembic", "upgrade", "head"],
-        cwd=BACKEND_DIR,
-        env=env,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        timeout=120,
-    )
-    assert result.returncode == 0, f"alembic failed:\n{result.stdout}\n{result.stderr}"
-
-    conn = sqlite3.connect(db_path)
-    try:
-        rows = conn.execute(
-            "SELECT name, spec, unit, safety_stock, current_stock, class_id, status"
-            " FROM consumables ORDER BY id"
-        ).fetchall()
-    finally:
-        conn.close()
-
-    assert len(rows) == 5
-    assert rows[0] == ("焊丝", "φ1.0mm", "卷", 5, 20, 1, "enabled")
-    assert rows[1] == ("砂纸", "240目", "张", 20, 50, 1, "enabled")
-    assert rows[2] == ("记号笔", "黑色", "支", 8, 30, 1, "enabled")
-    assert rows[3] == ("电阻", "10kΩ 1/4W", "个", 200, 500, 1, "enabled")
-    assert rows[4] == ("实训导线", "1mm² 红", "根", 40, 100, 1, "enabled")

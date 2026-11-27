@@ -7,7 +7,7 @@ from pathlib import Path
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 
 
-def test_alembic_upgrade_creates_four_tables_and_seeds(tmp_path: Path) -> None:
+def test_alembic_upgrade_creates_four_tables_without_seed_rows(tmp_path: Path) -> None:
     db_path = tmp_path / "alembic_check.db"
     env = {**os.environ, "DATABASE_URL": f"sqlite:///{db_path.as_posix()}"}
 
@@ -28,12 +28,11 @@ def test_alembic_upgrade_creates_four_tables_and_seeds(tmp_path: Path) -> None:
             row[0]
             for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
         }
-        assert {"users", "consumables", "requisitions", "operation_logs"} <= tables
-
-        rows = conn.execute("SELECT account, name, role, status FROM users").fetchall()
+        users = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+        consumables = conn.execute("SELECT COUNT(*) FROM consumables").fetchone()[0]
     finally:
         conn.close()
 
-    assert ("teacher01", "王老师", "teacher", "enabled") in rows
-    assert ("admin01", "李班委", "admin", "enabled") in rows
-    assert ("student01", "张同学", "student", "enabled") in rows
+    assert {"users", "consumables", "requisitions", "operation_logs"} <= tables
+    assert users == 0
+    assert consumables == 0
