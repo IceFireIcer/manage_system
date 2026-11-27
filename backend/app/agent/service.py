@@ -43,10 +43,6 @@ def window_bounds(now: datetime | None = None) -> tuple[datetime, datetime, date
     return q7_start, prev_start, now_local
 
 
-def _window_net(db: Session, consumable_id: int, start: datetime, end: datetime) -> int:
-    """与消耗汇总共用同一净消耗口径（领用 − 有效红冲，负值截断为 0）。"""
-    return window_net(db, consumable_id, start, end)
-
 
 def _cached(consumable_id: int, now: datetime) -> SuggestionOut | None:
     entry = _cache.get(consumable_id)
@@ -105,8 +101,8 @@ def inspect(db: Session, now: datetime | None = None) -> SuggestionListOut:
             evaluation = evaluate(
                 current_stock=consumable.current_stock,
                 safety_stock=consumable.safety_stock,
-                q7=_window_net(db, consumable.id, q7_start, window_end),
-                prev_q7=_window_net(db, consumable.id, prev_start, q7_start),
+                q7=window_net(db, consumable.id, q7_start, window_end),
+                prev_q7=window_net(db, consumable.id, prev_start, q7_start),
             )
             if evaluation is None:
                 continue

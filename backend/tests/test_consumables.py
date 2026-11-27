@@ -276,13 +276,15 @@ def test_reenable_consumable(admin_client: TestClient) -> None:
     assert any(item["id"] == data["id"] for item in admin_client.get(LIST_URL).json())
 
 
-@pytest.mark.parametrize("fixture_name", ["teacher_client", "student_client"])
-def test_status_all_restricted_to_admin(
-    fixture_name: str, request: pytest.FixtureRequest
+def test_status_all_allowed_for_teacher_and_admin(
+    teacher_client: TestClient, admin_client: TestClient
 ) -> None:
-    client = request.getfixturevalue(fixture_name)
+    assert teacher_client.get(f"{LIST_URL}?status=all").status_code == 200
+    assert admin_client.get(f"{LIST_URL}?status=all").status_code == 200
 
-    response = client.get(f"{LIST_URL}?status=all")
+
+def test_status_all_restricted_to_student(student_client: TestClient) -> None:
+    response = student_client.get(f"{LIST_URL}?status=all")
 
     assert response.status_code == 403
 

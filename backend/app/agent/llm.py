@@ -4,7 +4,6 @@
 """
 
 import logging
-import os
 import time
 from dataclasses import dataclass
 from typing import Protocol
@@ -12,6 +11,7 @@ from typing import Protocol
 from openai import OpenAI
 
 from app.agent.rules import Evaluation
+from app.config import Settings
 
 logger = logging.getLogger(__name__)
 
@@ -106,7 +106,7 @@ class TemplateGenerator:
 
 
 class DeepSeekRationaleGenerator:
-    """DeepSeek 适配器（OpenAI 兼容 SDK），密钥与模型由环境变量注入。"""
+    """DeepSeek 适配器（OpenAI 兼容 SDK），密钥与模型由 Settings（LLM_*）注入。"""
 
     def __init__(
         self,
@@ -117,6 +117,18 @@ class DeepSeekRationaleGenerator:
         self._api_key = api_key
         self._model = model
         self._base_url = base_url
+
+    @property
+    def api_key(self) -> str:
+        return self._api_key
+
+    @property
+    def model(self) -> str:
+        return self._model
+
+    @property
+    def base_url(self) -> str:
+        return self._base_url
 
     def generate(self, context: RationaleContext) -> str:
         client = OpenAI(
@@ -137,14 +149,20 @@ class DeepSeekRationaleGenerator:
         return (response.choices[0].message.content or "").strip()
 
 
-def get_generator() -> RationaleGenerator:
-    api_key = os.getenv("DEEPSEEK_API_KEY", "").strip()
+def get_generator(settings: Settings | None = None) -> RationaleGenerator:
+    """从统一配置（LLM_API_KEY / LLM_MODEL / LLM_BASE_URL）选择实现。
+
+    未显式传入 settings 时读取一次 Settings，与 docker-compose、.env.example
+    注入的部署契约保持一致；无密钥或占位密钥返回模板生成器。
+    """
+    config = settings if settings is not None else Settings()
+    api_key = (config.llm_api_key or "").strip()
     if not api_key or api_key.startswith("sk-your"):
         return TemplateGenerator()
     return DeepSeekRationaleGenerator(
         api_key=api_key,
-        model=os.getenv("DEEPSEEK_MODEL", DEFAULT_MODEL),
-        base_url=os.getenv("DEEPSEEK_BASE_URL", DEFAULT_BASE_URL),
+        model=config.llm_model or DEFAULT_MODEL,
+        base_url=config.llm_base_url or DEFAULT_BASE_URL,
     )
 
 

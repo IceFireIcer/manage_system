@@ -130,6 +130,19 @@ function formatTime(value) {
   return value ? String(value).replace('T', ' ').slice(0, 19) : ''
 }
 
+function relatedText(row) {
+  if (!row.related) return ''
+  return row.type === 'reversal'
+    ? `↩ 原流水 #${row.related.id}`
+    : `已由红冲 #${row.related.id} 冲销`
+}
+
+function relatedTooltip(row) {
+  if (!row.related) return ''
+  const prefix = row.type === 'reversal' ? '原流水' : '红冲流水'
+  return `${prefix} #${row.related.id} · ${formatTime(row.related.created_at)} · ${row.consumable_name} × ${row.related.quantity}`
+}
+
 function quantityText(row) {
   return row.type === 'reversal' ? `+${row.quantity}` : `${row.quantity}`
 }
@@ -180,7 +193,9 @@ async function confirmReverse() {
 
 async function fetchConsumables() {
   try {
-    const { data } = await api.get('/consumables')
+    const { data } = await api.get('/consumables', {
+      params: isStaff.value ? { status: 'all' } : {},
+    })
     consumables.value = data
   } catch {
     ElMessage.error('加载耗材列表失败，请稍后重试')
@@ -215,6 +230,7 @@ onMounted(async () => {
     <div class="records">
       <div class="records__filters">
         <el-select
+          v-if="isStaff"
           v-model="filters.consumableId"
           filterable
           clearable
@@ -310,6 +326,14 @@ onMounted(async () => {
         </el-table-column>
         <el-table-column prop="user_name" label="领用人" width="110" />
         <el-table-column prop="stock_after" label="领后剩余" width="100" align="center" />
+        <el-table-column label="关联" min-width="150">
+          <template #default="{ row }">
+            <el-tooltip v-if="row.related" :content="relatedTooltip(row)" placement="top">
+              <span class="records__relation">{{ relatedText(row) }}</span>
+            </el-tooltip>
+            <span v-else class="records__relation-muted">—</span>
+          </template>
+        </el-table-column>
         <el-table-column label="类型" width="90" align="center">
           <template #default="{ row }">
             <el-tag :type="typeTagType(row)" size="small">
@@ -456,6 +480,15 @@ onMounted(async () => {
 
 .records__status-tag {
   cursor: help;
+}
+
+.records__relation {
+  color: #409eff;
+  cursor: help;
+}
+
+.records__relation-muted {
+  color: #c0c4cc;
 }
 
 .records__pagination {

@@ -248,6 +248,40 @@ def test_reverse_disabled_consumable_succeeds(
     assert _records(db_session)[0].status == "reversed"
 
 
+def test_concurrent_reverse_applies_once(
+    admin_client: TestClient, db_session
+) -> None:
+    """并发双撤销：过期会话仍认为流水有效时，数据库层原子占位只允许一次生效。"""
+    from app.routers.requisitions import reverse_requisition
+    from app.schemas_requisitions import ReversalCreate
+    from fastapi import HTTPException
+
+    consumable = _create_consumable(admin_client)
+    assert _submit_one(admin_client, consumable["id"], quantity=3).status_code == 201
+    requisition_id = _first_id(db_session)
+
+    stale = db_session.get(Requisition, requisition_id)
+    assert stale.status == "active"
+    db_session.commit()
+
+    assert _reverse(admin_client, requisition_id, reason="第一次撤销").status_code == 200
+
+    manager = db_session.get(User, _user_id(db_session, "teacher01"))
+    with pytest.raises(HTTPException) as exc_info:
+        reverse_requisition(
+            requisition_id,
+            ReversalCreate(reason="并发撤销"),
+            db_session,
+            manager,
+        )
+
+    assert exc_info.value.status_code == 400
+    db_session.rollback()
+    db_session.expire_all()
+    assert _db_stock(db_session, consumable["id"]) == 10
+    assert len(_records(db_session)) == 2
+
+
 # ---------- 详情双向关联 ----------
 
 
@@ -379,6 +413,36 @@ def test_list_all_records_with_filters(admin_client: TestClient, db_session) -> 
 def test_list_invalid_filter_rejected(admin_client: TestClient) -> None:
     assert admin_client.get(BASE_URL, params={"type": "xxx"}).status_code == 422
     assert admin_client.get(BASE_URL, params={"status": "xxx"}).status_code == 422
+
+
+def test_list_returns_relation_for_reversal_and_origin(
+    admin_client: TestClient, db_session
+) -> None:
+    consumable = _create_consumable(admin_client)
+    assert _submit_one(admin_client, consumable["id"], quantity=2).status_code == 201
+    original_id = _first_id(db_session)
+    assert _reverse(admin_client, original_id, reason="关联展示").status_code == 200
+    reversal_id = _records(db_session)[1].id
+
+    items = admin_client.get(BASE_URL).json()["items"]
+    by_type = {item["type"]: item for item in items}
+
+    assert by_type["reversal"]["related"]["id"] == original_id
+    assert by_type["reversal"]["related"]["created_at"]
+    assert by_type["reversal"]["related"]["quantity"] == 2
+    assert by_type["normal"]["related"]["id"] == reversal_id
+    assert by_type["normal"]["related"]["type"] == "reversal"
+
+
+def test_list_related_is_none_without_reversal(
+    admin_client: TestClient, db_session
+) -> None:
+    consumable = _create_consumable(admin_client)
+    assert _submit_one(admin_client, consumable["id"], quantity=1).status_code == 201
+
+    item = admin_client.get(BASE_URL).json()["items"][0]
+
+    assert item["related"] is None
 
 
 def test_list_pagination_desc_by_id(admin_client: TestClient, db_session) -> None:

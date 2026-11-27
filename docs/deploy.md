@@ -296,24 +296,29 @@ docker inspect --format '{{json .State.Health}}' "$(docker compose ps -q backend
 
 ## 13. 可选：CodeArts 流水线三阶段
 
-赛事要求依托华为云 CodeArts 完成 CI/CD 发布。本节给出与仓库结构匹配的阶段编排与命令，**具体界面以 CodeArts 控制台为准**；不使用华为云时，也可用任意 CI（GitHub Actions / GitLab CI / Jenkins）照搬同一套阶段。
+赛事要求依托华为云 CodeArts 完成 CI/CD 发布。本节给出与仓库结构匹配的三个可执行脚本，**具体界面以 CodeArts 控制台为准**；不使用华为云时，也可用任意 CI（GitHub Actions / GitLab CI / Jenkins）照搬同一套脚本。
+
+三个脚本均可本地直接执行，也可在 CodeArts 流水线中创建阶段并调用：
+
+| 阶段 | 脚本 | 说明 |
+| --- | --- | --- |
+| 1 前端构建 | `scripts/ci/stage1-frontend-build.sh` | `npm ci` + `npm run build`，校验 `frontend/dist` |
+| 2 后端测试 | `scripts/ci/stage2-backend-test.sh` | 创建/复用 venv，`pip install` + `pytest` + `ruff check .` |
+| 3 镜像发布 | `scripts/ci/stage3-image-publish.sh` | 构建并推送 backend/web 镜像，必需 `IMAGE_REGISTRY`、`IMAGE_TAG` |
 
 ### 阶段 1：前端构建（node:22）
 
 ```bash
-cd frontend
-npm ci --registry=https://registry.npmmirror.com --no-audit --no-fund
-npm run build
+bash scripts/ci/stage1-frontend-build.sh
 # 归档产物：frontend/dist
+# 可用 NPM_REGISTRY 覆盖依赖源（默认 https://registry.npmmirror.com）
 ```
 
 ### 阶段 2：后端测试（python:3.12）
 
 ```bash
-cd backend
-pip install -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple/
-pytest            # 全量 229 passed
-ruff check .      # 静态检查通过
+bash scripts/ci/stage2-backend-test.sh
+# 可用 VENV_DIR 复用已有虚拟环境，PIP_INDEX_URL 覆盖依赖源
 ```
 
 ### 阶段 3：镜像构建推送 + 服务器发布
@@ -321,24 +326,21 @@ ruff check .      # 静态检查通过
 前置：在 SWR（或任意镜像仓库）创建 `manage-system-backend`、`manage-system-web` 两个仓库，并把登录凭据、服务器 SSH 私钥、host/端口配置为流水线**凭据/参数**，不要写进仓库。
 
 ```bash
-set -euo pipefail
-TAG="${BUILD_NUMBER:-$(date +%Y%m%d%H%M)}"
-REGISTRY="${SWR_REGISTRY}"     # 例如 swr.cn-north-4.myhuaweicloud.com/<namespace>
+IMAGE_REGISTRY="${SWR_REGISTRY}" \
+IMAGE_TAG="${BUILD_NUMBER:-$(date +%Y%m%d%H%M)}" \
+bash scripts/ci/stage3-image-publish.sh
+```
 
-# 构建
-docker build -t "${REGISTRY}/manage-system-backend:${TAG}" ./backend
-docker build -t "${REGISTRY}/manage-system-web:${TAG}"     ./frontend
+`stage3` 缺少 `IMAGE_REGISTRY` 或 `IMAGE_TAG` 时会输出用法并以非零码退出，流水线会立即失败，避免误推镜像。
 
-# 推送
-docker push "${REGISTRY}/manage-system-backend:${TAG}"
-docker push "${REGISTRY}/manage-system-web:${TAG}"
+仓库脚本只负责构建与推送；发布到 ECS 仍可在流水线追加一个 SSH 步骤：
 
-# 发布到 ECS / 云服务器（SSH 免密）
+```bash
 ssh -o StrictHostKeyChecking=accept-new "${DEPLOY_USER}@${DEPLOY_HOST}" \
   "cd /opt/manage_system && \
    git pull --ff-only && \
-   IMAGE_TAG=${TAG} docker compose pull && \
-   IMAGE_TAG=${TAG} docker compose up -d --no-build && \
+   IMAGE_TAG=${IMAGE_TAG} docker compose pull && \
+   IMAGE_TAG=${IMAGE_TAG} docker compose up -d --no-build && \
    docker compose ps"
 ```
 
