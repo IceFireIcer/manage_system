@@ -53,7 +53,7 @@ def test_zero_safety_out_has_priority_and_no_warning(admin_client: TestClient) -
 def test_overview_after_restock_clears_risk(admin_client: TestClient) -> None:
     created = _create_consumable(admin_client, safety_stock=5, current_stock=1)
     response = admin_client.post(
-        f"/api/v1/inventory/restock",
+        "/api/v1/inventory/restock",
         json={"consumable_id": created["id"], "quantity": 6, "request_id": "t14-restock"},
     )
     assert response.status_code == 200, response.text

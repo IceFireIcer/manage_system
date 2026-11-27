@@ -11,6 +11,7 @@ on:
 permissions:
   contents: read
   packages: write
+  actions: read
 
 concurrency:
   group: docker-publish-${{ github.ref }}
@@ -20,8 +21,47 @@ env:
   REGISTRY: ghcr.io
 
 jobs:
+  gate:
+    name: ci-gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Wait for CI success on the same commit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 30); do
+            gh run list \
+              --repo "$GITHUB_REPOSITORY" \
+              --workflow ci.yml \
+              --commit "$GITHUB_SHA" \
+              --limit 20 \
+              --json databaseId,headSha,status,conclusion,event,url,createdAt \
+              > ci-runs.json
+            if python3 scripts/ci/release_gate.py \
+              --ci-only \
+              --commit "$GITHUB_SHA" \
+              --ci-summary ci-runs.json \
+              --output ci-gate.json; then
+              exit 0
+            fi
+            code=$?
+            if [ "$code" -ne 3 ]; then
+              exit "$code"
+            fi
+            echo "CI 尚未完成（第 ${attempt}/30 次），20 秒后重试"
+            sleep 20
+          done
+          python3 scripts/ci/release_gate.py \
+            --ci-only \
+            --commit "$GITHUB_SHA" \
+            --ci-summary ci-runs.json \
+            --output ci-gate.json
+
   publish:
     name: publish ${{ matrix.image }}
+    needs: gate
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -58,3 +98,64 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=${{ matrix.image }}
           cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+
+  release:
+    name: release-gate
+    needs: publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Collect image digests
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="sha-${GITHUB_SHA::7}"
+          gh run list \
+            --repo "$GITHUB_REPOSITORY" \
+            --workflow ci.yml \
+            --commit "$GITHUB_SHA" \
+            --limit 20 \
+            --json databaseId,headSha,status,conclusion,event,url,createdAt \
+            > ci-runs.json
+          : > images.ndjson
+          for name in labstock-api labstock-web; do
+            image="${REGISTRY}/icefireicer/${name}:${TAG}"
+            digest="$(docker buildx imagetools inspect "$image" | awk '/^Digest:/{print $2; exit}')"
+            jq -n \
+              --arg name "$name" \
+              --arg tag "$TAG" \
+              --arg digest "$digest" \
+              --arg revision "$GITHUB_SHA" \
+              '{name:$name,tag:$tag,digest:$digest,revision:$revision}' \
+              >> images.ndjson
+          done
+          jq -s '.' images.ndjson > images.json
+          cat images.json
+      - name: Verify same-commit CI and both images
+        run: |
+          set -euo pipefail
+          TAG="sha-${GITHUB_SHA::7}"
+          python3 scripts/ci/release_gate.py \
+            --commit "$GITHUB_SHA" \
+            --tag "$TAG" \
+            --ci-summary ci-runs.json \
+            --images images.json \
+            --output release-manifest.json
+      - name: Upload release record
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-manifest-${{ github.sha }}
+          path: |
+            release-manifest.json
+            images.json
+            ci-runs.json
+          if-no-files-found: warn

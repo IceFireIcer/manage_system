@@ -139,8 +139,10 @@ def test_history_uses_snapshot_after_profile_changes(
     assert detail["consumable_name"] == "焊丝"
 
     rows = _parse_csv(client.get(EXPORT_URL))
-    assert rows[1][1] == "焊丝（φ1.2mm）"
-    assert rows[1][2] == "10"
+    assert rows[1][4] == "焊丝"
+    assert rows[1][5] == "φ1.2mm"
+    assert rows[1][6] == "个"
+    assert rows[1][7] == "10"
 
     ledger = client.get(LEDGER_URL, params={"consumable_id": consumable["id"]}).json()
     assert [event["unit_snapshot"] for event in ledger["events"]] == ["个", "个"]

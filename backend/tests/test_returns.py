@@ -6,7 +6,6 @@ from app.models import (
     OperationLog,
     Requisition,
     RequisitionReturn,
-    RequisitionScrap,
 )
 from fastapi.testclient import TestClient
 from sqlalchemy import select
