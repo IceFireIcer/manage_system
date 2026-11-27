@@ -120,10 +120,10 @@ def _evaluate(db: Session, consumable: Consumable) -> rules.Evaluation | None:
     return rules.evaluate(
         current_stock=consumable.current_stock,
         safety_stock=consumable.safety_stock,
-        q7=q7_flow.net,
-        prev_q7=prev_flow.net,
+        q7=q7_flow.attributed_net,
+        prev_q7=prev_flow.attributed_net,
         issued=q7_flow.issued,
-        reversed_quantity=q7_flow.reversed_quantity,
+        reversed_quantity=q7_flow.attributed_reversed,
         records=q7_flow.records,
     )
 

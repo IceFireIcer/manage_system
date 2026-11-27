@@ -424,6 +424,9 @@ onBeforeUnmount(() => {
           </li>
         </ul>
         <p class="restock__rules-text"><strong>计算：</strong>{{ ruleSpec.formula }}</p>
+        <p v-if="ruleSpec.sort_rule" class="restock__rules-text">
+          <strong>排序：</strong>{{ ruleSpec.sort_rule }}
+        </p>
         <p class="restock__rules-text">
           <strong>跳过条件：</strong>{{ ruleSpec.skip_conditions.join('；') }}
         </p>

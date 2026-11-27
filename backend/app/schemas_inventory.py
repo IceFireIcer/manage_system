@@ -40,6 +40,7 @@ class RuleSpecOut(BaseModel):
     tiers: list[RuleTierOut]
     formula: str
     skip_conditions: list[str]
+    sort_rule: str
 
 
 class SuggestionOut(BaseModel):
