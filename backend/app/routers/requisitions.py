@@ -1,5 +1,3 @@
-"""批量领用登记与红冲撤销：整单一个数据库事务，逐行条件原子扣减，任一行失败全部回滚。"""
-
 import csv
 import io
 import json
@@ -111,10 +109,6 @@ def _serialize_row(
 def _related_records(
     db: Session, records: list[Requisition]
 ) -> tuple[dict[int, Requisition], dict[int, Requisition]]:
-    """批量装载当前页的红冲/原流水关联，避免逐行查询。
-
-    返回 (原流水按红冲流水 id 索引, 红冲流水按原流水 id 索引)。
-    """
     origin_ids = {record.reversal_of for record in records if record.reversal_of is not None}
     reversed_ids = [
         record.id
@@ -195,11 +189,6 @@ def list_requisitions(
     page_size: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
     filters: Annotated[dict, Depends(_consume_params)] = None,
 ) -> RequisitionPageOut:
-    """领用流水查询：倒序分页。
-
-    - 学生只能查询本人记录（传入 user_id 也会被强制过滤为本人）。
-    - 教师与班委可按耗材/领用人/时间/类型/状态筛选。
-    """
     query = _build_query(db=db, current_user=current_user, **filters)
     total = db.scalar(
         select(func.count()).select_from(query.subquery())
@@ -230,7 +219,6 @@ def export_requisitions_csv(
     staff: Annotated[User, Depends(require_role("teacher", "admin"))],
     filters: Annotated[dict, Depends(_consume_params)] = None,
 ) -> Response:
-    """CSV 导出：教师与班委可用，与列表同参数（不分页，上限 10000 行），UTF-8 BOM。"""
     query = _build_query(db=db, current_user=staff, **filters)
     rows = db.execute(
         query.order_by(Requisition.created_at.desc(), Requisition.id.desc()).limit(CSV_EXPORT_LIMIT)
@@ -284,12 +272,6 @@ def create_requisition(
     db: Annotated[Session, Depends(get_db)],
     current_user: CurrentUser,
 ) -> RequisitionCreateOut:
-    """学生与教师/班委批量登记领用（最多 5 行），整单原子扣减库存并生成流水。
-
-    - 学生只能登记本人领用，传入他人 user_id 返回 403。
-    - 教师/班委可代登记（代填领用人）。
-    - created_at 可选，默认当前时间；不能是未来，也不能早于 30 天前。
-    """
     created_at = (
         _validate_created_at(payload.created_at)
         if payload.created_at is not None
@@ -326,7 +308,6 @@ def create_requisition(
             if consumable.status != STATUS_ENABLED:
                 raise _row_error(row_number, f"耗材「{consumable.name}」已停用，不可领用")
 
-            # 条件原子更新：库存足够且启用才扣减，影响行数=0 视为失败
             matched = db.execute(
                 update(Consumable)
                 .where(
@@ -435,11 +416,6 @@ def reverse_requisition(
     db: Annotated[Session, Depends(get_db)],
     manager: ManagerUser,
 ) -> RequisitionRecordOut:
-    """教师/班委撤销一笔有效领用（红冲原则：不删除不编辑原流水）。
-
-    - 单事务内：原流水标记 reversed、库存原子回加、生成红冲流水、写操作日志。
-    - 停用耗材也允许撤销回加（库存保留在停用档案上，符合"带库存停用"语义）。
-    """
     requisition = db.get(Requisition, requisition_id)
     if requisition is None:
         raise HTTPException(
@@ -463,8 +439,6 @@ def reverse_requisition(
     stock_before = consumable.current_stock
 
     try:
-        # 数据库层原子占位：仅当流水仍为有效领用时才允许本次撤销，
-        # 并发双撤销时只有一个事务能拿到 rowcount=1，避免库存被回加两次。
         claimed = db.execute(
             update(Requisition)
             .where(
@@ -481,7 +455,6 @@ def reverse_requisition(
             )
         db.expire(requisition)
 
-        # 条件原子回加：不校验耗材状态，停用档案同样回加
         db.execute(
             update(Consumable)
             .where(Consumable.id == requisition.consumable_id)
@@ -547,14 +520,12 @@ def reverse_requisition(
     return _record_out(reversal, consumable, db.get(User, reversal.user_id))
 
 
-
 @router.get("/{requisition_id}")
 def get_requisition(
     requisition_id: int,
     db: Annotated[Session, Depends(get_db)],
     current_user: CurrentUser,
 ) -> RequisitionDetailOut:
-    """流水详情：红冲流水带原流水信息（origin），被撤销的原流水带红冲引用（reversal）。"""
     requisition = db.get(Requisition, requisition_id)
     if requisition is None or (
         current_user.role == "student" and requisition.user_id != current_user.id

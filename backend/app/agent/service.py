@@ -1,5 +1,3 @@
-"""巡检服务：读取窗口净消耗、调用规则引擎与润色适配层，按耗材缓存 10 分钟。"""
-
 import logging
 from datetime import datetime, timedelta, timezone
 
@@ -24,7 +22,6 @@ _last_inspection_at: datetime | None = None
 
 
 def clear_cache(consumable_id: int | None = None) -> None:
-    """清除巡检缓存；传入耗材 id 时仅清除该条目。"""
     global _last_inspection_at
     if consumable_id is None:
         _cache.clear()
@@ -33,15 +30,12 @@ def clear_cache(consumable_id: int | None = None) -> None:
     _cache.pop(consumable_id, None)
 
 
-
 def window_bounds(now: datetime | None = None) -> tuple[datetime, datetime, datetime]:
-    """返回 (近 7 天窗口起点, 再前 7 天窗口起点, 当前本地时间)。"""
     reference = now or datetime.now(SHANGHAI_TZ)
     now_local = reference.astimezone().replace(tzinfo=None)
     q7_start = local_day_start(WINDOW_DAYS - 1, reference)
     prev_start = local_day_start(2 * WINDOW_DAYS - 1, reference)
     return q7_start, prev_start, now_local
-
 
 
 def _cached(consumable_id: int, now: datetime) -> SuggestionOut | None:
@@ -81,7 +75,6 @@ def _build_suggestion(consumable: Consumable, evaluation: Evaluation) -> Suggest
 
 
 def inspect(db: Session, now: datetime | None = None) -> SuggestionListOut:
-    """逐类巡检启用耗材：命中缓存则复用，否则重算并润色。"""
     global _last_inspection_at
     reference = now or datetime.now(SHANGHAI_TZ)
     now_local = reference.astimezone().replace(tzinfo=None)

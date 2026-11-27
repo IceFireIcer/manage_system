@@ -31,9 +31,6 @@ def _admin_id(db_session) -> int:
     return db_session.scalars(select(User).where(User.account == "admin01")).one().id
 
 
-# ---------- 权限 ----------
-
-
 def test_list_requires_login(client: TestClient) -> None:
     response = client.get(LIST_URL)
 
@@ -90,9 +87,6 @@ def test_non_admin_toggle_status_forbidden(
     response = client.patch(f"{LIST_URL}/1/status", json={"status": "disabled"})
 
     assert response.status_code == 403
-
-
-# ---------- 新增 ----------
 
 
 def test_admin_create_consumable_success(admin_client: TestClient) -> None:
@@ -161,9 +155,6 @@ def test_create_missing_required_field_rejected(admin_client: TestClient) -> Non
     assert response.status_code == 422
 
 
-# ---------- 修改 ----------
-
-
 def test_update_name_and_safety_stock_success(
     admin_client: TestClient, db_session
 ) -> None:
@@ -219,9 +210,6 @@ def test_update_negative_safety_stock_rejected(admin_client: TestClient) -> None
     response = admin_client.put(f"{LIST_URL}/{data['id']}", json={"safety_stock": -3})
 
     assert response.status_code == 422
-
-
-# ---------- 停用（逻辑删除）与状态过滤 ----------
 
 
 def test_disable_and_default_list_filters_it(admin_client: TestClient) -> None:
@@ -288,9 +276,6 @@ def test_invalid_status_filter_rejected(admin_client: TestClient) -> None:
     assert response.status_code == 400
 
 
-# ---------- low_stock 派生 ----------
-
-
 def test_low_stock_derived_field(admin_client: TestClient) -> None:
     low = _create_consumable(
         admin_client, name="砂纸", safety_stock=20, current_stock=5
@@ -307,4 +292,3 @@ def test_low_stock_derived_field(admin_client: TestClient) -> None:
     assert items[low["id"]]["low_stock"] is True
     assert items[equal["id"]]["low_stock"] is False
     assert items[zero_line["id"]]["low_stock"] is False
-

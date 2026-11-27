@@ -15,8 +15,6 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# 数据库 URL 统一从应用配置读取（backend/.env 或环境变量 DATABASE_URL），
-# alembic.ini 中不再硬编码连接串。
 config.set_main_option("sqlalchemy.url", get_settings().database_url)
 
 # add your model's MetaData object here

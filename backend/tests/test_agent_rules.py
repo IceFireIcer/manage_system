@@ -1,5 +1,3 @@
-"""智能补货规则引擎（T08）测试：分级边界、趋势判定与建议补货量。"""
-
 import pytest
 from app.agent.rules import (
     compute_replenishment_quantity,

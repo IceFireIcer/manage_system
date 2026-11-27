@@ -1,8 +1,4 @@
 #!/usr/bin/env bash
-# 本地零 Docker 一键启动（开发用）
-#   后端：backend/venv + SQLite（未配置 backend/.env 时自动写入 SQLite 兜底）
-#   前端：frontend + Vite dev server（http://127.0.0.1:5173）
-# 停止：Ctrl+C 会同时停止前后端；后端日志见 .dev-run/backend.log
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

@@ -1,5 +1,3 @@
-"""库存总览（T07）与补货建议（T08）相关 Pydantic 模型。"""
-
 from datetime import datetime
 from typing import Literal
 

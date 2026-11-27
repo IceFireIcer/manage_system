@@ -1,5 +1,3 @@
-"""操作日志查询的响应模型（T09）。"""
-
 from datetime import datetime
 
 from pydantic import BaseModel

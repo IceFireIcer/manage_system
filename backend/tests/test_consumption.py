@@ -1,10 +1,3 @@
-"""消耗汇总与库存反推审计（T09）测试。
-
-- 净消耗 = max(领用 − 红冲, 0)，按耗材在窗口内聚合，与 T08 Agent 口径一致。
-- 窗口按 Asia/Shanghai 自然日切割，7/30 天均可切换。
-- 审计事件从领用/红冲流水与 restock 操作日志推导，库存可逐条反推。
-"""
-
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -353,7 +346,6 @@ def test_audit_reconstructs_stock_from_all_sources(
 def test_audit_uses_execution_order_for_backdated_flow(
     admin_client: TestClient, db_session
 ) -> None:
-    """补录流水的 created_at 早于已有流水，但库存链按执行顺序（id）而非展示时间。"""
     item = _create_consumable(admin_client, current_stock=100)
     student_id = _student_id(db_session)
     now = datetime.now().replace(microsecond=0)

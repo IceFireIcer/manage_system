@@ -1,5 +1,3 @@
-"""消耗汇总与库存反推审计接口（T09）：教师/班委可见。"""
-
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -28,7 +26,6 @@ def get_consumption_summary(
     _staff: StaffUser,
     window: Annotated[int, Query()] = consumption_core.DEFAULT_WINDOW,
 ) -> ConsumptionSummaryOut:
-    """近 7/30 天净消耗汇总：仅列窗口内出现过领用/红冲流水的耗材。"""
     if window not in consumption_core.VALID_WINDOWS:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -70,7 +67,6 @@ def get_consumption_audit(
     _staff: StaffUser,
     consumable_id: Annotated[int, Query()],
 ) -> ConsumptionAuditOut:
-    """库存反推审计：正序变动序列 + 期初库存 + 与各条 stock_after 的一致性。"""
     consumable = db.get(Consumable, consumable_id)
     if consumable is None:
         raise HTTPException(

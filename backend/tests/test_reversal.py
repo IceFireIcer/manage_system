@@ -1,5 +1,3 @@
-"""红冲撤销（T06）测试：库存回加、红冲流水生成、权限、重复撤销防护、列表过滤与详情双向关联。"""
-
 from typing import Any
 
 import pytest
@@ -83,9 +81,6 @@ def _user_id(db_session, account: str) -> int:
     return db_session.scalars(select(User).where(User.account == account)).one().id
 
 
-# ---------- 正常撤销路径 ----------
-
-
 def test_teacher_reverse_restores_stock_and_creates_reversal(
     admin_client: TestClient, db_session
 ) -> None:
@@ -145,9 +140,6 @@ def test_reverse_with_optional_remark(admin_client: TestClient, db_session) -> N
     assert records[1].remark == "班长确认"
 
 
-# ---------- 权限与入参 ----------
-
-
 def test_student_cannot_reverse(client: TestClient, db_session) -> None:
     _login(client, "admin01", "Admin@123")
     consumable = _create_consumable(client)
@@ -187,9 +179,6 @@ def test_missing_reason_rejected(admin_client: TestClient, db_session) -> None:
 
     assert response.status_code == 422
     assert _db_stock(db_session, consumable["id"]) == 9
-
-
-# ---------- 撤销状态防护 ----------
 
 
 def test_reverse_twice_rejected(admin_client: TestClient, db_session) -> None:
@@ -251,7 +240,6 @@ def test_reverse_disabled_consumable_succeeds(
 def test_concurrent_reverse_applies_once(
     admin_client: TestClient, db_session
 ) -> None:
-    """并发双撤销：过期会话仍认为流水有效时，数据库层原子占位只允许一次生效。"""
     from app.routers.requisitions import reverse_requisition
     from app.schemas_requisitions import ReversalCreate
     from fastapi import HTTPException
@@ -280,9 +268,6 @@ def test_concurrent_reverse_applies_once(
     db_session.expire_all()
     assert _db_stock(db_session, consumable["id"]) == 10
     assert len(_records(db_session)) == 2
-
-
-# ---------- 详情双向关联 ----------
 
 
 def test_detail_bidirectional_link(admin_client: TestClient, db_session) -> None:
@@ -342,9 +327,6 @@ def test_detail_not_found(admin_client: TestClient) -> None:
 
     assert response.status_code == 404
     assert "流水不存在" in response.json()["detail"]
-
-
-# ---------- 列表查询 ----------
 
 
 def test_list_requires_login(client: TestClient) -> None:
@@ -456,9 +438,6 @@ def test_list_pagination_desc_by_id(admin_client: TestClient, db_session) -> Non
     page3 = admin_client.get(BASE_URL, params={"page": 3, "page_size": 2}).json()
     assert len(page3["items"]) == 1
     assert page1["items"][0]["id"] > page3["items"][0]["id"]
-
-
-# ---------- 操作日志 ----------
 
 
 def test_reverse_written_to_logs(admin_client: TestClient, db_session) -> None:

@@ -1,14 +1,3 @@
-"""首次部署管理员自举初始化。
-
-幂等：已存在启用的 admin 账号时直接跳过，不重复创建。
-密码优先读取 ``ADMIN_INIT_PASSWORD``，未设置时随机生成并打印到 stdout，
-生产环境可通过 ``docker compose logs backend`` 查看初始密码。
-
-用法（容器启动时由 CMD 自动执行）：
-
-    python scripts/bootstrap_admin.py
-"""
-
 from __future__ import annotations
 
 import os

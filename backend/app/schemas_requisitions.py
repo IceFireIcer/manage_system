@@ -1,5 +1,3 @@
-"""批量领用登记相关 Pydantic 模型（独立文件，避免与其他模块的 schemas 交叉冲突）。"""
-
 from datetime import datetime
 
 from pydantic import BaseModel, Field, field_validator

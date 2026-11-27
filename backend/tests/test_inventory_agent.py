@@ -1,5 +1,3 @@
-"""智能补货 Agent API（T08）测试：巡检、LLM 降级/润色/超时、缓存与处置入库。"""
-
 from datetime import datetime
 from typing import Any
 

@@ -1,7 +1,3 @@
-# 本地零 Docker 一键启动（Windows PowerShell 5.1 / PowerShell 7）
-#   后端：backend\venv + SQLite（未配置 backend\.env 时自动写入 SQLite 兜底）
-#   前端：frontend + Vite dev server（http://127.0.0.1:5173）
-# 停止：Ctrl+C 会同时停止前后端；后端日志见 .dev-run\backend.log
 $ErrorActionPreference = 'Stop'
 
 $Root = Split-Path -Parent $PSScriptRoot
@@ -85,7 +81,6 @@ try {
             }
         }
         catch {
-            # 尚未就绪，继续等待
         }
         if (-not (Get-Process -Id $backendProcess.Id -ErrorAction SilentlyContinue)) {
             Get-Content $ErrLogFile -Tail 30 -ErrorAction SilentlyContinue | Write-Host

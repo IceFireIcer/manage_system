@@ -1,7 +1,4 @@
 #!/usr/bin/env bash
-# CodeArts 流水线阶段 2：后端测试与静态检查（pytest + ruff）
-# 本地用法：bash scripts/ci/stage2-backend-test.sh
-# 可通过 VENV_DIR 复用已有虚拟环境，PYTHON 指定解释器。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"

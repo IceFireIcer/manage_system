@@ -1,8 +1,3 @@
-"""大模型润色适配层：默认 DeepSeek（OpenAI 兼容），失败或超时回退规则模板。
-
-供应商隔离在本模块内，接口仅依赖结构化指标，可平移到华为云盘古等实现。
-"""
-
 import logging
 import time
 from dataclasses import dataclass
@@ -45,7 +40,6 @@ class RationaleGenerator(Protocol):
 
 
 def format_template(context: RationaleContext) -> str:
-    """规则模板文案：始终引用输入数字，作为无密钥/异常时的兜底。"""
     evaluation = context.evaluation
     unit = context.unit
     if evaluation.q7 == 0:
@@ -99,14 +93,12 @@ def build_prompt(context: RationaleContext) -> str:
 
 
 class TemplateGenerator:
-    """规则模板生成器：无密钥或降级路径。"""
 
     def generate(self, context: RationaleContext) -> str:
         return format_template(context)
 
 
 class DeepSeekRationaleGenerator:
-    """DeepSeek 适配器（OpenAI 兼容 SDK），密钥与模型由 Settings（LLM_*）注入。"""
 
     def __init__(
         self,
@@ -150,11 +142,6 @@ class DeepSeekRationaleGenerator:
 
 
 def get_generator(settings: Settings | None = None) -> RationaleGenerator:
-    """从统一配置（LLM_API_KEY / LLM_MODEL / LLM_BASE_URL）选择实现。
-
-    未显式传入 settings 时读取一次 Settings，与 docker-compose、.env.example
-    注入的部署契约保持一致；无密钥或占位密钥返回模板生成器。
-    """
     config = settings if settings is not None else Settings()
     api_key = (config.llm_api_key or "").strip()
     if not api_key or api_key.startswith("sk-your"):
@@ -167,7 +154,6 @@ def get_generator(settings: Settings | None = None) -> RationaleGenerator:
 
 
 def generate_rationale(context: RationaleContext) -> str:
-    """生成判断依据：任何异常/超时/空文本都回退模板，绝不向上抛错。"""
     started = time.perf_counter()
     generator = get_generator()
     try:

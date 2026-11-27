@@ -1,5 +1,3 @@
-"""操作日志（T09）测试：覆盖全部写操作、筛选、分页、只读与敏感字段隔离。"""
-
 from datetime import datetime, timedelta
 
 from app.models import OperationLog, User

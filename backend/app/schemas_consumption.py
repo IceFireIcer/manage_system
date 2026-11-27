@@ -1,5 +1,3 @@
-"""消耗汇总与库存反推审计的响应模型（T09）。"""
-
 from datetime import datetime
 from typing import Literal
 

@@ -38,7 +38,6 @@ export const useUserStore = defineStore('user', {
       try {
         await api.post('/auth/logout')
       } catch {
-        // 登出失败也继续清理本地状态
       }
       this.clearUser()
     },

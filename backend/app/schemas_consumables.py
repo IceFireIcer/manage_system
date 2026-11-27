@@ -1,5 +1,3 @@
-"""耗材档案相关 Pydantic 模型（独立文件，避免与其他模块的 schemas 交叉冲突）。"""
-
 import json
 from typing import Literal
 
@@ -33,11 +31,6 @@ class ConsumableCreate(BaseModel):
 
 
 class ConsumableUpdate(BaseModel):
-    """PUT 修改耗材档案：仅允许改 name/spec/unit/location/safety_stock。
-
-    current_stock 由领用/撤销/补货等库存流水驱动，禁止直接修改，传入即报 422。
-    声明该字段仅为拦截并给出中文错误，正常请求永远到不了赋值环节。
-    """
 
     name: str | None = Field(default=None, min_length=1, max_length=128)
     spec: str | None = Field(default=None, min_length=1, max_length=128)
@@ -78,7 +71,6 @@ class ConsumableOut(BaseModel):
 
 
 def snapshot(consumable) -> str:
-    """将耗材关键字段序列化为 JSON 字符串，用于操作日志 before/after_value。"""
     return json.dumps(
         {
             "id": consumable.id,

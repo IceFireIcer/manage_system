@@ -73,7 +73,6 @@ async function fetchList() {
     })
     items.value = data
   } catch {
-    // 拦截器已统一提示 401/403，其余错误在此兜底
   } finally {
     loading.value = false
   }

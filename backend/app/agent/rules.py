@@ -1,8 +1,3 @@
-"""补货决策规则引擎：纯函数，输入库存与窗口净消耗，输出分级与建议补货量。
-
-分级严格按 SPEC 顺序判定，首个命中定档；整数比较避免浮点边界误差。
-"""
-
 import math
 from dataclasses import dataclass
 
@@ -17,7 +12,6 @@ TREND_RATIO = 1.5
 
 @dataclass(frozen=True)
 class Evaluation:
-    """单次巡检的结构化指标，供 API 输出与润色上下文共用。"""
 
     current_stock: int
     safety_stock: int
@@ -31,7 +25,6 @@ class Evaluation:
 
 
 def net_consumption(issued: int, reversed_quantity: int) -> int:
-    """净消耗 = max(领用 − 红冲, 0)。"""
     return max(issued - reversed_quantity, 0)
 
 
@@ -44,7 +37,6 @@ def compute_gap(safety_stock: int, current_stock: int) -> int:
 
 
 def compute_days_of_supply(current_stock: int, rate: float) -> float | None:
-    """可支撑天数；速率为零时返回 None 表示无穷大。"""
     if rate <= 0:
         return None
     return current_stock / rate
@@ -61,7 +53,6 @@ def _is_rising(q7: int, prev_q7: int) -> bool:
 def compute_tier(
     current_stock: int, safety_stock: int, q7: int, prev_q7: int
 ) -> str | None:
-    """返回 urgent/moderate/observe；None 表示正常或安全线为零跳过巡检。"""
     if safety_stock <= 0:
         return None
 
@@ -85,7 +76,6 @@ def compute_tier(
 def compute_replenishment_quantity(
     current_stock: int, safety_stock: int, q7: int, tier: str | None
 ) -> int:
-    """建议补货量 R：覆盖缺口与一周用量，趋势触发时按一周用量。"""
     if tier is None:
         return 0
     rate = compute_rate(q7)
@@ -100,7 +90,6 @@ def compute_replenishment_quantity(
 def evaluate(
     current_stock: int, safety_stock: int, q7: int, prev_q7: int
 ) -> Evaluation | None:
-    """计算完整指标；正常档与跳过档返回 None（不出建议、不调用大模型）。"""
     tier = compute_tier(current_stock, safety_stock, q7, prev_q7)
     if tier is None:
         return None

@@ -1,5 +1,3 @@
-"""批量领用登记（T05）测试：整单原子扣减、代登记、补录窗口、并发防超卖。"""
-
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -84,9 +82,6 @@ def _submit(client: TestClient, items: list[dict], **extra: Any):
     return client.post(BASE_URL, json=payload)
 
 
-# ---------- 基础成功路径 ----------
-
-
 def test_requires_login(client: TestClient) -> None:
     response = client.post(BASE_URL, json={"items": [{"consumable_id": 1, "quantity": 1}]})
 
@@ -149,9 +144,6 @@ def test_three_items_success(admin_client: TestClient, db_session) -> None:
     assert len(_requisitions(db_session)) == 3
 
 
-# ---------- 整单原子性 ----------
-
-
 def test_any_row_insufficient_rejects_whole_order(admin_client: TestClient, db_session) -> None:
     first = _create_consumable(admin_client, name="焊丝", current_stock=5)
     second = _create_consumable(admin_client, name="砂纸", unit="张", current_stock=2)
@@ -205,9 +197,6 @@ def test_unknown_consumable_rejected(admin_client: TestClient, db_session) -> No
     assert _requisitions(db_session) == []
 
 
-# ---------- 入参校验 ----------
-
-
 def test_more_than_five_rows_rejected(admin_client: TestClient) -> None:
     consumable = _create_consumable(admin_client)
     _login_student(admin_client)
@@ -237,9 +226,6 @@ def test_non_positive_quantity_rejected(
     response = _submit(admin_client, [{"consumable_id": consumable["id"], "quantity": quantity}])
 
     assert response.status_code == 422
-
-
-# ---------- 领用人与代登记 ----------
 
 
 def test_student_cannot_register_for_others(admin_client: TestClient, db_session) -> None:
@@ -323,9 +309,6 @@ def test_proxy_for_disabled_user_rejected(admin_client: TestClient, db_session) 
     assert _requisitions(db_session) == []
 
 
-# ---------- 补录时间窗口 ----------
-
-
 def test_created_at_in_future_rejected(admin_client: TestClient, db_session) -> None:
     consumable = _create_consumable(admin_client)
     _login_student(admin_client)
@@ -369,9 +352,6 @@ def test_created_at_29_days_ago_accepted(admin_client: TestClient, db_session) -
     records = _requisitions(db_session)
     assert len(records) == 1
     assert records[0].created_at.replace(microsecond=0) == backfill_time.replace(microsecond=0)
-
-
-# ---------- 并发与同单同耗材 ----------
 
 
 def test_no_oversell_sequential_submissions(admin_client: TestClient, db_session) -> None:
@@ -429,9 +409,6 @@ def test_same_consumable_rows_exhaust_stock(admin_client: TestClient, db_session
     assert _db_stock(db_session, consumable["id"]) == 0
 
 
-# ---------- 操作日志 ----------
-
-
 def test_requisition_written_to_logs(admin_client: TestClient, db_session) -> None:
     consumable = _create_consumable(admin_client)
     student = _create_student(admin_client)
@@ -453,9 +430,6 @@ def test_requisition_written_to_logs(admin_client: TestClient, db_session) -> No
     assert log.role == "teacher"
     assert "2" in log.after_value
     assert consumable["name"] in log.after_value
-
-
-# ---------- 用户选项（教师/班委代填下拉） ----------
 
 
 def test_user_options_forbidden_for_student(student_client: TestClient) -> None:

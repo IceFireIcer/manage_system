@@ -1,5 +1,3 @@
-"""记录查询与 CSV 导出（T07）测试：筛选组合、分页倒序、学生隔离、UTF-8 BOM。"""
-
 import csv
 import io
 from datetime import date, datetime, time, timedelta

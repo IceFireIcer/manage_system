@@ -1,5 +1,3 @@
-"""操作日志查询接口（T09）：教师/班委只读，倒序分页。"""
-
 from datetime import date, datetime, time, timedelta
 from typing import Annotated
 
@@ -31,7 +29,6 @@ def list_operation_logs(
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
 ) -> OperationLogPageOut:
-    """操作日志只读查询：action 模糊匹配，日期范围含当日，created_at 倒序。"""
     filters = []
     if action is not None and action.strip():
         filters.append(OperationLog.action.contains(action.strip()))

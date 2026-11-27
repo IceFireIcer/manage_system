@@ -1,4 +1,3 @@
-# 前端多阶段构建：node:22 构建静态产物 → nginx:alpine 托管并反代 /api
 FROM node:22-alpine AS build
 
 ARG NPM_REGISTRY=https://registry.npmmirror.com

@@ -1,5 +1,3 @@
-"""LLM 配置契约（部署修复）：适配器统一读取 Settings 的 LLM_* 环境变量。"""
-
 import pytest
 from app.agent import llm
 from app.config import Settings

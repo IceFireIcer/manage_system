@@ -1,5 +1,3 @@
-"""库存总览（T07）测试：指标卡口径、低库存排序、今日领用笔数。"""
-
 from datetime import datetime, timedelta
 from typing import Any
 

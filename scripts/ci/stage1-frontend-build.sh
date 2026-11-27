@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# CodeArts 流水线阶段 1：前端构建（产物 frontend/dist）
-# 本地用法：bash scripts/ci/stage1-frontend-build.sh
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"

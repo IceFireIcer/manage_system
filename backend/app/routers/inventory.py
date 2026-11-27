@@ -1,5 +1,3 @@
-"""库存总览（T07）、巡检建议与处置入库（T08）。"""
-
 import json
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
@@ -24,7 +22,6 @@ from app.schemas_inventory import (
 
 router = APIRouter(prefix="/api/v1/inventory", tags=["inventory"])
 
-# Asia/Shanghai 无夏令时，固定 UTC+8 等价（Windows 无系统 tz 数据库，不依赖 tzdata）
 SHANGHAI_TZ = timezone(timedelta(hours=8))
 
 StaffUser = Annotated[User, Depends(require_role("teacher", "admin"))]
@@ -32,7 +29,6 @@ AdminUser = Annotated[User, Depends(require_role("admin"))]
 
 
 def _today_start_local() -> datetime:
-    """Asia/Shanghai 自然日零点对应的本地 naive 时间（流水按本地 naive 时间存储）。"""
     now = datetime.now(SHANGHAI_TZ)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     return today_start.astimezone().replace(tzinfo=None)
@@ -43,11 +39,6 @@ def get_inventory_overview(
     db: Annotated[Session, Depends(get_db)],
     _current_user: CurrentUser,
 ) -> InventoryOverviewOut:
-    """库存总览：三角色可见。
-
-    - summary：启用耗材类数、低库存预警数、今日领用笔数（Asia/Shanghai 自然日）。
-    - items：全部启用耗材，低库存与缺货置前（low_stock desc, is_out desc, name asc）。
-    """
     consumables = db.scalars(
         select(Consumable).where(Consumable.status == STATUS_ENABLED)
     ).all()
@@ -106,7 +97,6 @@ def list_suggestions(
     db: Annotated[Session, Depends(get_db)],
     _staff: StaffUser,
 ) -> SuggestionListOut:
-    """巡检补货建议：教师/班委可见，结果按耗材缓存 10 分钟，不落库。"""
     return service.inspect(db)
 
 
@@ -115,7 +105,6 @@ def refresh_suggestions(
     db: Annotated[Session, Depends(get_db)],
     _staff: StaffUser,
 ) -> SuggestionListOut:
-    """重新巡检：清空缓存后重算全部启用耗材。"""
     service.clear_cache()
     return service.inspect(db)
 
@@ -126,7 +115,6 @@ def restock_consumable(
     db: Annotated[Session, Depends(get_db)],
     admin: AdminUser,
 ) -> RestockOut:
-    """补货入库（仅班委）：单事务原子加库存并写操作日志，成功后清除该耗材巡检缓存。"""
     consumable = db.get(Consumable, payload.consumable_id)
     if consumable is None:
         raise HTTPException(

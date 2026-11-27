@@ -1,8 +1,4 @@
 #!/usr/bin/env bash
-# CodeArts 流水线阶段 3：镜像构建与推送
-# 用法：IMAGE_REGISTRY=<仓库地址> IMAGE_TAG=<版本标签> bash scripts/ci/stage3-image-publish.sh
-# 示例：IMAGE_REGISTRY=swr.cn-north-4.myhuaweicloud.com/<namespace> IMAGE_TAG=v20261127-1 \
-#         bash scripts/ci/stage3-image-publish.sh
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
