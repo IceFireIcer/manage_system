@@ -1,18 +1,20 @@
 import json
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
-from app import business_time
+from app import business_time, inventory_ledger
 from app.agent import service
 from app.database import get_db
 from app.deps import CurrentUser, require_role
-from app.models import Consumable, OperationLog, Requisition, User
+from app.models import Consumable, OperationLog, Requisition, RequisitionOrder, User
 from app.schemas_consumables import STATUS_ENABLED
 from app.schemas_inventory import (
+    InventoryEventOut,
     InventoryItemOut,
+    InventoryLedgerOut,
     InventoryOverviewOut,
     InventorySummary,
     RestockCreate,
@@ -108,6 +110,83 @@ def refresh_suggestions(
 ) -> SuggestionListOut:
     service.clear_cache()
     return service.inspect(db)
+
+
+@router.get("/ledger")
+def get_inventory_ledger(
+    db: Annotated[Session, Depends(get_db)],
+    staff: StaffUser,
+    consumable_id: Annotated[int, Query(gt=0)],
+) -> InventoryLedgerOut:
+    consumable = db.get(Consumable, consumable_id)
+    if consumable is None or consumable.class_id != staff.class_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="耗材不存在"
+        )
+
+    events = inventory_ledger.list_events(db, consumable_id)
+    order_ids = {
+        event.source_id
+        for event in events
+        if event.source_type == inventory_ledger.SOURCE_REQUISITION_ORDER
+        and event.source_id is not None
+    }
+    order_numbers = (
+        {
+            order.id: order.order_no
+            for order in db.scalars(
+                select(RequisitionOrder).where(RequisitionOrder.id.in_(order_ids))
+            )
+        }
+        if order_ids
+        else {}
+    )
+
+    consistent = bool(events) and events[-1].stock_after == consumable.current_stock
+    if consistent:
+        previous_after: int | None = None
+        for event in events:
+            if previous_after is not None and event.stock_before != previous_after:
+                consistent = False
+                break
+            previous_after = event.stock_after
+    opening_stock = (
+        events[0].stock_after
+        if events and events[0].event_type == inventory_ledger.EVENT_OPENING
+        else None
+    )
+
+    return InventoryLedgerOut(
+        consumable_id=consumable.id,
+        name=consumable.name,
+        unit=consumable.unit,
+        current_stock=consumable.current_stock,
+        opening_stock=opening_stock,
+        consistent=consistent,
+        events=[
+            InventoryEventOut(
+                id=event.id,
+                event_type=event.event_type,
+                delta=event.delta,
+                stock_before=event.stock_before,
+                stock_after=event.stock_after,
+                exec_seq=event.exec_seq,
+                business_at=event.business_at,
+                posted_at=event.posted_at,
+                source_type=event.source_type,
+                source_id=event.source_id,
+                order_no=order_numbers.get(event.source_id),
+                requisition_id=event.requisition_id,
+                line_no=event.line_no,
+                operator_id=event.operator_id,
+                operator_name=event.operator_name,
+                operator_role=event.operator_role,
+                unit_snapshot=event.unit_snapshot,
+                evidence_status=event.evidence_status,
+            )
+            for event in events
+        ],
+    )
 
 
 @router.post("/restock")

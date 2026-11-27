@@ -1,29 +1,36 @@
 import csv
 import io
 import json
+import uuid
 from datetime import date, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
-from app import business_time
+from app import business_time, inventory_ledger
 from app.agent import service
 from app.database import get_db
 from app.deps import CurrentUser, require_role
-from app.models import Consumable, OperationLog, Requisition, User
+from app.models import Consumable, OperationLog, Requisition, RequisitionOrder, User
 from app.schemas_consumables import STATUS_ENABLED
 from app.schemas_requisitions import (
     MAX_BACKFILL_DAYS,
     RequisitionCreate,
     RequisitionCreateOut,
     RequisitionDetailOut,
+    RequisitionErrorOut,
     RequisitionItemOut,
     RequisitionListItemOut,
     RequisitionPageOut,
+    RequisitionReceiptLineOut,
+    RequisitionReceiptOut,
     RequisitionRecordOut,
     RequisitionRelatedOut,
+    RequisitionRequestStatusOut,
     ReversalCreate,
 )
 
@@ -42,11 +49,190 @@ STATUS_NAMES = {"active": "有效", "reversed": "已撤销"}
 ManagerUser = Annotated[User, Depends(require_role("teacher", "admin"))]
 
 
-def _row_error(row_number: int, message: str) -> HTTPException:
-    return HTTPException(
-        status_code=status.HTTP_400_BAD_REQUEST,
-        detail=f"第 {row_number} 行：{message}",
+class RowError(Exception):
+    def __init__(
+        self,
+        *,
+        field: str,
+        code: str,
+        reason: str,
+        line_no: int | None = None,
+        status_code: int = status.HTTP_400_BAD_REQUEST,
+    ) -> None:
+        super().__init__(reason)
+        self.field = field
+        self.code = code
+        self.reason = reason
+        self.line_no = line_no
+        self.status_code = status_code
+
+    def detail(self) -> str:
+        if self.line_no is None:
+            return self.reason
+        return f"第 {self.line_no} 行：{self.reason}"
+
+    def as_dict(self) -> dict:
+        return {
+            "line_no": self.line_no,
+            "field": self.field,
+            "code": self.code,
+            "reason": self.reason,
+        }
+
+    def as_http(self) -> HTTPException:
+        headers = {"X-Error-Code": self.code, "X-Error-Field": self.field}
+        if self.line_no is not None:
+            headers["X-Error-Row"] = str(self.line_no)
+        return HTTPException(
+            status_code=self.status_code, detail=self.detail(), headers=headers
+        )
+
+
+def _submit_signature(items: list) -> list[list[int]]:
+    return sorted([[item.consumable_id, item.quantity] for item in items])
+
+
+def _load_json_list(value: str | None) -> list[dict]:
+    if not value:
+        return []
+    try:
+        parsed = json.loads(value)
+    except (TypeError, ValueError):
+        return []
+    return parsed if isinstance(parsed, list) else []
+
+
+def _receipt_from_order(order: RequisitionOrder) -> RequisitionReceiptOut | None:
+    rows = _load_json_list(order.receipt_json)
+    if not rows:
+        return None
+    return RequisitionReceiptOut(
+        order_no=order.order_no,
+        request_id=order.request_id,
+        status=order.status,
+        owner_id=order.owner_id,
+        owner_name=order.owner_name,
+        operator_id=order.operator_id,
+        operator_name=order.operator_name,
+        operator_role=order.operator_role,
+        business_at=order.business_at,
+        posted_at=order.posted_at,
+        remark=order.remark,
+        lines=[RequisitionReceiptLineOut(**row) for row in rows],
     )
+
+
+def _create_out_from_order(order: RequisitionOrder) -> RequisitionCreateOut:
+    receipt = _receipt_from_order(order)
+    lines = receipt.lines if receipt is not None else []
+    items = [
+        RequisitionItemOut(
+            consumable_name=line.consumable_name,
+            quantity=line.quantity,
+            stock_after=line.stock_after,
+        )
+        for line in lines
+    ]
+    return RequisitionCreateOut(
+        count=len(items),
+        items=items,
+        request_id=order.request_id,
+        order_no=order.order_no,
+        status=order.status,
+        business_at=order.business_at,
+        posted_at=order.posted_at,
+        receipt=receipt,
+    )
+
+
+def _order_response(order: RequisitionOrder) -> JSONResponse:
+    if order.status == "submitted":
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content=jsonable_encoder(_create_out_from_order(order)),
+        )
+    if order.status == "rejected":
+        errors = [RequisitionErrorOut(**row) for row in _load_json_list(order.errors_json)]
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content=jsonable_encoder(
+                {
+                    "detail": order.error_detail or "请求已被拒绝",
+                    "request_id": order.request_id,
+                    "order_no": order.order_no,
+                    "status": order.status,
+                    "errors": errors,
+                }
+            ),
+        )
+    return JSONResponse(
+        status_code=status.HTTP_202_ACCEPTED,
+        content=jsonable_encoder(
+            {
+                "detail": "请求处理中，请稍后查询",
+                "request_id": order.request_id,
+                "order_no": order.order_no,
+                "status": order.status,
+            }
+        ),
+    )
+
+
+def _resolve_repeat(
+    order: RequisitionOrder, payload: RequisitionCreate, owner: User
+) -> JSONResponse:
+    signature = json.dumps(_submit_signature(payload.items))
+    time_matches = True
+    if payload.created_at is not None:
+        requested_at = business_time.normalize(payload.created_at).replace(microsecond=0)
+        time_matches = requested_at == order.business_at
+    if (
+        order.owner_id != owner.id
+        or order.items_signature != signature
+        or order.remark != payload.remark
+        or not time_matches
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="请求标识已用于不同内容，请勿复用",
+        )
+    return _order_response(order)
+
+
+def _mark_rejected(db: Session, order_id: int, error: RowError) -> None:
+    order = db.get(RequisitionOrder, order_id)
+    if order is None:
+        return
+    order.status = "rejected"
+    order.error_detail = error.detail()
+    order.errors_json = json.dumps([error.as_dict()], ensure_ascii=False)
+    order.updated_at = business_time.now().replace(microsecond=0)
+    db.commit()
+
+
+def _resolve_owner(
+    db: Session, payload: RequisitionCreate, current_user: User
+) -> User:
+    if payload.user_id is None or payload.user_id == current_user.id:
+        return current_user
+    if current_user.role == "student":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="学生只能登记本人领用，不能代他人登记",
+        )
+    owner = db.get(User, payload.user_id)
+    if owner is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="领用人不存在",
+        )
+    return owner
+
+
+def _can_view_order(order: RequisitionOrder, current_user: User) -> bool:
+    if current_user.role == "student":
+        return order.owner_id == current_user.id
+    return order.class_id == current_user.class_id
 
 
 def _build_query(
@@ -257,6 +443,52 @@ def export_requisitions_csv(
     )
 
 
+@router.get("/requests/{request_id}")
+def get_request_status(
+    request_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    current_user: CurrentUser,
+) -> RequisitionRequestStatusOut:
+    order = db.scalars(
+        select(RequisitionOrder).where(RequisitionOrder.request_id == request_id)
+    ).first()
+    if order is None or not _can_view_order(order, current_user):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="请求不存在"
+        )
+    receipt = _receipt_from_order(order) if order.status == "submitted" else None
+    return RequisitionRequestStatusOut(
+        request_id=order.request_id,
+        order_no=order.order_no,
+        status=order.status,
+        receipt=receipt,
+        errors=[RequisitionErrorOut(**row) for row in _load_json_list(order.errors_json)],
+        error_detail=order.error_detail,
+    )
+
+
+@router.get("/orders/{order_no}")
+def get_order_receipt(
+    order_no: str,
+    db: Annotated[Session, Depends(get_db)],
+    current_user: CurrentUser,
+) -> RequisitionReceiptOut:
+    order = db.scalars(
+        select(RequisitionOrder).where(RequisitionOrder.order_no == order_no)
+    ).first()
+    if order is None or not _can_view_order(order, current_user):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="回执不存在"
+        )
+    receipt = _receipt_from_order(order)
+    if order.status != "submitted" or receipt is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="回执尚未生成，请按请求标识查询处理状态",
+        )
+    return receipt
+
+
 def _validate_created_at(value: datetime) -> datetime:
     normalized = business_time.normalize(value)
     if normalized > business_time.now():
@@ -278,43 +510,72 @@ def create_requisition(
     db: Annotated[Session, Depends(get_db)],
     current_user: CurrentUser,
 ) -> RequisitionCreateOut:
-    created_at = (
+    request_id = payload.request_id or uuid.uuid4().hex
+    owner = _resolve_owner(db, payload, current_user)
+
+    existing = db.scalars(
+        select(RequisitionOrder).where(RequisitionOrder.request_id == request_id)
+    ).first()
+    if existing is not None:
+        return _resolve_repeat(existing, payload, owner)
+
+    submitted_at = business_time.now().replace(microsecond=0)
+    business_at = (
         _validate_created_at(payload.created_at)
         if payload.created_at is not None
-        else business_time.now().replace(microsecond=0)
+        else submitted_at
     )
 
-    owner_id = current_user.id
-    if payload.user_id is not None and payload.user_id != current_user.id:
-        if current_user.role == "student":
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="学生只能登记本人领用，不能代他人登记",
-            )
-        owner = db.get(User, payload.user_id)
-        if owner is None:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="领用人不存在",
-            )
-        if owner.status != "enabled":
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"领用人 {owner.name} 已被停用",
-            )
-        owner_id = owner.id
+    order = RequisitionOrder(
+        order_no=inventory_ledger.order_no_for(request_id, business_at),
+        request_id=request_id,
+        status="processing",
+        owner_id=owner.id,
+        owner_name=owner.name,
+        operator_id=current_user.id,
+        operator_name=current_user.name,
+        operator_role=current_user.role,
+        class_id=owner.class_id,
+        business_at=business_at,
+        remark=payload.remark,
+        items_signature=json.dumps(_submit_signature(payload.items)),
+    )
+    db.add(order)
+    db.flush()
+    order_id = order.id
+    db.commit()
 
     results: list[RequisitionItemOut] = []
+    receipt_lines: list[RequisitionReceiptLineOut] = []
     created: list[Requisition] = []
     total_quantity = 0
     try:
-        for row_number, item in enumerate(payload.items, start=1):
-            consumable = db.get(Consumable, item.consumable_id)
-            if consumable is None:
-                raise _row_error(row_number, f"耗材不存在（id={item.consumable_id}）")
-            if consumable.status != STATUS_ENABLED:
-                raise _row_error(row_number, f"耗材「{consumable.name}」已停用，不可领用")
+        if owner.status != "enabled":
+            raise RowError(
+                field="user_id",
+                code="owner_disabled",
+                reason=f"领用人 {owner.name} 已被停用",
+            )
 
+        for row_number, item in enumerate(payload.items, start=1):
+            field_path = f"items[{row_number - 1}]"
+            consumable = db.get(Consumable, item.consumable_id, with_for_update=True)
+            if consumable is None:
+                raise RowError(
+                    line_no=row_number,
+                    field=f"{field_path}.consumable_id",
+                    code="consumable_not_found",
+                    reason=f"耗材不存在（id={item.consumable_id}）",
+                )
+            if consumable.status != STATUS_ENABLED:
+                raise RowError(
+                    line_no=row_number,
+                    field=f"{field_path}.consumable_id",
+                    code="consumable_disabled",
+                    reason=f"耗材「{consumable.name}」已停用，不可领用",
+                )
+
+            stock_before = consumable.current_stock
             matched = db.execute(
                 update(Consumable)
                 .where(
@@ -325,37 +586,86 @@ def create_requisition(
                 .values(current_stock=Consumable.current_stock - item.quantity)
             )
             if matched.rowcount == 0:
-                raise _row_error(
-                    row_number,
-                    f"{consumable.name}库存不足，仅剩 {consumable.current_stock}"
-                    f"{consumable.unit or '件'}",
+                db.flush()
+                db.refresh(consumable)
+                raise RowError(
+                    line_no=row_number,
+                    field=f"{field_path}.quantity",
+                    code="insufficient_stock",
+                    reason=(
+                        f"{consumable.name}库存不足，仅剩 {consumable.current_stock}"
+                        f"{consumable.unit or '件'}"
+                    ),
                 )
 
             db.flush()
             db.refresh(consumable)
+            stock_after = consumable.current_stock
+            line_posted_at = business_time.now().replace(microsecond=0)
+
+            requisition = Requisition(
+                consumable_id=item.consumable_id,
+                user_id=owner.id,
+                quantity=item.quantity,
+                stock_after=stock_after,
+                type="normal",
+                status="active",
+                class_id=consumable.class_id,
+                created_at=business_at,
+                remark=payload.remark,
+            )
+            db.add(requisition)
+            db.flush()
+
+            event = inventory_ledger.append_event(
+                db,
+                consumable=consumable,
+                event_type=inventory_ledger.EVENT_REQUISITION,
+                delta=-item.quantity,
+                stock_before=stock_before,
+                stock_after=stock_after,
+                business_at=business_at,
+                posted_at=line_posted_at,
+                source_type=inventory_ledger.SOURCE_REQUISITION_ORDER,
+                source_id=order_id,
+                requisition_id=requisition.id,
+                line_no=row_number,
+                operator=current_user,
+                unit_snapshot=consumable.unit,
+            )
             results.append(
                 RequisitionItemOut(
                     consumable_name=consumable.name,
                     quantity=item.quantity,
-                    stock_after=consumable.current_stock,
+                    stock_after=stock_after,
                 )
             )
-            total_quantity += item.quantity
-            requisition = Requisition(
-                consumable_id=item.consumable_id,
-                user_id=owner_id,
-                quantity=item.quantity,
-                stock_after=consumable.current_stock,
-                type="normal",
-                status="active",
-                class_id=consumable.class_id,
-                created_at=created_at,
-                remark=payload.remark,
+            receipt_lines.append(
+                RequisitionReceiptLineOut(
+                    line_no=row_number,
+                    event_id=event.id,
+                    requisition_id=requisition.id,
+                    consumable_id=consumable.id,
+                    consumable_name=consumable.name,
+                    unit=consumable.unit,
+                    quantity=item.quantity,
+                    stock_before=stock_before,
+                    stock_after=stock_after,
+                    business_at=business_at,
+                    posted_at=line_posted_at,
+                )
             )
-            db.add(requisition)
             created.append(requisition)
+            total_quantity += item.quantity
 
-        db.flush()
+        posted_at = business_time.now().replace(microsecond=0)
+        order.status = "submitted"
+        order.posted_at = posted_at
+        order.receipt_json = json.dumps(
+            [line.model_dump(mode="json") for line in receipt_lines],
+            ensure_ascii=False,
+        )
+        order.updated_at = posted_at
         db.add(
             OperationLog(
                 operator_id=current_user.id,
@@ -366,10 +676,14 @@ def create_requisition(
                 before_value=None,
                 after_value=json.dumps(
                     {
-                        "owner_id": owner_id,
+                        "order_no": order.order_no,
+                        "request_id": request_id,
+                        "owner_id": owner.id,
                         "row_count": len(results),
                         "total_quantity": total_quantity,
-                        "created_at": created_at.isoformat(),
+                        "business_at": business_at.isoformat(),
+                        "posted_at": posted_at.isoformat(),
+                        "event_ids": [line.event_id for line in receipt_lines],
                         "items": [item.model_dump() for item in results],
                     },
                     ensure_ascii=False,
@@ -377,12 +691,32 @@ def create_requisition(
             )
         )
         db.commit()
+    except RowError as exc:
+        db.rollback()
+        _mark_rejected(db, order_id, exc)
+        raise exc.as_http() from None
     except HTTPException:
         db.rollback()
         raise
+    except Exception as exc:
+        db.rollback()
+        _mark_rejected(
+            db,
+            order_id,
+            RowError(
+                field="request",
+                code="internal_error",
+                reason="提交处理失败，请稍后凭请求标识查询结果",
+            ),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="提交失败，请稍后凭请求标识查询结果",
+        ) from exc
 
     service.clear_cache()
-    return RequisitionCreateOut(count=len(results), items=results)
+    db.refresh(order)
+    return _create_out_from_order(order)
 
 
 def _record_out(

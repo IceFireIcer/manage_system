@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app import business_time
+from app import business_time, inventory_ledger
 from app.agent import service
 from app.database import get_db
 from app.deps import CurrentUser, require_role
@@ -130,6 +130,7 @@ def create_consumable(
     )
     db.add(consumable)
     db.flush()
+    inventory_ledger.record_opening(db, consumable, admin)
     _log(db, admin, "consumable_create", consumable, None)
     db.commit()
     service.clear_cache()
