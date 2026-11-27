@@ -482,9 +482,27 @@ docker compose exec backend python scripts/manage_accounts.py recover-admin \
 ## 8. 访问验证
 
 ```bash
-# 服务器本机健康检查
+# 服务器本机健康检查（存活探针：只表示进程活着，不访问数据库）
 curl -fsS http://127.0.0.1:4900/api/v1/health
 # 期望：{"status":"ok"}
+
+# 业务就绪（数据库连通、迁移版本、初始化状态），仅在运维入口回环访问
+docker compose exec backend python - <<'PY'
+import json
+import urllib.error
+import urllib.request
+
+url = "http://127.0.0.1:8000/api/v1/bootstrap/readiness"
+try:
+    payload = json.load(urllib.request.urlopen(url))
+except urllib.error.HTTPError as error:
+    payload = json.load(error)
+print(payload)
+PY
+# 期望：ready=true 且 checks.database=ok、checks.migration=current、checks.bootstrap=ready
+
+# 运维观测（异常窗口、备份、磁盘与告警），仅在运维入口回环访问
+docker compose exec backend python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8000/api/v1/ops/observability').read().decode())"
 
 # 检查首页
 curl -sI http://127.0.0.1:4900/ | head -1
@@ -498,6 +516,10 @@ curl -fsS https://<正式域名>/api/v1/health              # 期望 {"status":"
 # 确认管理员已初始化
 docker compose logs backend | grep bootstrap
 ```
+
+> 存活探针与业务就绪已分开：`/api/v1/health` 不访问数据库，仅用于容器 `healthcheck` 判断进程存活；`/api/v1/bootstrap/readiness` 检查数据库连通、迁移版本与管理员初始化，数据库不可用或迁移落后时返回 503，数据库恢复后自动恢复就绪。静态页可打开不再等同于业务就绪；两个探针与运维观测只允许容器内回环直接访问，外部无法用于探测内部状态。
+>
+> 每个响应都带 `X-Request-Id` 响应头（请求方传入合法编号时沿用，否则服务端生成）。请求日志（`app.request`）、模型回退日志（`app.agent.llm`）与数据库异常日志记录同一编号；页面在权限失败或 5xx 时显示的提示也附带请求编号。班委报障时请其提供页面上的请求编号，用它在日志中定位对应请求。
 
 浏览器访问 `http://<服务器公网IP>:4900/`（或 `http://<IP>:<WEB_PORT>/`）；正式环境访问 `https://<正式域名>/`（按第 5.1 节叠加 HTTPS 文件，80 端口自动跳转）：
 
@@ -605,7 +627,7 @@ docker compose up -d
 | 备份周期 | 每日至少一次，建议业务低峰（如 02:00）；迁移、升级、批量导入前必须临时备份一次 |
 | 保留期 | 默认 14 天（`--retention-days` / `RETENTION_DAYS` 可调），迁移前备份单独长期留存 |
 | 独立副本 | 备份写入宿主机目录，并复制到 `backups/copies/`；须再同步到异机或对象存储，不与数据库同盘同机 |
-| 失败反馈 | 任一步失败以非零码退出，并向 `backups/backup-failed.log` 追加失败时间；接入定时任务时以退出码触发告警 |
+| 失败反馈 | 任一步失败以非零码退出，并向 `backups/backup-failed.log` 追加失败时间；接入定时任务时以退出码触发告警。后端通过只读挂载读取该目录，`GET /api/v1/ops/observability` 的 `backup` 与 `alerts` 会报告失败或备份过期 |
 
 手工备份：
 
@@ -686,6 +708,8 @@ docker compose exec backend alembic current
 | `docker compose up` 报 `port is already allocated` | 4900 被宿主机 nginx/apache 占用：`sudo ss -lntp \| grep :4900`；或把 `.env` 的 `WEB_PORT` 改为 4901 并放行安全组 |
 | `db` 反复重启 / `Access denied for user 'root'` | 初始化时的密码已固化在数据卷；改过 `.env` 密码需要 `docker compose down -v`（**会删数据**）或进入容器 `ALTER USER` |
 | `backend` 一直 `unhealthy` | `docker compose logs backend`；常见原因：密码含特殊字符导致 `DATABASE_URL` 非法、db 尚未就绪、迁移失败 |
+| 页面提示带「请求编号」 | 用编号检索后端日志定位同一请求：`docker compose logs backend \| grep '<请求编号>'`；同时覆盖访问日志、数据库异常与模型回退 |
+| 就绪检测返回 503 | 查看响应 `checks`：`database=unavailable` 说明数据库不可用，先恢复 `db`；`migration=outdated/missing` 说明未完成迁移，执行 `docker compose exec backend alembic upgrade head`；`bootstrap=needs_initialization/needs_recovery` 按第 7 节处理 |
 | 日志中看不到 `[bootstrap]` 初始密码 | 多为管理员已存在（`管理员账号已存在，跳过`）；如确实缺失，执行 `docker compose exec backend python scripts/bootstrap_admin.py` 查看输出 |
 | 忘记管理员密码 | 使用 [README「管理员初始化」](../README.md#管理员初始化) 的容器内脚本直接更新哈希 |
 | 页面正常但刷新子路由 404 | 确认 `frontend/nginx.conf` 中 `try_files ... /index.html` 存在（本仓库已内置），并重建 web 镜像 |

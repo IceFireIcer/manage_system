@@ -62,6 +62,12 @@ class Settings(BaseSettings):
     trusted_hosts: str = ""
     trusted_proxies: str = ""
 
+    ops_backup_dir: str = ""
+    ops_backup_max_age_hours: int = 36
+    ops_disk_min_free_mb: int = 500
+    ops_error_window_seconds: int = 300
+    ops_error_alert_threshold: int = 5
+
     @field_validator("cookie_secure", mode="before")
     @classmethod
     def _blank_bool_as_none(cls, value: object) -> object:
