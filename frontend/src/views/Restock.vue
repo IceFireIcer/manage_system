@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import api from '../api'
 import { useUserStore } from '../stores/user'
 import PageHeader from '../components/PageHeader.vue'
@@ -31,6 +31,7 @@ const TIER_FILTERS = [
 ]
 
 const router = useRouter()
+const route = useRoute()
 const userStore = useUserStore()
 const isAdmin = computed(() => userStore.user?.role === 'admin')
 
@@ -57,6 +58,13 @@ const restockDialog = reactive({
   fieldError: '',
   errorKind: '',
   errorMessage: '',
+})
+
+const receiptDialog = reactive({
+  visible: false,
+  loading: false,
+  error: '',
+  data: null,
 })
 
 let requestSeq = 0
@@ -269,8 +277,42 @@ function goLogs() {
   router.push('/logs')
 }
 
+function formatReceiptTime(value) {
+  if (!value) return '—'
+  const matched = String(value)
+    .replace('T', ' ')
+    .match(/^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})/)
+  return matched ? `${matched[1]} ${matched[2]}` : String(value)
+}
+
+function receiptStatusLabel(status) {
+  return (
+    { submitted: '已提交', processing: '处理中', rejected: '已驳回' }[status] ?? status
+  )
+}
+
+async function openRouteReceipt() {
+  const orderNo = route.query.order_no
+  if (!orderNo) return
+  receiptDialog.visible = true
+  receiptDialog.loading = true
+  receiptDialog.error = ''
+  try {
+    const { data } = await api.get(
+      `/inventory/restock/orders/${encodeURIComponent(String(orderNo))}`,
+    )
+    receiptDialog.data = data
+  } catch {
+    receiptDialog.data = null
+    receiptDialog.error = '入库单读取失败，可能尚未生成回执或已被替代。'
+  } finally {
+    receiptDialog.loading = false
+  }
+}
+
 onMounted(() => {
   fetchSuggestions()
+  openRouteReceipt()
 })
 
 onBeforeUnmount(() => {
@@ -592,6 +634,84 @@ onBeforeUnmount(() => {
         </el-button>
       </template>
     </el-dialog>
+
+    <el-dialog
+      v-model="receiptDialog.visible"
+      :title="receiptDialog.data ? `入库单 ${receiptDialog.data.order_no}` : '入库单详情'"
+      width="680px"
+    >
+      <div v-if="receiptDialog.loading" class="restock__receipt">
+        <el-skeleton :rows="4" animated />
+      </div>
+      <div v-else-if="receiptDialog.error" class="restock__receipt">
+        <el-alert
+          type="error"
+          :closable="false"
+          show-icon
+          title="无法读取入库单"
+          :description="receiptDialog.error"
+        />
+      </div>
+      <div v-else-if="receiptDialog.data" class="restock__receipt">
+        <div class="restock__summary">
+          <div class="restock__summary-row">
+            <span class="restock__summary-label">状态</span>
+            <span class="restock__summary-value">
+              {{ receiptStatusLabel(receiptDialog.data.status) }}
+            </span>
+          </div>
+          <div class="restock__summary-row">
+            <span class="restock__summary-label">经办人</span>
+            <span class="restock__summary-value">{{ receiptDialog.data.operator_name }}</span>
+          </div>
+          <div class="restock__summary-row">
+            <span class="restock__summary-label">业务时间</span>
+            <span class="restock__summary-value">
+              {{ formatReceiptTime(receiptDialog.data.business_at) }}
+            </span>
+          </div>
+          <div class="restock__summary-row">
+            <span class="restock__summary-label">入账时间</span>
+            <span class="restock__summary-value">
+              {{ formatReceiptTime(receiptDialog.data.posted_at) }}
+            </span>
+          </div>
+          <div v-if="receiptDialog.data.source" class="restock__summary-row">
+            <span class="restock__summary-label">来源</span>
+            <span class="restock__summary-value">{{ receiptDialog.data.source }}</span>
+          </div>
+          <div v-if="receiptDialog.data.remark" class="restock__summary-row">
+            <span class="restock__summary-label">备注</span>
+            <span class="restock__summary-value">{{ receiptDialog.data.remark }}</span>
+          </div>
+        </div>
+
+        <el-table :data="receiptDialog.data.lines" class="table-dense">
+          <el-table-column label="耗材" min-width="140">
+            <template #default="{ row }">{{ row.consumable_name }}</template>
+          </el-table-column>
+          <el-table-column label="入库数量" width="110" align="right">
+            <template #default="{ row }">{{ row.quantity }}{{ row.unit }}</template>
+          </el-table-column>
+          <el-table-column label="变动前" width="90" align="right">
+            <template #default="{ row }">{{ row.stock_before }}</template>
+          </el-table-column>
+          <el-table-column label="变动后" width="90" align="right">
+            <template #default="{ row }">{{ row.stock_after }}</template>
+          </el-table-column>
+          <el-table-column label="已纠错" width="90" align="right">
+            <template #default="{ row }">{{ row.corrected_quantity }}</template>
+          </el-table-column>
+          <el-table-column label="入账时间" min-width="160">
+            <template #default="{ row }">{{ formatReceiptTime(row.posted_at) }}</template>
+          </el-table-column>
+        </el-table>
+      </div>
+
+      <template #footer>
+        <el-button type="primary" @click="receiptDialog.visible = false">关闭</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -849,6 +969,12 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   gap: 20px;
+}
+
+.restock__receipt {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
 }
 
 .restock__summary {
