@@ -64,6 +64,7 @@ class ConsumableUpdate(BaseModel):
     location: str | None = Field(default=None, min_length=1, max_length=64)
     safety_stock: int | None = Field(default=None, ge=0)
     current_stock: int | None = None
+    expected_version: int | None = Field(default=None, ge=1)
 
     @field_validator("name", "spec", "unit", "location", mode="after")
     @classmethod
@@ -81,6 +82,16 @@ class ConsumableUpdate(BaseModel):
 
 class ConsumableStatusUpdate(BaseModel):
     status: Literal["enabled", "disabled"]
+    reason: str | None = Field(default=None, max_length=255)
+    expected_version: int | None = Field(default=None, ge=1)
+
+    @field_validator("reason", mode="after")
+    @classmethod
+    def normalize_reason(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        stripped = value.strip()
+        return stripped or None
 
 
 class ConsumableOut(BaseModel):
@@ -95,6 +106,8 @@ class ConsumableOut(BaseModel):
     class_id: int
     status: str
     low_stock: bool
+    disabled_reason: str | None = None
+    version: int
 
 
 def snapshot(consumable) -> str:
@@ -109,9 +122,43 @@ def snapshot(consumable) -> str:
             "safety_stock": consumable.safety_stock,
             "current_stock": consumable.current_stock,
             "status": consumable.status,
+            "disabled_reason": consumable.disabled_reason,
+            "version": consumable.version,
         },
         ensure_ascii=False,
     )
+
+
+class PendingReceiptOut(BaseModel):
+    order_no: str
+    quantity: int
+    created_at: datetime | None = None
+
+
+class PendingActionOut(BaseModel):
+    kind: str
+    label: str
+    count: int
+
+
+class DeactivationPreviewOut(BaseModel):
+    consumable: ConsumableOut
+    disabled_stock: int | None = None
+    disabled_at: datetime | None = None
+    disabled_by_name: str | None = None
+    pending_receipts: list[PendingReceiptOut] = Field(default_factory=list)
+    pending_actions: list[PendingActionOut] = Field(default_factory=list)
+
+
+class StatusAuditOut(BaseModel):
+    previous_stock: int | None = None
+    current_stock: int
+    balance_changed: bool
+    reason: str | None = None
+
+
+class ConsumableStatusOut(ConsumableOut):
+    audit: StatusAuditOut
 
 
 class ImportRowErrorOut(BaseModel):
