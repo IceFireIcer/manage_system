@@ -5,6 +5,7 @@ import api from '../api'
 import PageHeader from '../components/PageHeader.vue'
 import EmptyState from '../components/EmptyState.vue'
 import InventoryAuditDrawer from '../components/InventoryAuditDrawer.vue'
+import RestockDialog from '../components/RestockDialog.vue'
 import OverviewGettingStarted from '../components/OverviewGettingStarted.vue'
 import { useUserStore } from '../stores/user'
 import { businessToday } from '../utils/businessDate'
@@ -45,6 +46,11 @@ const audit = reactive({
   visible: false,
   consumableId: null,
   consumableName: '',
+})
+
+const receive = reactive({
+  visible: false,
+  row: null,
 })
 
 const viewportWidth = ref(window.innerWidth)
@@ -273,6 +279,15 @@ function openAudit(row) {
   audit.consumableId = row.id
   audit.consumableName = row.name
   audit.visible = true
+}
+
+function openReceive(row) {
+  receive.row = row
+  receive.visible = true
+}
+
+function handleReceived() {
+  fetchOverview()
 }
 
 function formatClock(value) {
@@ -512,7 +527,7 @@ onBeforeUnmount(() => {
             </template>
           </el-table-column>
 
-          <el-table-column label="操作" width="240" align="right">
+          <el-table-column label="操作" width="300" align="right">
             <template #default="{ row }">
               <div class="overview__row-actions">
                 <el-button
@@ -524,6 +539,9 @@ onBeforeUnmount(() => {
                   登记领用
                 </el-button>
                 <span v-if="row.is_out" class="overview__hint overview__hint--out">当前缺货</span>
+                <el-button v-if="isAdmin" link type="primary" @click="openReceive(row)">
+                  收货
+                </el-button>
                 <el-button v-if="canAudit" link type="primary" @click="openAudit(row)">
                   查库存变动
                 </el-button>
@@ -562,6 +580,7 @@ onBeforeUnmount(() => {
               登记领用
             </el-button>
             <span v-if="row.is_out" class="overview__hint overview__hint--out">当前缺货</span>
+            <el-button v-if="isAdmin" size="small" @click="openReceive(row)">收货</el-button>
             <el-button v-if="canAudit" size="small" @click="openAudit(row)">查库存变动</el-button>
           </div>
         </li>
@@ -572,6 +591,12 @@ onBeforeUnmount(() => {
       v-model="audit.visible"
       :consumable-id="audit.consumableId"
       :consumable-name="audit.consumableName"
+    />
+
+    <RestockDialog
+      v-model="receive.visible"
+      :consumable="receive.row"
+      @completed="handleReceived"
     />
   </div>
 </template>

@@ -20,6 +20,7 @@ const ACTIONS = [
   { value: 'requisition_create', label: '领用登记', tagClass: 'status-tag--info' },
   { value: 'requisition_reverse', label: '撤销领用', tagClass: 'status-tag--reversal' },
   { value: 'restock', label: '补货入库', tagClass: 'status-tag--success' },
+  { value: 'restock_correction', label: '入库纠错', tagClass: 'status-tag--warning' },
   { value: 'consumable_create', label: '耗材建档', tagClass: 'status-tag--info' },
   { value: 'consumable_update', label: '耗材修改', tagClass: 'status-tag--info' },
   { value: 'consumable_disable', label: '耗材停用', tagClass: 'status-tag--danger' },
@@ -285,6 +286,12 @@ function summaryText(row) {
       if (!after) return row.remark || '—'
       const beforeStock = before?.current_stock ?? after.stock_before
       return `入库 ${after.quantity}，库存 ${beforeStock} → ${after.current_stock}`
+    }
+    case 'restock_correction': {
+      if (!after) return row.remark || '—'
+      const beforeStock = before?.current_stock ?? '—'
+      const reason = after.reason ? `；原因：${after.reason}` : ''
+      return `纠错扣回 ${Math.abs(after.quantity)}，库存 ${beforeStock} → ${after.current_stock}${reason}`
     }
     case 'consumable_create':
       return after

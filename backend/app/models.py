@@ -151,6 +151,104 @@ class InventoryEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
 
 
+class RestockOrder(Base):
+    __tablename__ = "restock_orders"
+    __table_args__ = (
+        UniqueConstraint("order_no", name="uq_restock_orders_order_no"),
+        UniqueConstraint("request_id", name="uq_restock_orders_request_id"),
+        CheckConstraint(
+            "status IN ('processing','submitted','rejected')",
+            name="ck_restock_orders_status",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    order_no: Mapped[str] = mapped_column(String(40), nullable=False)
+    request_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="processing")
+    source: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    operator_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    operator_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    operator_role: Mapped[str] = mapped_column(String(16), nullable=False)
+    class_id: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    business_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False)
+    posted_at: Mapped[datetime | None] = mapped_column(DATETIME, nullable=True)
+    remark: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    items_signature: Mapped[str] = mapped_column(Text, nullable=False)
+    receipt_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    errors_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
+    updated_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
+
+
+class RestockLine(Base):
+    __tablename__ = "restock_lines"
+    __table_args__ = (
+        UniqueConstraint("order_id", "line_no", name="uq_restock_lines_order_line"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    order_id: Mapped[int] = mapped_column(ForeignKey("restock_orders.id"), nullable=False)
+    line_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    consumable_id: Mapped[int] = mapped_column(ForeignKey("consumables.id"), nullable=False)
+    consumable_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    unit: Mapped[str] = mapped_column(String(16), nullable=False)
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    stock_before: Mapped[int] = mapped_column(Integer, nullable=False)
+    stock_after: Mapped[int] = mapped_column(Integer, nullable=False)
+    corrected_quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    event_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
+
+
+class RestockCorrection(Base):
+    __tablename__ = "restock_corrections"
+    __table_args__ = (
+        UniqueConstraint("request_id", name="uq_restock_corrections_request_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    order_id: Mapped[int] = mapped_column(ForeignKey("restock_orders.id"), nullable=False)
+    line_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    request_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    operator_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    operator_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    operator_role: Mapped[str] = mapped_column(String(16), nullable=False)
+    class_id: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    business_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False)
+    posted_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False)
+    event_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    remark: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
+
+
+class RestockDisposition(Base):
+    __tablename__ = "restock_dispositions"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending','awaiting','partial','resolved')",
+            name="ck_restock_dispositions_status",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    consumable_id: Mapped[int] = mapped_column(
+        ForeignKey("consumables.id"), nullable=False, index=True
+    )
+    class_id: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
+    handler_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    handler_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    order_id: Mapped[int | None] = mapped_column(ForeignKey("restock_orders.id"), nullable=True)
+    order_no: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    note: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
+    updated_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
+
+
 class OperationLog(Base):
     __tablename__ = "operation_logs"
 

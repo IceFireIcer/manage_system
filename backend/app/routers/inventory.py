@@ -1,15 +1,23 @@
-import json
+import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func, select, update
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app import business_time, inventory_ledger
+from app import business_time, inventory_ledger, restock
 from app.agent import service
 from app.database import get_db
 from app.deps import CurrentUser, require_role
-from app.models import Consumable, OperationLog, Requisition, RequisitionOrder, User
+from app.models import (
+    Consumable,
+    Requisition,
+    RequisitionOrder,
+    RestockOrder,
+    User,
+)
 from app.schemas_consumables import STATUS_ENABLED
 from app.schemas_inventory import (
     InventoryEventOut,
@@ -20,6 +28,16 @@ from app.schemas_inventory import (
     RestockCreate,
     RestockOut,
     SuggestionListOut,
+)
+from app.schemas_restock import (
+    RestockCorrectionCreate,
+    RestockCorrectionOut,
+    RestockItemIn,
+    RestockOrderCreate,
+    RestockReceiptOut,
+    RestockRequestStatusOut,
+    SuggestionDispositionOut,
+    SuggestionDispositionUpdate,
 )
 
 router = APIRouter(prefix="/api/v1/inventory", tags=["inventory"])
@@ -141,6 +159,22 @@ def get_inventory_ledger(
         if order_ids
         else {}
     )
+    restock_ids = {
+        event.source_id
+        for event in events
+        if event.source_type == inventory_ledger.SOURCE_RESTOCK_ORDER
+        and event.source_id is not None
+    }
+    restock_numbers = (
+        {
+            order.id: order.order_no
+            for order in db.scalars(
+                select(RestockOrder).where(RestockOrder.id.in_(restock_ids))
+            )
+        }
+        if restock_ids
+        else {}
+    )
 
     consistent = bool(events) and events[-1].stock_after == consumable.current_stock
     if consistent:
@@ -175,7 +209,8 @@ def get_inventory_ledger(
                 posted_at=event.posted_at,
                 source_type=event.source_type,
                 source_id=event.source_id,
-                order_no=order_numbers.get(event.source_id),
+                order_no=order_numbers.get(event.source_id)
+                or restock_numbers.get(event.source_id),
                 requisition_id=event.requisition_id,
                 line_no=event.line_no,
                 operator_id=event.operator_id,
@@ -195,71 +230,154 @@ def restock_consumable(
     db: Annotated[Session, Depends(get_db)],
     admin: AdminUser,
 ) -> RestockOut:
-    consumable = db.get(Consumable, payload.consumable_id)
-    if consumable is None:
+    order = restock.create_restock_order(
+        db,
+        items=[
+            RestockItemIn(
+                consumable_id=payload.consumable_id, quantity=payload.quantity
+            )
+        ],
+        operator=admin,
+        request_id=payload.request_id,
+        received_at=payload.received_at,
+        source=payload.source or "manual",
+        remark=payload.remark,
+    )
+    receipt = restock.receipt_from_order(db, order)
+    if not receipt.lines:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="入库结果不完整，请凭请求标识查询处理状态",
+        )
+    line = receipt.lines[0]
+    service.clear_cache(line.consumable_id)
+    return RestockOut(
+        consumable_id=line.consumable_id,
+        consumable_name=line.consumable_name,
+        unit=line.unit,
+        quantity=line.quantity,
+        stock_before=line.stock_before,
+        stock_after=line.stock_after,
+        order_no=receipt.order_no,
+        request_id=receipt.request_id,
+        source=receipt.source,
+        business_at=receipt.business_at,
+        posted_at=receipt.posted_at,
+    )
+
+
+@router.post("/restock/orders")
+def create_restock_order(
+    payload: RestockOrderCreate,
+    db: Annotated[Session, Depends(get_db)],
+    admin: AdminUser,
+) -> JSONResponse:
+    request_id = payload.request_id or uuid.uuid4().hex
+    existing = restock.get_order_by_request(db, request_id)
+    order = restock.create_restock_order(
+        db,
+        items=payload.items,
+        operator=admin,
+        request_id=request_id,
+        received_at=payload.received_at,
+        source=payload.source,
+        remark=payload.remark,
+    )
+    service.clear_cache()
+    if order.status == "submitted":
+        created = existing is None
+        return JSONResponse(
+            status_code=(
+                status.HTTP_201_CREATED if created else status.HTTP_200_OK
+            ),
+            content=jsonable_encoder(restock.receipt_from_order(db, order)),
+        )
+    if order.status == "rejected":
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content=jsonable_encoder(restock.request_status(db, order)),
+        )
+    return JSONResponse(
+        status_code=status.HTTP_202_ACCEPTED,
+        content=jsonable_encoder(restock.request_status(db, order)),
+    )
+
+
+@router.get("/restock/requests/{request_id}")
+def get_restock_request_status(
+    request_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    staff: StaffUser,
+) -> RestockRequestStatusOut:
+    order = restock.get_order_by_request(db, request_id)
+    if order is None or order.class_id != staff.class_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="请求不存在"
+        )
+    return restock.request_status(db, order)
+
+
+@router.get("/restock/orders/{order_no}")
+def get_restock_receipt(
+    order_no: str,
+    db: Annotated[Session, Depends(get_db)],
+    staff: StaffUser,
+) -> RestockReceiptOut:
+    order = restock.get_order_by_no(db, order_no)
+    if order is None or order.class_id != staff.class_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="入库单不存在"
+        )
+    if order.status != "submitted":
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="回执尚未生成，请按请求标识查询处理状态",
+        )
+    return restock.receipt_from_order(db, order)
+
+
+@router.post("/restock/orders/{order_no}/corrections")
+def correct_restock_order(
+    order_no: str,
+    payload: RestockCorrectionCreate,
+    db: Annotated[Session, Depends(get_db)],
+    admin: AdminUser,
+) -> RestockCorrectionOut:
+    order = restock.get_order_by_no(db, order_no)
+    if order is None or order.class_id != admin.class_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="入库单不存在"
+        )
+    if order.status != "submitted":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="仅已提交的入库单可以纠错",
+        )
+    result = restock.correct_restock_order(
+        db, order=order, payload=payload, operator=admin
+    )
+    service.clear_cache(result.consumable_id)
+    return result
+
+
+@router.patch("/suggestions/{consumable_id}/disposition")
+def update_suggestion_disposition(
+    consumable_id: int,
+    payload: SuggestionDispositionUpdate,
+    db: Annotated[Session, Depends(get_db)],
+    admin: AdminUser,
+) -> SuggestionDispositionOut:
+    consumable = db.get(Consumable, consumable_id)
+    if consumable is None or consumable.class_id != admin.class_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="耗材不存在"
         )
-    if consumable.status != STATUS_ENABLED:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"耗材「{consumable.name}」已停用，不可入库",
-        )
-
-    stock_before = consumable.current_stock
-    try:
-        matched = db.execute(
-            update(Consumable)
-            .where(
-                Consumable.id == payload.consumable_id,
-                Consumable.status == STATUS_ENABLED,
-            )
-            .values(current_stock=Consumable.current_stock + payload.quantity)
-        )
-        if matched.rowcount == 0:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"耗材「{consumable.name}」状态已变更，不可入库",
-            )
-        db.flush()
-        db.refresh(consumable)
-        stock_after = consumable.current_stock
-        consumable.updated_at = business_time.now()
-
-        db.add(
-            OperationLog(
-                operator_id=admin.id,
-                role=admin.role,
-                action="restock",
-                target_type="consumable",
-                target_id=consumable.id,
-                before_value=json.dumps(
-                    {"consumable_id": consumable.id, "current_stock": stock_before},
-                    ensure_ascii=False,
-                ),
-                after_value=json.dumps(
-                    {
-                        "consumable_id": consumable.id,
-                        "current_stock": stock_after,
-                        "quantity": payload.quantity,
-                    },
-                    ensure_ascii=False,
-                ),
-                remark=payload.remark,
-            )
-        )
-        db.commit()
-    except HTTPException:
-        db.rollback()
-        raise
-
-    service.clear_cache(consumable.id)
-    db.refresh(consumable)
-    return RestockOut(
-        consumable_id=consumable.id,
-        consumable_name=consumable.name,
-        unit=consumable.unit,
-        quantity=payload.quantity,
-        stock_before=stock_before,
-        stock_after=stock_after,
+    result = restock.update_disposition(
+        db,
+        consumable=consumable,
+        operator=admin,
+        next_status=payload.status,
+        note=payload.note,
     )
+    service.clear_cache(consumable_id)
+    return result
