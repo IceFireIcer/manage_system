@@ -423,21 +423,87 @@ docker compose up -d
 
 ### 11.3 备份与恢复
 
+> 对应补充 PRD FR-S7-02 / P0-09。备份与恢复脚本位于 `scripts/db-backup.sh` 与 `scripts/db-restore-rehearsal.sh`，不引入新的运行时依赖（仅使用 `mysqldump` / `mysql` / `sha256sum` 等容器与系统自带工具）。演练只用一次性隔离容器，不触碰正式库。
+
+#### 11.3.1 备份策略（周期 / 保留期 / 独立副本 / 失败反馈）
+
+| 项目 | 约定 |
+| --- | --- |
+| 备份周期 | 每日至少一次，建议业务低峰（如 02:00）；迁移、升级、批量导入前必须临时备份一次 |
+| 保留期 | 默认 14 天（`--retention-days` / `RETENTION_DAYS` 可调），迁移前备份单独长期留存 |
+| 独立副本 | 备份写入宿主机目录，并复制到 `backups/copies/`；须再同步到异机或对象存储，不与数据库同盘同机 |
+| 失败反馈 | 任一步失败以非零码退出，并向 `backups/backup-failed.log` 追加失败时间；接入定时任务时以退出码触发告警 |
+
+手工备份：
+
 ```bash
 cd /opt/manage_system
-set -a; . ./.env; set +a     # 载入 MYSQL_ROOT_PASSWORD
-
-# 备份
-docker compose exec -T db mysqldump -uroot -p"$MYSQL_ROOT_PASSWORD" \
-  --single-transaction --routines manage_system > "backup_$(date +%F_%H%M).sql"
-
-# 恢复（先停应用写入，避免并发写）
-docker compose stop backend
-docker compose exec -T db mysql -uroot -p"$MYSQL_ROOT_PASSWORD" manage_system < backup_2026-11-27_1200.sql
-docker compose start backend
+mkdir -p backups
+scripts/db-backup.sh --backup-dir ./backups --retention-days 14
 ```
 
-建议把备份输出目录（或 `mysql_data` 卷目录）纳入云盘快照/定时任务。
+定时备份（cron，示例每日 02:00；失败时写 syslog 便于告警）：
+
+```bash
+0 2 * * * cd /opt/manage_system && ./scripts/db-backup.sh --backup-dir ./backups --retention-days 14 >> ./backups/backup.log 2>&1 || logger -t labstock-backup "备份失败"
+```
+
+#### 11.3.2 备份清单（镜像与迁移版本）
+
+每次备份同时生成同名 `.manifest`，记录 `backup_file`、`created_at`、`database`、`image_tag`、`migration_version`、`size_bytes`、`sha256`。升级/回滚时以清单记录的镜像标签与迁移版本作为对照基线：
+
+```bash
+cat backups/manage_system_<时间戳>.manifest
+docker compose exec backend alembic current   # 与清单 migration_version 核对
+```
+
+#### 11.3.3 隔离库恢复演练（不触碰正式库）
+
+演练脚本在一次性 `mysql:8.0` 容器中恢复备份，核对账号（users）、台账（consumables）、领用流水（requisitions）、入库记录（operation_logs 中 action=restock）与操作日志（operation_logs），记录恢复耗时与可接受丢失量，输出报告到 `backups/rehearsals/`：
+
+```bash
+cd /opt/manage_system
+scripts/db-restore-rehearsal.sh \
+  --backup-file backups/manage_system_<时间戳>.sql \
+  --report-dir backups/rehearsals \
+  --max-data-loss-minutes 60
+```
+
+报告包含备份文件、镜像标签、备份与恢复后迁移版本、数据库兼容判定、恢复耗时、可接受丢失量与各表行数。仅当报告显示存在启用账号且各表可读，才算「能从独立备份恢复出可登录、可核对的系统」。
+
+#### 11.3.4 升级前检查与回滚兼容
+
+```bash
+cd /opt/manage_system
+# 1) 升级前先取得可读备份并核对清单
+scripts/db-backup.sh --backup-dir ./backups
+cat backups/manage_system_<时间戳>.manifest
+
+# 2) 在隔离库演练恢复，确认迁移版本与待回滚镜像兼容
+scripts/db-restore-rehearsal.sh --backup-file backups/manage_system_<时间戳>.sql
+
+# 3) 记录当前镜像与迁移版本后，再执行第 10 节升级步骤
+docker compose config | grep "image: ghcr.io"
+docker compose exec backend alembic current
+```
+
+- 回滚镜像前确认旧版本代码与当前表结构兼容；不可逆迁移先按 11.3.3 演练并准备恢复备份。
+- 恢复正式库前先停应用写入（`docker compose stop backend`），恢复完成后再 `docker compose start backend`，避免并发写；正式库恢复只能由校方授权人/运维执行并留存记录。
+
+#### 11.3.5 验收记录模板
+
+| 字段 | 记录值 |
+| --- | --- |
+| 备份文件位置 | `backups/manage_system_<时间戳>.sql` |
+| 独立副本位置 | `backups/copies/` 与异机/对象存储路径 |
+| 镜像标签 | 来自 `.manifest` 的 `image_tag` |
+| 数据库迁移版本 | 来自 `.manifest` 的 `migration_version` |
+| 恢复耗时 | 演练报告中的「恢复耗时」（秒） |
+| 可接受丢失量 | 演练报告中的「可接受丢失量」（分钟，对照阈值） |
+| 核对结果 | 账号 / 台账 / 入库 / 操作日志行数 |
+| 结论 | 是否可登录、可核对 |
+
+建议把备份输出目录（或 `mysql_data` 卷目录）纳入云盘快照/定时任务，并对 `backup-failed.log` 设置告警。
 
 ## 12. 常见问题排查
 
@@ -542,7 +608,7 @@ IMAGE_TAG="$(date +%Y%m%d%H%M)" bash scripts/ci/stage3-image-publish.sh
 - [ ] 已从日志获取管理员初始密码并**立即修改**，新密码妥善保存
 - [ ] 未将 `ADMIN_INIT_PASSWORD` 明文长期保留在 `.env` 或交付材料中
 - [ ] 安全组仅放行 22 / 4900（或自定义端口），不暴露 3306 / 8000
-- [ ] 配置数据库定期备份与磁盘快照
+- [ ] 已按 11.3.1 配置每日备份与保留期，备份写入独立副本并完成一次隔离库恢复演练（11.3.3）
 - [ ] GHCR 包可见性已确认：公开拉取，或服务器已用带 `read:packages` 的 PAT 登录
 - [ ] GitHub Actions（`ci.yml`、`docker-publish.yml`）在 `main` 上通过，GHCR 存在可用 `sha-<short>` 或 `v*` 标签
 - [ ] 建议接入 HTTPS：在前置 nginx/Caddy 或云负载均衡上终止 TLS（当前 Compose 默认 HTTP）
