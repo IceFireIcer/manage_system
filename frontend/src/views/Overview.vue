@@ -5,6 +5,7 @@ import api from '../api'
 import PageHeader from '../components/PageHeader.vue'
 import EmptyState from '../components/EmptyState.vue'
 import InventoryAuditDrawer from '../components/InventoryAuditDrawer.vue'
+import InventoryCountDialog from '../components/InventoryCountDialog.vue'
 import RestockDialog from '../components/RestockDialog.vue'
 import OverviewGettingStarted from '../components/OverviewGettingStarted.vue'
 import { useUserStore } from '../stores/user'
@@ -51,6 +52,10 @@ const audit = reactive({
 const receive = reactive({
   visible: false,
   row: null,
+})
+
+const inventoryCount = reactive({
+  visible: false,
 })
 
 const viewportWidth = ref(window.innerWidth)
@@ -372,6 +377,7 @@ onBeforeUnmount(() => {
           <el-icon :size="16"><Refresh /></el-icon>
           <span class="overview__button-text">刷新</span>
         </el-button>
+        <el-button v-if="isAdmin" @click="inventoryCount.visible = true">库存盘点</el-button>
         <el-button type="primary" @click="goRequisition()">登记领用</el-button>
       </template>
     </PageHeader>
@@ -613,6 +619,12 @@ onBeforeUnmount(() => {
       v-model="receive.visible"
       :consumable="receive.row"
       @completed="handleReceived"
+    />
+
+    <InventoryCountDialog
+      v-model="inventoryCount.visible"
+      :consumables="items"
+      @completed="fetchOverview"
     />
   </div>
 </template>

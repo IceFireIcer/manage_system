@@ -8,12 +8,13 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app import business_time, inventory_audit, inventory_ledger, restock
+from app import business_time, inventory_audit, inventory_count, inventory_ledger, restock
 from app.agent import service
 from app.database import get_db
 from app.deps import CurrentUser, require_role
 from app.models import (
     Consumable,
+    InventoryCount,
     Requisition,
     RequisitionOrder,
     RequisitionReturn,
@@ -28,6 +29,9 @@ from app.schemas_inventory import (
     AuditEventOut,
     AuditRangeOut,
     InventoryAuditOut,
+    InventoryCountCreate,
+    InventoryCountLinesUpdate,
+    InventoryCountOut,
     InventoryEventOut,
     InventoryItemOut,
     InventoryLedgerOut,
@@ -118,6 +122,7 @@ def _event_order_no(
     restock_numbers: dict,
     return_numbers: dict | None = None,
     scrap_numbers: dict | None = None,
+    count_numbers: dict | None = None,
 ) -> str | None:
     if event.source_type in (
         inventory_ledger.SOURCE_REQUISITION_REVERSAL,
@@ -132,7 +137,29 @@ def _event_order_no(
         return (return_numbers or {}).get(event.source_id)
     if event.source_type == inventory_ledger.SOURCE_REQUISITION_SCRAP:
         return (scrap_numbers or {}).get(event.source_id)
+    if event.source_type == inventory_ledger.SOURCE_INVENTORY_COUNT:
+        return (count_numbers or {}).get(event.source_id)
     return None
+
+
+def _source_ids(events, source_type: str) -> set[int]:
+    return {
+        event.source_id
+        for event in events
+        if event.source_type == source_type and event.source_id is not None
+    }
+
+
+def _resolve_count_numbers(db: Session, events) -> dict:
+    count_ids = _source_ids(events, inventory_ledger.SOURCE_INVENTORY_COUNT)
+    if not count_ids:
+        return {}
+    return {
+        record.id: record.order_no
+        for record in db.scalars(
+            select(InventoryCount).where(InventoryCount.id.in_(count_ids))
+        )
+    }
 
 
 @router.get("/overview", response_model_exclude_none=True)
@@ -267,6 +294,7 @@ def get_inventory_ledger(
         if scrap_ids
         else {}
     )
+    count_numbers = _resolve_count_numbers(db, events)
 
     consistent = bool(events) and events[-1].stock_after == consumable.current_stock
     if consistent:
@@ -309,6 +337,7 @@ order_no=_event_order_no(
                     restock_numbers,
                     return_numbers,
                     scrap_numbers,
+                    count_numbers,
                 ),
                 requisition_id=event.requisition_id,
                 line_no=event.line_no,
@@ -342,13 +371,18 @@ def get_inventory_audit(
     requisition_numbers, order_numbers, restock_numbers = _resolve_order_numbers(
         db, events
     )
+    count_numbers = _resolve_count_numbers(db, events)
     by_id = {event.id: event for event in events}
 
     def to_out(
         event, stock_before: int | None = None, stock_after: int | None = None
     ) -> AuditEventOut:
         order_no = _event_order_no(
-            event, requisition_numbers, order_numbers, restock_numbers
+            event,
+            requisition_numbers,
+            order_numbers,
+            restock_numbers,
+            count_numbers=count_numbers,
         )
         return AuditEventOut(
             id=event.id,
@@ -368,7 +402,11 @@ def get_inventory_audit(
             unit_snapshot=event.unit_snapshot,
             evidence_status=event.evidence_status,
             can_open_source=(
-                event.requisition_id is not None or order_no is not None
+                event.requisition_id is not None
+                or (
+                    order_no is not None
+                    and event.source_type != inventory_ledger.SOURCE_INVENTORY_COUNT
+                )
             ),
         )
 
@@ -606,3 +644,70 @@ def update_suggestion_disposition(
     )
     service.clear_cache(consumable_id)
     return result
+
+
+@router.post("/counts")
+def create_inventory_count(
+    payload: InventoryCountCreate,
+    db: Annotated[Session, Depends(get_db)],
+    admin: AdminUser,
+) -> JSONResponse:
+    count, created = inventory_count.create_count(
+        db, payload=payload, operator=admin
+    )
+    service.clear_cache()
+    return JSONResponse(
+        status_code=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        content=jsonable_encoder(inventory_count.build_out(db, count)),
+    )
+
+
+@router.get("/counts/{order_no}")
+def get_inventory_count(
+    order_no: str,
+    db: Annotated[Session, Depends(get_db)],
+    staff: StaffUser,
+) -> InventoryCountOut:
+    count = inventory_count.get_count_by_no(db, order_no)
+    if count is None or count.class_id != staff.class_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="盘点单不存在"
+        )
+    return inventory_count.build_out(db, count)
+
+
+@router.patch("/counts/{order_no}/lines")
+def update_inventory_count_lines(
+    order_no: str,
+    payload: InventoryCountLinesUpdate,
+    db: Annotated[Session, Depends(get_db)],
+    admin: AdminUser,
+) -> InventoryCountOut:
+    count = inventory_count.get_count_by_no(db, order_no)
+    if count is None or count.class_id != admin.class_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="盘点单不存在"
+        )
+    inventory_count.update_lines(
+        db, count=count, payload=payload, operator=admin
+    )
+    return inventory_count.build_out(db, count)
+
+
+@router.post("/counts/{order_no}/post")
+def post_inventory_count(
+    order_no: str,
+    db: Annotated[Session, Depends(get_db)],
+    admin: AdminUser,
+) -> JSONResponse:
+    count = inventory_count.get_count_by_no(db, order_no)
+    if count is None or count.class_id != admin.class_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="盘点单不存在"
+        )
+    count, created = inventory_count.post_count(db, count=count, operator=admin)
+    service.clear_cache()
+    return JSONResponse(
+        status_code=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        content=jsonable_encoder(inventory_count.build_out(db, count)),
+    )
