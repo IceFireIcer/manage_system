@@ -39,7 +39,7 @@ docker compose logs backend | grep bootstrap   # 获取管理员初始密码
 curl -fsS http://127.0.0.1:4900/api/v1/health
 ```
 
-本地自行构建可改用 `docker compose up -d --build`。云端资源（服务器、公网 IP、DeepSeek Key）需在部署前开通；本仓库不包含任何真实密钥。
+本地自行构建可改用 `docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build`。云端资源（服务器、公网 IP、DeepSeek Key）需在部署前开通；本仓库不包含任何真实密钥。
 
 ## 3. 配置项
 
@@ -125,6 +125,7 @@ manage_system/
 ├─ scripts/                # 本地零 Docker 启动脚本、CI 三阶段脚本
 ├─ .github/workflows/      # GitHub Actions：ci.yml、docker-publish.yml
 ├─ docker-compose.yml
+├─ docker-compose.build.yml
 └─ README.md
 ```
 

@@ -21,9 +21,6 @@ services:
       start_period: 40s
 
   backend:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
     image: ghcr.io/icefireicer/labstock-api:${IMAGE_TAG:-latest}
     restart: unless-stopped
     depends_on:
@@ -53,9 +50,6 @@ services:
       start_period: 30s
 
   web:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
     image: ghcr.io/icefireicer/labstock-web:${IMAGE_TAG:-latest}
     restart: unless-stopped
     depends_on:

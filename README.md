@@ -54,9 +54,10 @@ docker compose logs backend | grep bootstrap
 
 浏览器访问 `http://<服务器IP>:4900/`（或 `http://<服务器IP>:<WEB_PORT>/`），使用上一步打印的管理员账号登录。
 
-- 首次部署也可本地构建：`docker compose up -d --build`（不依赖 GHCR，构建约 3-8 分钟）
+- 首次部署也可源码构建：`docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build`（不依赖 GHCR，构建约 3-8 分钟）
 - GHCR 包默认私有：可在 GitHub Packages 将 `labstock-api` / `labstock-web` 设为 public；或服务器用带 `read:packages` 权限的 PAT 执行 `docker login ghcr.io -u <GitHub 用户名>` 后拉取
 - 镜像名：`ghcr.io/icefireicer/labstock-api`、`ghcr.io/icefireicer/labstock-web`，版本由 `IMAGE_TAG` 指定（默认 `latest`）
+- 拉取慢或 `docker: unknown command: docker compose`：见 [docs/deploy.md](docs/deploy.md) 第 3.1 节「国内网络优化」与第 12 节「常见问题排查」
 
 - 健康检查：`curl -fsS http://127.0.0.1:4900/api/v1/health` 应返回 `{"status":"ok"}`
 - 完整部署、运维、备份恢复、升级回滚与排错见 **[docs/deploy.md](docs/deploy.md)**
@@ -187,6 +188,7 @@ manage_system/
 ├─ scripts/                # 本地零 Docker 启动脚本、CI 三阶段脚本
 ├─ .github/workflows/      # GitHub Actions：ci.yml、docker-publish.yml
 ├─ docker-compose.yml
+├─ docker-compose.build.yml
 ├─ .env.example
 └─ README.md
 ```
@@ -220,7 +222,7 @@ cd frontend && npm run build
 - **管理员密码**：首次启动后立即修改随机初始密码；丢弃该密码后按上文容器内脚本重置
 - **网络**：仅暴露 `WEB_PORT`（默认 4900），不对外开放 3306 / 8000；HTTPS 建议在前置 nginx/Caddy 或云负载均衡终止
 - **备份**：定期 `mysqldump` 或对数据卷做快照，升级前必须先备份
-- **升级/回滚**：升级用 `docker compose pull && docker compose up -d`；回滚切换历史 `IMAGE_TAG`（`sha-<short>` 或版本标签）后 `docker compose pull` 再启动；本地自行构建用 `--build`。数据库迁移通常单向，回滚前确认表结构兼容
+- **升级/回滚**：升级用 `docker compose pull && docker compose up -d`；回滚切换历史 `IMAGE_TAG`（`sha-<short>` 或版本标签）后 `docker compose pull` 再启动；本地自行构建改用 `docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build`。数据库迁移通常单向，回滚前确认表结构兼容
 - **日志**：`docker compose logs -f backend` 查看运行与 `[bootstrap]` 记录；定期巡检并清理旧镜像
 
 ## 系统行为说明
