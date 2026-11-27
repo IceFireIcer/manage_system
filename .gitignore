@@ -8,7 +8,15 @@ __pycache__/
 .env
 venv/
 .venv/
+.venv-ci/
 dist/
+.dev-run/
 *.sqlite
 *.db
 .coverage
+
+htmlcov/
+.idea/
+.vscode/
+Thumbs.db
+.DS_Store
