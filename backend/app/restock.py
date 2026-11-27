@@ -3,13 +3,14 @@ import uuid
 from datetime import datetime
 
 from fastapi import HTTPException, status
-from sqlalchemy import select, update
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import delete, select, update
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
 from app import business_time, inventory_ledger, stock_alerts
 from app.agent import rules
 from app.consumption import local_day_start, window_flow
+from app.db import concurrency
 from app.models import (
     Consumable,
     InventoryEvent,
@@ -316,9 +317,12 @@ def create_restock_order(
 
     receipt_lines: list[RestockLineOut] = []
     try:
+        consumables = concurrency.lock_consumables(
+            db, [item.consumable_id for item in items]
+        )
         for row_number, item in enumerate(items, start=1):
             field_path = f"items[{row_number - 1}]"
-            consumable = db.get(Consumable, item.consumable_id, with_for_update=True)
+            consumable = consumables.get(item.consumable_id)
             if consumable is None or consumable.class_id != operator.class_id:
                 raise RestockRowError(
                     line_no=row_number,
@@ -462,6 +466,25 @@ def create_restock_order(
     except HTTPException:
         db.rollback()
         raise
+    except OperationalError as exc:
+        db.rollback()
+        if not concurrency.is_lock_conflict(exc):
+            _mark_rejected(
+                db,
+                order_id,
+                RestockRowError(
+                    field="request",
+                    code="internal_error",
+                    reason="提交处理失败，请稍后凭请求标识查询结果",
+                ),
+            )
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="入库失败，请稍后凭请求标识查询结果",
+            ) from exc
+        db.execute(delete(RestockOrder).where(RestockOrder.id == order_id))
+        db.commit()
+        raise concurrency.retry_required_error() from exc
     except Exception as exc:
         db.rollback()
         _mark_rejected(

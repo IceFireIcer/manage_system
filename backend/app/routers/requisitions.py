@@ -9,13 +9,15 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
 from app import business_time, inventory_ledger, stock_alerts
 from app.agent import service
 from app.auth_logs import trim_audit_logs
 from app.database import get_db
+from app.db import concurrency
 from app.deps import CurrentUser, require_role
 from app.models import (
     Consumable,
@@ -1015,7 +1017,7 @@ def _create_requisition_impl(
     *,
     max_backfill_days: int | None,
     controlled: bool,
-) -> RequisitionCreateOut:
+) -> RequisitionCreateOut | JSONResponse:
     request_id = payload.request_id or uuid.uuid4().hex
     owner = _resolve_owner(db, payload, current_user)
 
@@ -1054,9 +1056,18 @@ def _create_requisition_impl(
         items_signature=json.dumps(_submit_signature(payload.items)),
     )
     db.add(order)
-    db.flush()
-    order_id = order.id
-    db.commit()
+    try:
+        db.flush()
+        order_id = order.id
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        conflict = db.scalars(
+            select(RequisitionOrder).where(RequisitionOrder.request_id == request_id)
+        ).first()
+        if conflict is None:
+            raise
+        return _resolve_repeat(conflict, payload, owner)
 
     results: list[RequisitionItemOut] = []
     receipt_lines: list[RequisitionReceiptLineOut] = []
@@ -1070,9 +1081,12 @@ def _create_requisition_impl(
                 reason=f"领用人 {owner.name} 已被停用",
             )
 
+        consumables = concurrency.lock_consumables(
+            db, [item.consumable_id for item in payload.items]
+        )
         for row_number, item in enumerate(payload.items, start=1):
             field_path = f"items[{row_number - 1}]"
-            consumable = db.get(Consumable, item.consumable_id, with_for_update=True)
+            consumable = consumables.get(item.consumable_id)
             if consumable is None:
                 raise RowError(
                     line_no=row_number,
@@ -1255,6 +1269,25 @@ def _create_requisition_impl(
     except HTTPException:
         db.rollback()
         raise
+    except OperationalError as exc:
+        db.rollback()
+        if not concurrency.is_lock_conflict(exc):
+            _mark_rejected(
+                db,
+                order_id,
+                RowError(
+                    field="request",
+                    code="internal_error",
+                    reason="提交处理失败，请稍后凭请求标识查询结果",
+                ),
+            )
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="提交失败，请稍后凭请求标识查询结果",
+            ) from exc
+        db.execute(delete(RequisitionOrder).where(RequisitionOrder.id == order_id))
+        db.commit()
+        raise concurrency.retry_required_error() from exc
     except Exception as exc:
         db.rollback()
         _mark_rejected(
@@ -1783,7 +1816,15 @@ def reverse_requisition(
             )
         ).first()
 
-    consumable = db.get(Consumable, requisition.consumable_id, with_for_update=True)
+    try:
+        consumable = db.get(
+            Consumable, requisition.consumable_id, with_for_update=True
+        )
+    except OperationalError as exc:
+        db.rollback()
+        if concurrency.is_lock_conflict(exc):
+            raise concurrency.retry_required_error() from exc
+        raise
     if consumable is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="流水不存在"
@@ -2034,6 +2075,11 @@ def reverse_requisition(
         db.commit()
     except HTTPException:
         db.rollback()
+        raise
+    except OperationalError as exc:
+        db.rollback()
+        if concurrency.is_lock_conflict(exc):
+            raise concurrency.retry_required_error() from exc
         raise
 
     service.clear_cache()

@@ -7,7 +7,7 @@ pytest
 ruff check .
 ```
 
-本轮结果：**240 passed**；`ruff check .` 通过；前端 `npm run build` 成功；真实 API 冒烟主线通过（2026-11-27）。
+本轮结果：历史基线为 240 passed（2026-11-27）；本轮新增用例见第 7 节，完整结果以同一提交 CI 与 `release-manifest.json` 为准。
 
 ## 1. 账号、权限与用户管理
 
@@ -74,3 +74,14 @@ ruff check .
 
 - 云端 ECS 开通、DeepSeek API Key、真实安全库存校准由用户在部署前完成，见 [delivery.md](delivery.md) 与 [deploy.md](deploy.md)
 - 管理员初始密码需在首次启动后立即修改，见 [README「管理员初始化」](../README.md#管理员初始化)
+## 7. 演示数据、同提交镜像与并发验收
+
+| 验收项 | 自动验证 | 人工核对 | 结果 |
+| ------ | -------- | -------- | ---- |
+| 隔离演示库可复现缺货、低库存、趋势上升 | `test_demo_seed.py::test_seed_is_isolated_idempotent_and_reproduces_demo_scenarios` | `docker compose -f docker-compose.yml -f docker-compose.demo.yml` + `seed_demo.py --yes`，见 13.5 | 待部署执行 |
+| 演示数据不进入正式库、装载幂等 | `test_demo_seed.py` 全量；`test_acceptance_scripts.py::test_demo_compose_is_isolated_from_production` | 正式库无 `DEMO-*` 耗材与演示账号 | 通过 |
+| 正式环境拒绝装载演示数据 | `test_demo_seed.py::test_seed_rejects_production_environment` | `APP_ENV=prod python scripts/seed_demo.py --yes` 非零退出 | 通过 |
+| 同提交 CI 与两份镜像齐全才可部署 | `test_release_gate.py` 全量；`test_acceptance_scripts.py::test_publish_workflow_gates_on_same_commit_tests_and_both_images` | CI `release` job 与 `release-manifest.json`，见 13.6 | 待 CI 执行 |
+| 真实 MySQL 并发用例可运行，无 MySQL 时跳过 | `test_mysql_concurrency.py`；`test_acceptance_scripts.py::test_concurrency_test_skips_without_mysql_url` | `scripts/acceptance/run-mysql-concurrency.sh`，见 13.7 | 待部署执行 |
+| 三角色浏览器、弱网、部分到货、库存审计证据 | — | 按 [acceptance/browser-checklist.md](acceptance/browser-checklist.md) 填写 | 待部署执行 |
+| 并发与发布证据可复查 | — | 按 [acceptance/mysql-concurrency-record.md](acceptance/mysql-concurrency-record.md)、[acceptance/release-record.md](acceptance/release-record.md) 归档 | 待部署执行 |

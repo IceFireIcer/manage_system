@@ -797,6 +797,59 @@ IMAGE_TAG="$(date +%Y%m%d%H%M)" bash scripts/ci/stage3-image-publish.sh
 
 `stage3` 缺少 `IMAGE_TAG` 时会输出用法并以非零码退出，避免误推镜像。脚本推送后仍需在服务器执行 `docker compose pull && docker compose up -d`。
 
+### 13.5 隔离演示环境与三角色数据
+
+演示数据只写入独立 project 与独立卷，正式 `docker-compose.yml` 仍按空库启动：
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.demo.yml up -d
+docker compose -f docker-compose.yml -f docker-compose.demo.yml exec backend \
+  python scripts/seed_demo.py --yes
+```
+
+- 演示 project 为 `labstock-demo`，数据库 `manage_system_demo`，卷 `labstock-demo_demo_mysql_data`，默认访问 `http://<服务器IP>:4901/`
+- 演示 compose 用 `!override` 替换正式端口，需要 Docker Compose 2.24+（当前部署脚本按最新插件准备）
+- 演示账号：`teacher01` / `admin01` / `student01`，统一密码 `Demo@12345`
+- 演示数据复现：`DEMO-GLOVE` 缺货、`DEMO-WIRE` 低库存、`DEMO-PLA` 近 7 天消耗较前 7 天上升，另有正常与停用样例
+- 装载命令幂等；重复执行不会重复扣减。重建演示数据用 `docker compose -f docker-compose.yml -f docker-compose.demo.yml down -v`，只删除演示卷
+- `seed_demo.py` 在 `APP_ENV=prod` 时拒绝执行；不要把演示库指向正式数据库
+- 正式环境不装载演示数据，继续以空库启动并按日常流程建档
+
+### 13.6 同提交 CI 与镜像门禁
+
+`docker-publish.yml` 在发布前等待同一提交的 `ci.yml` 成功，并在两份镜像推送后复核 digest：
+
+1. `gate` job 轮询 `gh run list --workflow ci.yml --commit <SHA>`，只有该提交最新 CI 结论为 `success` 才进入构建
+2. `publish` job 推送 `labstock-api` 与 `labstock-web`，标签包含 `sha-<short>`
+3. `release` job 读取两份镜像 digest，调用 `scripts/ci/release_gate.py`；只有 CI 成功、两个镜像齐全且标签与提交一致时 `deployable` 才为 `true`
+4. `release-manifest.json` 作为 artifact 归档，记录提交、CI run、两份镜像 digest 与时间
+
+手工复核：
+
+```bash
+gh run list --repo IceFireIcer/manage_system --workflow ci.yml \
+  --commit <完整 SHA> --limit 20 \
+  --json databaseId,headSha,status,conclusion,event,url,createdAt > ci-runs.json
+python3 scripts/ci/release_gate.py \
+  --commit <完整 SHA> --tag sha-<short> \
+  --ci-summary ci-runs.json --images images.json \
+  --output release-manifest.json
+```
+
+退出码：`0` 可部署，`1` 不可部署，`2` 参数或文件错误，`3` CI 尚未完成。发布记录模板见 [acceptance/release-record.md](acceptance/release-record.md)。
+
+### 13.7 真实 MySQL 并发与浏览器验收
+
+```bash
+bash scripts/acceptance/run-mysql-concurrency.sh
+```
+
+- 脚本在隔离容器中启动 MySQL 8.0，库名 `manage_system_concurrency`，不会连接正式库；结束后删除容器
+- 未安装 docker、镜像不可用或容器未就绪时输出 `SKIPPED` 并以 0 退出；测试失败时非零退出
+- 已有 MySQL 时可跳过容器：`LABSTOCK_MYSQL_TEST_URL=mysql+pymysql://.../<库名含 test 或 concurrency> python -m pytest -q backend/tests/test_mysql_concurrency.py`
+- 用例覆盖反序多耗材领用、库存不足回滚、入库与红冲并行、同请求编号并发、回执丢失重试与锁冲突重试
+- 记录的字段与三角色浏览器检查项见 [acceptance/README.md](acceptance/README.md)
+
 ## 14. 上线安全清单
 
 - [ ] `.env` 权限 600，未提交到仓库（`git status` 确认无 `.env`）
@@ -810,5 +863,8 @@ IMAGE_TAG="$(date +%Y%m%d%H%M)" bash scripts/ci/stage3-image-publish.sh
 - [ ] 已按 11.3.1 配置每日备份与保留期，备份写入独立副本并完成一次隔离库恢复演练（11.3.3）
 - [ ] GHCR 包可见性已确认：公开拉取，或服务器已用带 `read:packages` 的 PAT 登录
 - [ ] GitHub Actions（`ci.yml`、`docker-publish.yml`）在 `main` 上通过，GHCR 存在可用 `sha-<short>` 或 `v*` 标签
+- [ ] 同一提交的 CI 成功，两个镜像 digest 已记录，`release-manifest.json` 中 `deployable=true`
+- [ ] 演示数据只存在于隔离演示库，正式库无演示耗材与演示账号
+- [ ] 真实 MySQL 并发记录与三角色浏览器验收记录已归档（见 `docs/acceptance/`）
 
 - [ ] 定期 `docker compose logs` 巡检与 `docker image prune` 清理
