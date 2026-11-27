@@ -12,7 +12,7 @@ const menus = [
   { path: '/overview', title: '库存总览' },
   { path: '/requisition', title: '领用登记' },
   { path: '/records', title: '记录查询' },
-  { path: '/consumables', title: '耗材档案', roles: ['teacher', 'admin'] },
+  { path: '/consumables', title: '耗材档案', roles: ['admin'] },
   { path: '/users', title: '用户管理', roles: ['teacher', 'admin'] },
   { path: '/restock', title: '补货建议', roles: ['teacher', 'admin'] },
   { path: '/logs', title: '操作日志', roles: ['teacher', 'admin'] },
