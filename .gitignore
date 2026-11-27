@@ -9,6 +9,7 @@ __pycache__/
 venv/
 .venv/
 dist/
+.dev-run/
 *.sqlite
 *.db
 .coverage
