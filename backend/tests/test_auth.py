@@ -79,12 +79,11 @@ def test_student_forbidden_on_restricted_route(student_client: TestClient) -> No
     assert response.json()["detail"] == "无权限访问"
 
 
-def test_teacher_allowed_on_restricted_route(teacher_client: TestClient) -> None:
+def test_teacher_forbidden_on_user_management(teacher_client: TestClient) -> None:
     response = teacher_client.get("/api/v1/users")
 
-    assert response.status_code == 200
-    assert isinstance(response.json(), list)
-    assert len(response.json()) >= 3
+    assert response.status_code == 403
+    assert response.json()["detail"] == "无权限访问"
 
 
 def test_logout_clears_session(client: TestClient) -> None:

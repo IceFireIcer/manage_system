@@ -78,4 +78,5 @@ cd backend && alembic upgrade head
 - 本地开发**零 Docker**：Python、Node、MySQL 均直接使用本机安装。
 - T02 起本地默认使用 SQLite（`backend/.env` 中 `DATABASE_URL=sqlite:///./dev.db`）；接入 MySQL 8.0 时修改该变量即可。
 - 认证采用 JWT 写入 httpOnly Cookie（SameSite=Lax，有效期 8 小时）。
+- 被停用账号登录时统一返回 401「账号或密码错误」（不单独提示账号已停用，避免暴露账号状态）；停用仅影响登录，历史流水与操作日志保留可查。
 - 配置通过 `pydantic-settings` 从 `backend/.env` 读取，`.env.example` 仅含占位符。
