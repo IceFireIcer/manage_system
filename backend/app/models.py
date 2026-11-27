@@ -137,6 +137,20 @@ class Requisition(Base):
     )
     handler_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
     handler_role: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    operator_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id"), nullable=True
+    )
+    operator_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    operator_role: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    posted_at: Mapped[datetime | None] = mapped_column(DATETIME, nullable=True)
+    backfill_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    backfill_mode: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    linked_event_id: Mapped[int | None] = mapped_column(
+        ForeignKey("inventory_events.id"), nullable=True
+    )
+    linked_count_id: Mapped[int | None] = mapped_column(
+        ForeignKey("inventory_counts.id"), nullable=True
+    )
     class_id: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     created_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
     remark: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -204,6 +218,7 @@ class RequisitionOrder(Base):
     business_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False)
     posted_at: Mapped[datetime | None] = mapped_column(DATETIME, nullable=True)
     remark: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    backfill_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     items_signature: Mapped[str] = mapped_column(Text, nullable=False)
     receipt_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     errors_json: Mapped[str | None] = mapped_column(Text, nullable=True)

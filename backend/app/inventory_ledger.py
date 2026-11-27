@@ -16,6 +16,7 @@ EVENT_SCRAP = "scrap"
 EVENT_INVENTORY_ADJUSTMENT = "inventory_adjustment"
 
 SOURCE_OPENING = "opening"
+SOURCE_LEDGER_IMPORT = "ledger_import"
 SOURCE_REQUISITION_ORDER = "requisition_order"
 SOURCE_REQUISITION_REVERSAL = "requisition_reversal"
 SOURCE_REQUISITION_REENTRY = "requisition_reentry"

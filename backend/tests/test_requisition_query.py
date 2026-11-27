@@ -317,8 +317,10 @@ def test_list_item_fields(admin_client: TestClient, db_session) -> None:
     assert item == {
         "id": record.id,
         "created_at": record.created_at.isoformat(),
+        "posted_at": None,
         "consumable_name": "焊丝",
         "consumable_spec": "φ1.2mm",
+        "unit": "",
         "quantity": 3,
         "user_id": student_id,
         "user_name": "张同学",
@@ -329,6 +331,17 @@ def test_list_item_fields(admin_client: TestClient, db_session) -> None:
         "reversal_reason": None,
         "remark": "实训课领用",
         "related": None,
+        "order_no": None,
+        "reentry_of": None,
+        "correction_status": None,
+        "backfill_reason": None,
+        "backfill_mode": None,
+        "linked_event_id": None,
+        "linked_count_id": None,
+        "linked_count_order_no": None,
+        "operator_id": None,
+        "operator_name": None,
+        "operator_role": None,
     }
 
 

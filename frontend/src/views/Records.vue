@@ -248,6 +248,30 @@ function correctionMeta(row) {
   )
 }
 
+const BACKFILL_META = {
+  normal: { label: '区间补录', className: 'status-tag--info' },
+  controlled: { label: '受控调整', className: 'status-tag--warning' },
+  counted: { label: '已盘点', className: 'status-tag--success' },
+  opening: { label: '期初已含', className: 'status-tag--neutral' },
+}
+
+function backfillMeta(row) {
+  return (
+    BACKFILL_META[row.backfill_mode] ?? {
+      label: row.backfill_mode ?? '',
+      className: 'status-tag--neutral',
+    }
+  )
+}
+
+function backfillTitle(row) {
+  const parts = []
+  if (row.backfill_reason) parts.push(`补录原因：${row.backfill_reason}`)
+  if (row.operator_name) parts.push(`经办人：${row.operator_name}`)
+  if (row.linked_count_order_no) parts.push(`关联盘点单：${row.linked_count_order_no}`)
+  return parts.join('；')
+}
+
 function relatedLabel(row) {
   if (!row.related) return ''
   return row.type === 'reversal' ? `原领用 #${row.related.id}` : `红冲 #${row.related.id}`
@@ -907,6 +931,20 @@ onMounted(async () => {
           <el-table-column label="备注" min-width="160" show-overflow-tooltip>
             <template #default="{ row }">
               <span :class="{ 'records__muted': !row.remark }">{{ row.remark || '—' }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="补录" width="110">
+            <template #default="{ row }">
+              <el-tooltip
+                v-if="row.backfill_mode"
+                :content="backfillTitle(row)"
+                placement="top"
+              >
+                <span class="status-tag" :class="backfillMeta(row).className">
+                  {{ backfillMeta(row).label }}
+                </span>
+              </el-tooltip>
+              <span v-else class="records__muted">—</span>
             </template>
           </el-table-column>
           <el-table-column label="纠错" width="100">
