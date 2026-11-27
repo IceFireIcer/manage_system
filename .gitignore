@@ -1,24 +1,20 @@
-# Python
+.codeartsdoer/
+.arts/
+node_modules/
 __pycache__/
-*.py[cod]
+*.pyc
 .pytest_cache/
 .ruff_cache/
-.coverage
-htmlcov/
-backend/venv/
-
-# Environment secrets (keep .env.example)
 .env
-backend/.env
+venv/
+.venv/
+dist/
+*.sqlite
+*.db
+.coverage
 
-# Node
-frontend/node_modules/
-frontend/dist/
-
-# IDE
+htmlcov/
 .idea/
 .vscode/
-
-# OS
 Thumbs.db
 .DS_Store
