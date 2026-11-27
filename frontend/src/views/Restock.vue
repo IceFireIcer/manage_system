@@ -23,6 +23,11 @@ const DISPOSITION_META = {
   resolved: { label: '风险解除', tagClass: 'status-tag--success' },
 }
 
+const RATIONALE_SOURCE_META = {
+  llm: { label: '模型润色', tagClass: 'status-tag--info' },
+  rules: { label: '规则模板', tagClass: 'status-tag--success' },
+}
+
 const TIER_FILTERS = [
   { value: 'all', label: '全部' },
   { value: 'urgent', label: '紧急' },
@@ -567,7 +572,24 @@ onBeforeUnmount(() => {
         </p>
 
         <div class="restock__rationale">
-          <span class="restock__rationale-title">判断依据</span>
+          <div class="restock__rationale-head">
+            <span class="restock__rationale-title">判断依据</span>
+            <span
+              class="status-tag"
+              :class="RATIONALE_SOURCE_META[item.rationale_source]?.tagClass"
+            >
+              {{ RATIONALE_SOURCE_META[item.rationale_source]?.label ?? item.rationale_source }}
+            </span>
+            <span
+              v-if="item.rationale_degraded"
+              class="status-tag status-tag--warning"
+            >
+              已降级
+            </span>
+            <span class="restock__rationale-time">
+              数据时点 {{ formatGeneratedAt(item.computed_at) }}
+            </span>
+          </div>
           <p class="restock__rationale-text">{{ item.rationale }}</p>
         </div>
       </article>
@@ -1014,6 +1036,21 @@ onBeforeUnmount(() => {
   gap: 6px;
   padding-top: 16px;
   border-top: 1px solid var(--line);
+}
+
+.restock__rationale-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.restock__rationale-time {
+  margin-left: auto;
+  font-size: 12px;
+  line-height: 20px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
 }
 
 .restock__rationale-title {
