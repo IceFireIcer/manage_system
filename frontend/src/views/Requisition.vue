@@ -7,6 +7,9 @@ import { useUserStore } from '../stores/user'
 import PageHeader from '../components/PageHeader.vue'
 import EmptyState from '../components/EmptyState.vue'
 import { businessDate, businessNowInput, businessToday } from '../utils/businessDate'
+import { announce } from '../utils/announcer'
+import { copyRequestId, recordRequestId, requestIdOf } from '../utils/requestTrace'
+import { keepFocusedFieldVisible } from '../utils/mobileFocus'
 
 const MAX_ROWS = 5
 const MAX_BACKFILL_DAYS = 30
@@ -52,6 +55,9 @@ const uncertain = ref(false)
 const requestStatus = ref(null)
 const checkingRequest = ref(false)
 const bypassLeaveGuard = ref(false)
+const receiptSectionRef = ref(null)
+const errorRequestId = ref('')
+const pendingRequestId = ref('')
 
 const form = reactive({
   userId: null,
@@ -629,15 +635,35 @@ function showReceipt(receipt, pending) {
   }
   uncertain.value = false
   submitError.value = ''
+  errorRequestId.value = ''
+  pendingRequestId.value = ''
   clearPending()
+  nextTick(() => receiptSectionRef.value?.focus?.())
+  announce(
+    `已登记 ${result.value.count} 项耗材${
+      result.value.orderNo ? `，领用单号 ${result.value.orderNo}` : ''
+    }`,
+  )
+}
+
+async function copyCurrentRequest() {
+  const value = errorRequestId.value || pendingRequestId.value
+  if (!value) return
+  const ok = await copyRequestId(value)
+  if (ok) ElMessage.success('请求编号已复制')
+  else ElMessage.error('复制失败，请手动选择请求编号')
 }
 
 async function checkPendingRequest({ silent = false } = {}) {
   const pending = readPending()
   if (!pending?.requestId) {
-    if (!silent) ElMessage.info('没有待查证的领用请求')
+    if (!silent) {
+      ElMessage.info('没有待查证的领用请求')
+      announce('没有待查证的领用请求')
+    }
     return false
   }
+  pendingRequestId.value = pending.requestId
   checkingRequest.value = true
   try {
     const { data } = await api.get(
@@ -650,14 +676,31 @@ async function checkPendingRequest({ silent = false } = {}) {
       uncertain.value = false
       submitError.value = data.error_detail || '本次领用已被拒绝'
       applyReceiptErrors(data.errors)
+      errorRequestId.value = recordRequestId(data.request_id || pending.requestId)
       clearPending()
+      announce(
+        `${submitError.value}${
+          errorRequestId.value ? `。请求编号 ${errorRequestId.value}` : ''
+        }`,
+        { assertive: true },
+      )
     } else {
       uncertain.value = true
       submitError.value = ''
+      announce(`本次领用仍在处理中，请求标识 ${pendingRequestId.value}`)
     }
     return true
   } catch (error) {
-    if (!silent) ElMessage.warning('暂时无法查询上次提交结果，请稍后重试')
+    errorRequestId.value = recordRequestId(requestIdOf(error))
+    if (!silent) {
+      ElMessage.warning('暂时无法查询上次提交结果，请稍后重试')
+      announce(
+        `暂时无法查询上次提交结果，请稍后重试${
+          errorRequestId.value ? `。请求编号 ${errorRequestId.value}` : ''
+        }`,
+        { assertive: true },
+      )
+    }
     return false
   } finally {
     checkingRequest.value = false
@@ -751,13 +794,22 @@ async function handleSubmit() {
   if (submitting.value || uncertain.value) return
   if (locked.value) {
     submitError.value = '当前页面已失效，请重新登录后再提交。'
+    announce(submitError.value, { assertive: true })
     return
   }
   result.value = null
   submitError.value = ''
-  if (!validateMeta()) return
-  if (!validateRows()) return
+  errorRequestId.value = ''
+  if (!validateMeta()) {
+    announce('请检查领用人或领用时间后再提交', { assertive: true })
+    return
+  }
+  if (!validateRows()) {
+    announce('请检查标出的领用明细后再提交', { assertive: true })
+    return
+  }
   const requestId = createRequestId()
+  pendingRequestId.value = requestId
   submitting.value = true
   try {
     const [freshConsumables, freshUsers] = await Promise.all([
@@ -767,10 +819,17 @@ async function handleSubmit() {
     if (!freshConsumables || !freshUsers) {
       refreshWarning.value = '未能刷新最新库存或领用人，将由服务端在提交时再次校验。'
     }
-    if (!validateMeta()) return
-    if (!validateRows()) return
+    if (!validateMeta()) {
+      announce('提交前刷新发现领用人或时间有变化，请检查后重新提交', { assertive: true })
+      return
+    }
+    if (!validateRows()) {
+      announce('提交前刷新发现明细有变化，请检查后重新提交', { assertive: true })
+      return
+    }
     if (locked.value) {
       submitError.value = '当前页面已失效，请重新登录后再提交。'
+      announce(submitError.value, { assertive: true })
       return
     }
     const snapshot = buildSnapshot()
@@ -790,7 +849,7 @@ async function handleSubmit() {
     savePending(requestId, payload)
 
     const { data } = await api.post('/requisitions', payload)
-if (data.receipt) {
+    if (data.receipt) {
       showReceipt(data.receipt)
       result.value = { ...result.value, rows: snapshot }
     } else {
@@ -807,7 +866,15 @@ if (data.receipt) {
         errors: [],
         error_detail: null,
       }
+      errorRequestId.value = ''
+      pendingRequestId.value = ''
       clearPending()
+      nextTick(() => receiptSectionRef.value?.focus?.())
+      announce(
+        `已登记 ${result.value.count} 项耗材${
+          result.value.orderNo ? `，领用单号 ${result.value.orderNo}` : ''
+        }`,
+      )
     }
     rememberRecent(snapshot)
     removeDraft()
@@ -819,8 +886,16 @@ if (data.receipt) {
     clearRowErrors()
   } catch (error) {
     const status = error.response?.status
+    errorRequestId.value = recordRequestId(requestIdOf(error))
     if (error.response && status < 500) clearPending()
     await handleSubmitError(error)
+    const trace = errorRequestId.value
+    const detail = uncertain.value
+      ? `暂未确认本次领用是否成功，请使用请求编号 ${
+          trace || pendingRequestId.value
+        } 查询提交结果`
+      : `${submitError.value}${trace ? `。请求编号 ${trace}` : ''}`
+    announce(detail, { assertive: true })
   } finally {
     submitting.value = false
   }
@@ -845,6 +920,8 @@ async function handleReset() {
   resetFormState()
   removeDraft()
   router.replace({ query: {} })
+  focusRow(0, 'select')
+  announce('已清空本次登记，可以重新填写')
 }
 
 function handleContinue() {
@@ -854,6 +931,8 @@ function handleContinue() {
   resetFormState()
   removeDraft()
   router.replace({ query: {} })
+  focusRow(0, 'select')
+  announce('可以继续登记新的领用')
 }
 
 function goRecords() {
@@ -941,10 +1020,18 @@ onBeforeUnmount(() => {
   <div class="requisition">
     <PageHeader title="领用登记" :breadcrumb="['领用管理', '领用登记']" />
 
-    <section v-if="result" class="panel requisition__panel" role="status">
+    <section
+      v-if="result"
+      ref="receiptSectionRef"
+      class="panel requisition__panel"
+      tabindex="-1"
+      aria-labelledby="requisition-receipt-title"
+    >
       <div class="requisition__receipt-head">
         <div>
-          <h2 class="requisition__receipt-title">已登记 {{ result.count }} 项耗材</h2>
+          <h2 id="requisition-receipt-title" class="requisition__receipt-title">
+            已登记 {{ result.count }} 项耗材
+          </h2>
           <p v-if="result.orderNo" class="requisition__receipt-desc">
             领用单号：{{ result.orderNo }}
           </p>
@@ -1044,6 +1131,7 @@ onBeforeUnmount(() => {
           class="requisition__form"
           :model="form"
           @submit.prevent="handleSubmit"
+          @focusin="keepFocusedFieldVisible"
         >
           <el-alert
             v-if="locked"
@@ -1095,10 +1183,17 @@ onBeforeUnmount(() => {
               <p class="requisition__alert-text">
                 请求超时或连接中断，可按请求标识查询处理结果；确认前请勿重复提交相同明细。
               </p>
-              <p v-if="requestStatus?.orderNo" class="requisition__alert-text">
-                领用单号：{{ requestStatus.orderNo }} · 状态：{{
+              <p v-if="requestStatus?.order_no" class="requisition__alert-text">
+                领用单号：{{ requestStatus.order_no }} · 状态：{{
                   STATUS_NAMES[requestStatus.status] ?? requestStatus.status
                 }}
+              </p>
+              <p v-if="pendingRequestId || errorRequestId" class="requisition__alert-text">
+                请求标识
+                <code class="requisition__request-id" tabindex="0">
+                  {{ pendingRequestId || errorRequestId }}
+                </code>
+                <el-button link type="primary" @click="copyCurrentRequest">复制请求编号</el-button>
               </p>
               <el-button
                 link
@@ -1119,7 +1214,16 @@ onBeforeUnmount(() => {
             show-icon
             :title="submitError"
             class="requisition__alert"
-          />
+            role="alert"
+          >
+            <template #default>
+              <p v-if="errorRequestId" class="requisition__alert-text">
+                请求编号
+                <code class="requisition__request-id" tabindex="0">{{ errorRequestId }}</code>
+                <el-button link type="primary" @click="copyCurrentRequest">复制请求编号</el-button>
+              </p>
+            </template>
+          </el-alert>
 
           <div class="requisition__meta">
             <el-form-item
@@ -1379,6 +1483,21 @@ onBeforeUnmount(() => {
   line-height: 22px;
 }
 
+.requisition__request-id {
+  padding: 2px 6px;
+  border-radius: var(--radius-control);
+  background: var(--surface-muted);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 20px;
+  word-break: break-all;
+  user-select: all;
+}
+
+.requisition__panel:focus {
+  outline: none;
+}
+
 .requisition__meta {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
@@ -1560,6 +1679,7 @@ onBeforeUnmount(() => {
   justify-content: flex-end;
   gap: 8px;
   padding-top: 8px;
+  scroll-margin-bottom: 96px;
 }
 
 .requisition__receipt-head {
@@ -1631,6 +1751,7 @@ onBeforeUnmount(() => {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+  scroll-margin-bottom: 96px;
 }
 
 @media (max-width: 767px) {
@@ -1652,6 +1773,31 @@ onBeforeUnmount(() => {
 
   .requisition__receipt-stock {
     margin-left: 0;
+  }
+
+  .requisition__actions .el-button,
+  .requisition__receipt-actions .el-button {
+    flex: 1 1 0;
+    min-height: 44px;
+  }
+
+  .requisition__actions {
+    position: sticky;
+    bottom: calc(var(--keyboard-inset, 0px) + 4px);
+    z-index: 6;
+    padding: 8px 0;
+    background: var(--surface);
+  }
+}
+
+@media (max-width: 480px) {
+  .requisition__quantity {
+    flex: 1 1 100%;
+  }
+
+  .requisition__quantity-input {
+    flex: 1;
+    width: auto;
   }
 }
 </style>

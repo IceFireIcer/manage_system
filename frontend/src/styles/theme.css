@@ -113,6 +113,30 @@ html,
 body {
   margin: 0;
   min-height: 100%;
+  overflow-x: clip;
+}
+
+img,
+svg {
+  max-width: 100%;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+input,
+textarea,
+select {
+  scroll-margin-block: 96px;
 }
 
 body {
@@ -436,6 +460,66 @@ h3 {
     flex-direction: column;
     align-items: stretch;
     gap: 12px;
+  }
+
+  .el-input__inner,
+  .el-textarea__inner {
+    font-size: 16px;
+  }
+
+  .el-dialog {
+    max-width: calc(100vw - 24px);
+    margin-top: 4vh;
+    margin-bottom: 4vh;
+  }
+
+  .el-message-box {
+    max-width: calc(100vw - 24px);
+  }
+
+  .el-drawer {
+    max-width: 100vw;
+  }
+
+  .el-dialog__footer .el-button,
+  .el-message-box__btns .el-button {
+    min-height: 44px;
+  }
+}
+
+@media (max-width: 600px) {
+  .el-date-range-picker {
+    width: calc(100vw - 16px);
+  }
+
+  .el-date-range-picker .el-picker-panel__body {
+    min-width: 0;
+  }
+
+  .el-date-range-picker .el-picker-panel__body-wrapper {
+    max-height: 68vh;
+    overflow-y: auto;
+  }
+
+  .el-date-range-picker__content {
+    float: none;
+    width: 100%;
+  }
+
+  .el-date-range-picker__content.is-left {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+}
+
+@media (max-width: 360px) {
+  .el-date-picker {
+    width: calc(100vw - 16px);
+  }
+
+  .el-date-picker .el-picker-panel__content {
+    width: auto;
+    margin: 12px;
   }
 }
 

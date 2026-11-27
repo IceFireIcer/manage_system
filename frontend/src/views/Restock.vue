@@ -7,6 +7,9 @@ import { useUserStore } from '../stores/user'
 import PageHeader from '../components/PageHeader.vue'
 import EmptyState from '../components/EmptyState.vue'
 import { businessToday } from '../utils/businessDate'
+import { announce } from '../utils/announcer'
+import { copyRequestId, recordRequestId, requestIdOf } from '../utils/requestTrace'
+import { keepFocusedFieldVisible } from '../utils/mobileFocus'
 
 const TIER_META = {
   urgent: { label: '紧急', tagClass: 'status-tag--danger' },
@@ -51,6 +54,8 @@ const tierFilter = ref('all')
 const quantityRef = ref(null)
 const focusId = ref(0)
 const hasFetched = ref(false)
+const restockTrigger = ref(null)
+const errorRequestId = ref('')
 
 const restockDialog = reactive({
   visible: false,
@@ -200,7 +205,8 @@ function newRequestId() {
   return `rst-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`
 }
 
-function openRestock(item) {
+function openRestock(item, event) {
+  restockTrigger.value = event?.currentTarget ?? null
   restockDialog.item = item
   restockDialog.quantity = item.recommended_quantity > 0 ? item.recommended_quantity : null
   restockDialog.receivedDate = businessToday()
@@ -212,12 +218,32 @@ function openRestock(item) {
   restockDialog.errorKind = ''
   restockDialog.errorMessage = ''
   restockDialog.submitting = false
+  errorRequestId.value = ''
   restockDialog.visible = true
 }
 
 function handleDialogClose(done) {
   if (restockDialog.submitting) return
   done()
+}
+
+function handleRestockClosed() {
+  nextTick(() => {
+    const trigger = restockTrigger.value
+    if (trigger?.isConnected) {
+      trigger.focus()
+      return
+    }
+    document.querySelector('.restock__filters button')?.focus?.()
+  })
+}
+
+async function copyRestockRequest() {
+  const value = errorRequestId.value || restockDialog.requestId
+  if (!value) return
+  const ok = await copyRequestId(value)
+  if (ok) ElMessage.success('请求编号已复制')
+  else ElMessage.error('复制失败，请手动选择请求编号')
 }
 
 function clearQuantityError() {
@@ -232,6 +258,7 @@ async function submitRestock() {
   if (!Number.isInteger(quantity) || quantity <= 0) {
     restockDialog.fieldError = '请输入正整数入库数量'
     quantityRef.value?.focus?.()
+    announce(restockDialog.fieldError, { assertive: true })
     return
   }
   restockDialog.fieldError = ''
@@ -262,9 +289,11 @@ async function submitRestock() {
     restockDialog.visible = false
     const line = Array.isArray(data.lines) ? data.lines[0] : null
     const stockText = line ? `，当前库存 ${line.stock_after}${line.unit}` : ''
+    announce(`已生成入库单 ${data.order_no}${stockText}`)
     ElMessage.success(`已生成入库单 ${data.order_no}${stockText}`)
     await fetchSuggestions(true)
   } catch (error) {
+    errorRequestId.value = recordRequestId(requestIdOf(error) || restockDialog.requestId)
     if (!error.response) {
       restockDialog.errorKind = 'unconfirmed'
       restockDialog.errorMessage = '网络异常或请求超时，暂未确认本次入库是否成功。'
@@ -279,6 +308,12 @@ async function submitRestock() {
         restockDialog.errorMessage = '入库失败，请稍后重试。'
       }
     }
+    announce(
+      `${restockDialog.errorMessage}${
+        errorRequestId.value ? `。请求编号 ${errorRequestId.value}` : ''
+      }`,
+      { assertive: true },
+    )
   } finally {
     restockDialog.submitting = false
   }
@@ -513,7 +548,7 @@ onBeforeUnmount(() => {
             <span class="restock__amount">
               {{ item.recommended_quantity }}<span class="restock__amount-unit">{{ item.unit }}</span>
             </span>
-            <el-button v-if="isAdmin" type="primary" @click="openRestock(item)">
+            <el-button v-if="isAdmin" type="primary" @click="openRestock(item, $event)">
               处置入库
             </el-button>
           </div>
@@ -606,8 +641,13 @@ onBeforeUnmount(() => {
       :close-on-click-modal="!restockDialog.submitting"
       :close-on-press-escape="!restockDialog.submitting"
       :show-close="!restockDialog.submitting"
+      @closed="handleRestockClosed"
     >
-      <div v-if="restockDialog.item" class="restock__dialog">
+      <div
+        v-if="restockDialog.item"
+        class="restock__dialog"
+        @focusin="keepFocusedFieldVisible"
+      >
         <div class="restock__summary">
           <div class="restock__summary-row">
             <span class="restock__summary-label">耗材</span>
@@ -646,6 +686,7 @@ onBeforeUnmount(() => {
               :disabled="restockDialog.submitting"
               controls-position="right"
               class="restock__quantity"
+              aria-label="实际入库数量"
               @change="clearQuantityError"
             />
             <p v-if="expectedStock !== null" class="restock__hint">
@@ -659,6 +700,7 @@ onBeforeUnmount(() => {
               value-format="YYYY-MM-DD"
               :disabled="restockDialog.submitting"
               class="restock__quantity"
+              aria-label="实收日期"
             />
           </el-form-item>
           <el-form-item label="来源">
@@ -667,6 +709,7 @@ onBeforeUnmount(() => {
               maxlength="64"
               :disabled="restockDialog.submitting"
               placeholder="如：建议补货、采购回库"
+              aria-label="来源"
             />
           </el-form-item>
           <el-form-item label="备注">
@@ -678,6 +721,7 @@ onBeforeUnmount(() => {
               show-word-limit
               :disabled="restockDialog.submitting"
               placeholder="可选，如采购回库"
+              aria-label="备注"
             />
           </el-form-item>
         </el-form>
@@ -689,7 +733,16 @@ onBeforeUnmount(() => {
             show-icon
             :title="restockDialog.errorKind === 'unconfirmed' ? '暂未确认提交结果' : '无法完成入库'"
             :description="restockDialog.errorMessage"
-          />
+            role="alert"
+          >
+            <template #default>
+              <p v-if="errorRequestId" class="restock__hint">
+                请求编号
+                <code class="restock__request-id" tabindex="0">{{ errorRequestId }}</code>
+                <el-button link type="primary" @click="copyRestockRequest">复制请求编号</el-button>
+              </p>
+            </template>
+          </el-alert>
           <div class="restock__dialog-error-action">
             <el-button v-if="restockDialog.errorKind === 'rule'" @click="returnAndRefresh">
               返回并刷新建议
@@ -1124,6 +1177,17 @@ onBeforeUnmount(() => {
   gap: 12px;
 }
 
+.restock__request-id {
+  padding: 2px 6px;
+  border-radius: var(--radius-control);
+  background: var(--surface-muted);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 20px;
+  word-break: break-all;
+  user-select: all;
+}
+
 .restock__dialog-error-action {
   display: flex;
   justify-content: flex-end;
@@ -1137,6 +1201,10 @@ onBeforeUnmount(() => {
   .restock__amount {
     font-size: 24px;
     line-height: 32px;
+  }
+
+  .restock__dialog-error-action .el-button {
+    min-height: 44px;
   }
 }
 </style>

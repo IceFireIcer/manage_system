@@ -5,9 +5,15 @@ import { useRouter } from 'vue-router'
 
 import api from '../api'
 import { useUserStore } from '../stores/user'
+import HelpDrawer from '../components/HelpDrawer.vue'
+import { announce } from '../utils/announcer'
+import { keepFocusedFieldVisible } from '../utils/mobileFocus'
+import { copyRequestId, recordRequestId, requestIdOf } from '../utils/requestTrace'
 
 const router = useRouter()
 const userStore = useUserStore()
+const helpOpen = ref(false)
+const lastRequestId = ref('')
 
 const form = reactive({
   account: '',
@@ -104,6 +110,14 @@ function focusFirstInvalid() {
 function clearFormError() {
   formError.value = ''
   formErrorHint.value = ''
+  lastRequestId.value = ''
+}
+
+async function copyLoginRequest() {
+  if (!lastRequestId.value) return
+  const ok = await copyRequestId(lastRequestId.value)
+  if (ok) ElMessage.success('请求编号已复制')
+  else ElMessage.error('复制失败，请手动选择请求编号')
 }
 
 async function handleSubmit() {
@@ -113,6 +127,7 @@ async function handleSubmit() {
   const valid = await formRef.value.validate().catch(() => false)
   if (!valid) {
     focusFirstInvalid()
+    announce('请填写账号和密码后再登录', { assertive: true })
     return
   }
   submitting.value = true
@@ -121,18 +136,27 @@ async function handleSubmit() {
       account: form.account,
       password: form.password,
     })
+    announce(`登录成功，欢迎 ${data.name}`)
     ElMessage.success(`欢迎，${data.name}`)
     await router.replace(resolveRedirect())
   } catch (error) {
     const status = error.response?.status
+    lastRequestId.value = recordRequestId(requestIdOf(error))
     if (status === 401) {
       formError.value = '账号或密码错误'
-      formErrorHint.value = '如账号已停用，请联系班委'
+      formErrorHint.value = '如账号已停用，请联系班委，或打开页面下方“使用帮助”核对账号状态'
       await nextTick()
       passwordRef.value?.focus()
       passwordRef.value?.select()
+      announce(`${formError.value}。${formErrorHint.value}`, { assertive: true })
     } else {
       formError.value = '暂时无法登录，请检查连接后重试'
+      announce(
+        `${formError.value}${
+          lastRequestId.value ? `。请求编号 ${lastRequestId.value}` : ''
+        }`,
+        { assertive: true },
+      )
     }
   } finally {
     submitting.value = false
@@ -154,7 +178,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="login">
+  <div class="login" @focusin="keepFocusedFieldVisible">
     <div class="panel login__card" :aria-busy="checking">
       <div class="login__brand">
         <span class="login__mark">
@@ -196,7 +220,16 @@ onMounted(() => {
           :closable="false"
           show-icon
           class="login__error"
-        />
+          role="alert"
+        >
+          <template #default>
+            <p v-if="lastRequestId" class="login__error-trace">
+              请求编号
+              <code class="login__request-id" tabindex="0">{{ lastRequestId }}</code>
+              <el-button link type="primary" @click="copyLoginRequest">复制请求编号</el-button>
+            </p>
+          </template>
+        </el-alert>
 
         <el-form-item label="账号" prop="account">
           <el-input
@@ -247,7 +280,12 @@ onMounted(() => {
       </el-form>
 
       <p class="login__footnote">账号由部署方或班委分配</p>
+      <button type="button" class="login__help" @click="helpOpen = true">
+        首次使用、账号停用与故障联络
+      </button>
     </div>
+
+    <HelpDrawer v-model="helpOpen" />
   </div>
 </template>
 
@@ -341,6 +379,23 @@ onMounted(() => {
   margin-bottom: 8px;
 }
 
+.login__error-trace {
+  margin: 8px 0 0;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.login__request-id {
+  padding: 2px 6px;
+  border-radius: var(--radius-control);
+  background: var(--surface-muted);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 20px;
+  word-break: break-all;
+  user-select: all;
+}
+
 .login__password :deep(.el-input__inner) {
   padding-right: 80px;
 }
@@ -381,14 +436,49 @@ onMounted(() => {
   text-align: center;
 }
 
+.login__help {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  color: var(--primary);
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 22px;
+  cursor: pointer;
+}
+
+.login__help:hover {
+  background: var(--primary-soft);
+}
+
 @media (max-width: 767px) {
   .login {
     align-items: flex-start;
-    padding: 48px 16px;
+    padding: 32px 12px 96px;
+  }
+
+  .login__card {
+    gap: 20px;
+    padding: 24px;
   }
 
   .login__password-toggle {
     min-height: 44px;
+  }
+
+  .login__help {
+    width: 100%;
+  }
+
+  .login__submit {
+    position: sticky;
+    bottom: calc(var(--keyboard-inset, 0px) + 4px);
+    z-index: 1;
   }
 }
 </style>
