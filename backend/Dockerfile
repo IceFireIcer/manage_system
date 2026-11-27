@@ -29,6 +29,7 @@ RUN pip install --no-cache-dir \
 COPY alembic.ini ./
 COPY alembic ./alembic
 COPY app ./app
+COPY scripts ./scripts
 
 # 非 root 运行
 RUN useradd --create-home --uid 10001 appuser \
