@@ -23,6 +23,7 @@ from app.models import (
     RestockOrder,
     User,
 )
+from app.operation_log import consumable_label, record_operation
 from app.schemas_consumables import (
     STATUS_DISABLED,
     STATUS_ENABLED,
@@ -73,17 +74,16 @@ def _log(
     before: str | None,
     remark: str | None = None,
 ) -> None:
-    db.add(
-        OperationLog(
-            operator_id=operator.id,
-            role=operator.role,
-            action=action,
-            target_type="consumable",
-            target_id=consumable.id,
-            before_value=before,
-            after_value=snapshot(consumable),
-            remark=remark,
-        )
+    record_operation(
+        db,
+        action=action,
+        operator=operator,
+        target_type="consumable",
+        target_id=consumable.id,
+        target_label=consumable_label(consumable),
+        before_value=before,
+        after_value=snapshot(consumable),
+        remark=remark,
     )
 
 
@@ -96,21 +96,21 @@ def _assert_version(
 ) -> None:
     if expected_version is None or expected_version == consumable.version:
         return
-    db.add(
-        OperationLog(
-            operator_id=operator.id,
-            role=operator.role,
-            action="consumable_conflict",
-            target_type="consumable",
-            target_id=consumable.id,
-            before_value=json.dumps(
-                {"expected_version": expected_version, "attempted": attempted},
-                ensure_ascii=False,
-                default=str,
-            ),
-            after_value=snapshot(consumable),
-            remark="并发修改冲突，未写入",
-        )
+    record_operation(
+        db,
+        action="consumable_conflict",
+        operator=operator,
+        result="failure",
+        target_type="consumable",
+        target_id=consumable.id,
+        target_label=consumable_label(consumable),
+        before_value=json.dumps(
+            {"expected_version": expected_version, "attempted": attempted},
+            ensure_ascii=False,
+            default=str,
+        ),
+        after_value=snapshot(consumable),
+        remark="并发修改冲突，未写入",
     )
     db.commit()
     raise HTTPException(

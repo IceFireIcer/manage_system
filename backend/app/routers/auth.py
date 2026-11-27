@@ -11,7 +11,8 @@ from app.config import get_settings
 from app.database import get_db
 from app.deps import CurrentUser
 from app.login_throttle import login_throttle
-from app.models import OperationLog, User
+from app.models import User
+from app.operation_log import record_operation, user_label
 from app.schemas import ChangePasswordRequest, LoginRequest, SessionOut, UserOut
 from app.security import (
     TOKEN_COOKIE_NAME,
@@ -26,17 +27,24 @@ router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 LOGIN_THROTTLED_DETAIL = "登录尝试过于频繁，请稍后重试"
 
 
-def _log_login(db: Session, user: User | None, account: str, remark: str | None) -> None:
-    db.add(
-        OperationLog(
-            operator_id=user.id if user else None,
-            role=user.role if user else None,
-            action="login",
-            target_type="user",
-            target_id=user.id if user else None,
-            after_value=user.account if user else None,
-            remark=remark or f"账号 {account} 登录成功",
-        )
+def _log_login(
+    db: Session,
+    user: User | None,
+    account: str,
+    remark: str | None,
+    result: str = "success",
+) -> None:
+    record_operation(
+        db,
+        action="login",
+        operator=user,
+        operator_name=None if user is not None else account,
+        result=result,
+        target_type="user",
+        target_id=user.id if user else None,
+        target_label=user_label(user) or account,
+        after_value=user.account if user else None,
+        remark=remark or f"账号 {account} 登录成功",
     )
 
 
@@ -152,19 +160,18 @@ def change_password(
     was_initial_password = current_user.must_change_password
     current_user.must_change_password = False
     current_user.session_version += 1
-    db.add(
-        OperationLog(
-            operator_id=current_user.id,
-            role=current_user.role,
-            action="password_change",
-            target_type="user",
-            target_id=current_user.id,
-            after_value=json.dumps(
-                {"account": current_user.account, "initial": was_initial_password},
-                ensure_ascii=False,
-            ),
-            remark=f"账号 {current_user.account} 修改密码",
-        )
+    record_operation(
+        db,
+        action="password_change",
+        operator=current_user,
+        target_type="user",
+        target_id=current_user.id,
+        target_label=user_label(current_user),
+        after_value=json.dumps(
+            {"account": current_user.account, "initial": was_initial_password},
+            ensure_ascii=False,
+        ),
+        remark=f"账号 {current_user.account} 修改密码",
     )
     db.commit()
     db.refresh(current_user)
@@ -186,23 +193,22 @@ def logout(
     db: Annotated[Session, Depends(get_db)],
     current_user: CurrentUser,
 ) -> dict[str, str]:
-    db.add(
-        OperationLog(
-            operator_id=current_user.id,
-            role=current_user.role,
-            action="logout",
-            target_type="user",
-            target_id=current_user.id,
-            after_value=json.dumps(
-                {
-                    "account": current_user.account,
-                    "name": current_user.name,
-                    "role": current_user.role,
-                },
-                ensure_ascii=False,
-            ),
-            remark=f"账号 {current_user.account} 退出登录",
-        )
+    record_operation(
+        db,
+        action="logout",
+        operator=current_user,
+        target_type="user",
+        target_id=current_user.id,
+        target_label=user_label(current_user),
+        after_value=json.dumps(
+            {
+                "account": current_user.account,
+                "name": current_user.name,
+                "role": current_user.role,
+            },
+            ensure_ascii=False,
+        ),
+        remark=f"账号 {current_user.account} 退出登录",
     )
     db.commit()
     settings = get_settings()
@@ -222,19 +228,18 @@ def logout_all(
     current_user: CurrentUser,
 ) -> dict[str, str]:
     current_user.session_version += 1
-    db.add(
-        OperationLog(
-            operator_id=current_user.id,
-            role=current_user.role,
-            action="logout_all",
-            target_type="user",
-            target_id=current_user.id,
-            after_value=json.dumps(
-                {"account": current_user.account, "session_version": current_user.session_version},
-                ensure_ascii=False,
-            ),
-            remark=f"账号 {current_user.account} 撤销全部会话",
-        )
+    record_operation(
+        db,
+        action="logout_all",
+        operator=current_user,
+        target_type="user",
+        target_id=current_user.id,
+        target_label=user_label(current_user),
+        after_value=json.dumps(
+            {"account": current_user.account, "session_version": current_user.session_version},
+            ensure_ascii=False,
+        ),
+        remark=f"账号 {current_user.account} 撤销全部会话",
     )
     db.commit()
     response.delete_cookie(key=TOKEN_COOKIE_NAME)
