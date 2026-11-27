@@ -2,6 +2,7 @@
 import { computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useUserStore } from './stores/user'
+import ScreenReaderAnnouncer from './components/ScreenReaderAnnouncer.vue'
 
 const userStore = useUserStore()
 const router = useRouter()
@@ -23,6 +24,8 @@ async function retry() {
 </script>
 
 <template>
+  <ScreenReaderAnnouncer />
+
   <div v-if="checking" class="startup" role="status" aria-live="polite">
     <div class="startup__brand">
       <span class="startup__mark">

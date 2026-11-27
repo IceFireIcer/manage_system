@@ -1,10 +1,21 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowDown, Bell, Box, Expand, Fold, Setting, Tickets, TrendCharts } from '@element-plus/icons-vue'
-import { useAlertsStore } from '../stores/alerts'
+import {
+  ArrowDown,
+  Bell,
+  Box,
+  Expand,
+  Fold,
+  QuestionFilled,
+  Setting,
+  Tickets,
+  TrendCharts,
+} from '@element-plus/icons-vue'
 import { useUserStore } from '../stores/user'
+import { useAlertsStore } from '../stores/alerts'
+import HelpDrawer from '../components/HelpDrawer.vue'
 
 const GROUP_META = {
   inventory: { label: '库存总览', icon: Box, order: 1 },
@@ -27,6 +38,12 @@ const alertsStore = useAlertsStore()
 const viewportWidth = ref(window.innerWidth)
 const collapsed = ref(window.innerWidth < 1280)
 const drawerOpen = ref(false)
+const drawerNavigation = ref(false)
+const helpOpen = ref(false)
+
+const toggleButtonRef = ref(null)
+const userTriggerRef = ref(null)
+const mainRef = ref(null)
 
 const isMobile = computed(() => viewportWidth.value < 768)
 const canSeeAlerts = computed(() => ['teacher', 'admin'].includes(userStore.user?.role))
@@ -92,6 +109,16 @@ function handleResize() {
   }
 }
 
+function syncKeyboardInset() {
+  const viewport = window.visualViewport
+  if (!viewport) {
+    document.documentElement.style.setProperty('--keyboard-inset', '0px')
+    return
+  }
+  const inset = Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop)
+  document.documentElement.style.setProperty('--keyboard-inset', `${Math.round(inset)}px`)
+}
+
 function toggleSidebar() {
   if (isMobile.value) {
     drawerOpen.value = !drawerOpen.value
@@ -102,6 +129,7 @@ function toggleSidebar() {
 
 function handleMenuSelect() {
   if (isMobile.value) {
+    drawerNavigation.value = true
     drawerOpen.value = false
   }
 }
@@ -114,6 +142,24 @@ function goAlerts() {
     return
   }
   router.push({ path: '/overview', query: { focus: 'alerts' } })
+}
+
+async function focusMain() {
+  await nextTick()
+  window.scrollTo({ top: 0 })
+  mainRef.value?.focus?.({ preventScroll: true })
+}
+
+function handleDrawerClosed() {
+  if (drawerNavigation.value) {
+    drawerNavigation.value = false
+    nextTick(() => {
+      window.scrollTo({ top: 0 })
+      mainRef.value?.focus?.({ preventScroll: true })
+    })
+    return
+  }
+  nextTick(() => toggleButtonRef.value?.focus?.())
 }
 
 async function handleLogout() {
@@ -185,7 +231,9 @@ function openPasswordDialog() {
 function handlePasswordClosed() {
   if (userStore.mustChangePassword) {
     passwordDialogOpen.value = true
+    return
   }
+  nextTick(() => userTriggerRef.value?.focus?.())
 }
 
 async function submitPassword() {
@@ -253,8 +301,15 @@ watch(
 
 watch(
   () => route.path,
-  () => {
+  async () => {
+    const drawerWasOpen = drawerOpen.value
+    const viaDrawer = isMobile.value && (drawerNavigation.value || drawerWasOpen)
+    if (drawerWasOpen) drawerNavigation.value = true
     drawerOpen.value = false
+    await nextTick()
+    if (viaDrawer) return
+    window.scrollTo({ top: 0 })
+    mainRef.value?.focus?.({ preventScroll: true })
   },
 )
 
@@ -270,16 +325,25 @@ watch(
 
 onMounted(() => {
   window.addEventListener('resize', handleResize)
+  window.visualViewport?.addEventListener('resize', syncKeyboardInset)
+  window.visualViewport?.addEventListener('scroll', syncKeyboardInset)
+  syncKeyboardInset()
   expiryTimer = window.setInterval(checkExpiry, 30000)
   checkExpiry()
   if (canSeeAlerts.value) {
     alertsStore.fetch()
     alertsTimer = window.setInterval(() => alertsStore.fetch({ silent: true }), 30000)
   }
+  if (!userStore.mustChangePassword) {
+    nextTick(() => mainRef.value?.focus?.({ preventScroll: true }))
+  }
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('resize', handleResize)
+  window.visualViewport?.removeEventListener('resize', syncKeyboardInset)
+  window.visualViewport?.removeEventListener('scroll', syncKeyboardInset)
+  document.documentElement.style.removeProperty('--keyboard-inset')
   if (expiryTimer) {
     window.clearInterval(expiryTimer)
     expiryTimer = null
@@ -293,8 +357,11 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="layout">
+    <a class="layout__skip" href="#main-content" @click.prevent="focusMain">跳到主要内容</a>
+
     <header class="layout__header">
       <button
+        ref="toggleButtonRef"
         class="layout__toggle"
         type="button"
         :aria-label="toggleLabel"
@@ -329,6 +396,16 @@ onBeforeUnmount(() => {
         </button>
       </el-badge>
 
+      <button
+        class="layout__help"
+        type="button"
+        aria-label="使用帮助与故障联络"
+        @click="helpOpen = true"
+      >
+        <el-icon :size="18"><QuestionFilled /></el-icon>
+        <span class="layout__help-text">帮助</span>
+      </button>
+
       <div class="layout__account">
         <span class="layout__user-name" :title="userStore.user?.name">
           {{ userStore.user?.name }}
@@ -337,7 +414,12 @@ onBeforeUnmount(() => {
           {{ userStore.roleName }}
         </span>
         <el-dropdown trigger="click" @command="handleUserCommand">
-          <button class="layout__user-trigger" type="button" aria-label="账号菜单">
+          <button
+            ref="userTriggerRef"
+            class="layout__user-trigger"
+            type="button"
+            aria-label="账号菜单"
+          >
             <el-icon :size="16"><ArrowDown /></el-icon>
           </button>
           <template #dropdown>
@@ -394,6 +476,7 @@ onBeforeUnmount(() => {
         :with-header="false"
         size="208px"
         class="layout__drawer"
+        @closed="handleDrawerClosed"
       >
         <nav class="layout__drawer-nav" aria-label="主导航">
           <el-menu
@@ -421,7 +504,13 @@ onBeforeUnmount(() => {
         </nav>
       </el-drawer>
 
-      <main class="layout__main">
+      <main
+        id="main-content"
+        ref="mainRef"
+        class="layout__main"
+        tabindex="-1"
+        aria-label="主要内容"
+      >
         <div class="page">
           <router-view v-slot="{ Component }">
             <transition name="route-fade" mode="out-in">
@@ -500,6 +589,8 @@ onBeforeUnmount(() => {
         </el-button>
       </template>
     </el-dialog>
+
+    <HelpDrawer v-model="helpOpen" />
   </div>
 </template>
 
@@ -507,6 +598,26 @@ onBeforeUnmount(() => {
 .layout {
   min-height: 100vh;
   background: var(--page);
+}
+
+.layout__skip {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 60;
+  padding: 8px 12px;
+  border-radius: var(--radius-control);
+  background: var(--primary);
+  color: #FFFFFF;
+  font-size: 14px;
+  line-height: 20px;
+  text-decoration: none;
+  transform: translateY(-200%);
+  transition: transform var(--duration-hover) ease;
+}
+
+.layout__skip:focus-visible {
+  transform: translateY(0);
 }
 
 .layout__header {
@@ -546,6 +657,31 @@ onBeforeUnmount(() => {
   color: var(--text);
 }
 
+.layout__help {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 40px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 22px;
+  cursor: pointer;
+  transition:
+    background-color var(--duration-hover) ease,
+    color var(--duration-hover) ease;
+}
+
+.layout__help:hover {
+  background: var(--surface-muted);
+  color: var(--text);
+}
+
 .layout__brand {
   display: flex;
   align-items: center;
@@ -562,10 +698,6 @@ onBeforeUnmount(() => {
 
 .layout__spacer {
   flex: 1;
-}
-
-.layout__alert {
-  display: inline-flex;
 }
 
 .layout__account {
@@ -622,6 +754,10 @@ onBeforeUnmount(() => {
 .layout__main {
   flex: 1;
   min-width: 0;
+}
+
+.layout__main:focus {
+  outline: none;
 }
 
 .layout__menu {
@@ -682,6 +818,8 @@ onBeforeUnmount(() => {
 }
 
 .layout__current {
+  flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -713,6 +851,21 @@ onBeforeUnmount(() => {
   }
 
   .layout__account .status-tag {
+    display: none;
+  }
+
+  .layout__help {
+    width: 40px;
+    padding: 0;
+  }
+
+  .layout__help-text {
+    display: none;
+  }
+}
+
+@media (max-width: 480px) {
+  .layout__user-name {
     display: none;
   }
 }

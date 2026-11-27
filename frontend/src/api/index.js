@@ -2,6 +2,7 @@ import axios from 'axios'
 import { ElMessage } from 'element-plus'
 import router from '../router'
 import { useUserStore } from '../stores/user'
+import { recordRequestId, requestIdOf } from '../utils/requestTrace'
 
 const api = axios.create({
   baseURL: '/api/v1',
@@ -11,13 +12,6 @@ const api = axios.create({
 
 let lastForbiddenAt = 0
 let lastServerErrorAt = 0
-
-function requestIdOf(error) {
-  const fromHeader = error.response?.headers?.['x-request-id']
-  const fromBody = error.response?.data?.request_id
-  const value = fromHeader || fromBody
-  return value ? `（请求编号 ${value}）` : ''
-}
 
 api.interceptors.request.use((config) => {
   if (config.skipAuthRedirect) return config
@@ -32,7 +26,8 @@ api.interceptors.response.use(
   (response) => response,
   (error) => {
     const status = error.response?.status
-    const requestIdSuffix = requestIdOf(error)
+    const requestId = recordRequestId(requestIdOf(error))
+    const requestIdSuffix = requestId ? `（请求编号 ${requestId}）` : ''
 
     if (status === 401 && !error.config?.skipAuthRedirect) {
       const userStore = useUserStore()
