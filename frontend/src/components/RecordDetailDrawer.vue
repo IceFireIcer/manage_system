@@ -18,7 +18,7 @@ const props = defineProps({
   },
 })
 
-const emit = defineEmits(['update:modelValue', 'closed', 'reverse', 'correct'])
+const emit = defineEmits(['update:modelValue', 'closed', 'reverse', 'correct', 'return', 'scrap'])
 
 const TYPE_META = {
   normal: { label: '领用', className: 'status-tag--info' },
@@ -143,6 +143,18 @@ function handleCorrect() {
   }
 }
 
+function handleReturn() {
+  if (detail.value) {
+    emit('return', detail.value)
+  }
+}
+
+function handleScrap() {
+  if (detail.value) {
+    emit('scrap', detail.value)
+  }
+}
+
 function handleResize() {
   viewportWidth.value = window.innerWidth
 }
@@ -234,6 +246,15 @@ onBeforeUnmount(() => {
             <dt>红冲原因</dt>
             <dd>{{ detail.reversal_reason }}</dd>
           </div>
+          <div v-if="detail.type === 'normal'" class="record-drawer__field record-drawer__field--full">
+            <dt>可退 / 可报损数量</dt>
+            <dd>
+              {{ detail.returnable_quantity }}<span v-if="detail.unit"> {{ detail.unit }}</span>
+              <span class="record-drawer__hint">
+                已退 {{ detail.returned_quantity }} · 已报损 {{ detail.scrapped_quantity }}
+              </span>
+            </dd>
+          </div>
         </dl>
 
         <div v-if="detail.correction" class="record-drawer__correction">
@@ -316,11 +337,65 @@ onBeforeUnmount(() => {
             <el-button link type="primary" @click="loadRecord(detail.reentry.id)">查看重登流水</el-button>
           </div>
         </div>
+
+        <div v-if="detail.returns?.length || detail.scraps?.length" class="record-drawer__related">
+          <h3 class="record-drawer__related-title">实物退库与报损</h3>
+          <div
+            v-for="item in detail.returns"
+            :key="`return-${item.id}`"
+            class="record-drawer__related-row"
+          >
+            <div>
+              <span class="record-drawer__related-label">实物退库 #{{ item.id }}</span>
+              <span class="record-drawer__related-meta">
+                {{ formatTime(item.created_at) }} · +{{ item.quantity }}{{ detail.unit ? ` ${detail.unit}` : '' }}
+                · 原领用 #{{ item.requisition_id }}
+                <template v-if="item.order_no"> · {{ item.order_no }}</template>
+                <template v-if="item.reason"> · 原因：{{ item.reason }}</template>
+                · 经办：{{ item.operator_name }}
+              </span>
+            </div>
+            <span class="status-tag status-tag--success">已回加库存</span>
+          </div>
+          <div
+            v-for="item in detail.scraps"
+            :key="`scrap-${item.id}`"
+            class="record-drawer__related-row"
+          >
+            <div>
+              <span class="record-drawer__related-label">报损 #{{ item.id }}</span>
+              <span class="record-drawer__related-meta">
+                {{ formatTime(item.created_at) }} · 损耗 {{ item.quantity }}{{ detail.unit ? ` ${detail.unit}` : '' }}
+                · 原领用 #{{ item.requisition_id }}
+                <template v-if="item.order_no"> · {{ item.order_no }}</template>
+                · 原因：{{ item.reason }}
+                · 经办：{{ item.operator_name }}
+              </span>
+            </div>
+            <span class="status-tag status-tag--neutral">不改变可用库存</span>
+          </div>
+        </div>
       </template>
     </div>
 
     <template #footer>
       <div class="record-drawer__footer">
+        <el-button
+          v-if="canOperate && detail.returnable_quantity > 0"
+          type="primary"
+          plain
+          @click="handleReturn"
+        >
+          实物退库
+        </el-button>
+        <el-button
+          v-if="isStaff && canOperate && detail.returnable_quantity > 0"
+          type="warning"
+          plain
+          @click="handleScrap"
+        >
+          登记报损
+        </el-button>
         <el-button v-if="isStudent && canOperate" type="primary" plain @click="handleCorrect">
           申请纠错
         </el-button>

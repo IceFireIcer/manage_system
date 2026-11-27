@@ -187,7 +187,9 @@ class InventoryEvent(Base):
         UniqueConstraint(
             "consumable_id", "exec_seq", name="uq_inventory_events_consumable_seq"
         ),
-        CheckConstraint("delta <> 0", name="ck_inventory_events_delta"),
+        CheckConstraint(
+            "delta <> 0 OR event_type = 'scrap'", name="ck_inventory_events_delta"
+        ),
         CheckConstraint(
             "stock_after = stock_before + delta", name="ck_inventory_events_balance"
         ),
@@ -231,6 +233,68 @@ class InventoryEvent(Base):
         String(16), nullable=False, default="trusted"
     )
     class_id: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    created_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
+
+
+class RequisitionReturn(Base):
+    __tablename__ = "requisition_returns"
+    __table_args__ = (
+        UniqueConstraint("order_no", name="uq_requisition_returns_order_no"),
+        UniqueConstraint("request_id", name="uq_requisition_returns_request_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    order_no: Mapped[str] = mapped_column(String(40), nullable=False)
+    request_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    requisition_id: Mapped[int] = mapped_column(
+        ForeignKey("requisitions.id"), nullable=False, index=True
+    )
+    consumable_id: Mapped[int] = mapped_column(
+        ForeignKey("consumables.id"), nullable=False
+    )
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    stock_before: Mapped[int] = mapped_column(Integer, nullable=False)
+    stock_after: Mapped[int] = mapped_column(Integer, nullable=False)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    remark: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    operator_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    operator_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    operator_role: Mapped[str] = mapped_column(String(16), nullable=False)
+    class_id: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    business_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False)
+    posted_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False)
+    event_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
+
+
+class RequisitionScrap(Base):
+    __tablename__ = "requisition_scraps"
+    __table_args__ = (
+        UniqueConstraint("order_no", name="uq_requisition_scraps_order_no"),
+        UniqueConstraint("request_id", name="uq_requisition_scraps_request_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    order_no: Mapped[str] = mapped_column(String(40), nullable=False)
+    request_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    requisition_id: Mapped[int] = mapped_column(
+        ForeignKey("requisitions.id"), nullable=False, index=True
+    )
+    consumable_id: Mapped[int] = mapped_column(
+        ForeignKey("consumables.id"), nullable=False
+    )
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    stock_before: Mapped[int] = mapped_column(Integer, nullable=False)
+    stock_after: Mapped[int] = mapped_column(Integer, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    remark: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    operator_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    operator_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    operator_role: Mapped[str] = mapped_column(String(16), nullable=False)
+    class_id: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    business_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False)
+    posted_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False)
+    event_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
 
 

@@ -21,6 +21,8 @@ from app.models import (
     Requisition,
     RequisitionCorrection,
     RequisitionOrder,
+    RequisitionReturn,
+    RequisitionScrap,
     User,
 )
 from app.schemas_consumables import STATUS_ENABLED
@@ -41,7 +43,11 @@ from app.schemas_requisitions import (
     RequisitionRecordOut,
     RequisitionRelatedOut,
     RequisitionRequestStatusOut,
+    RequisitionReturnOut,
+    RequisitionScrapOut,
+    ReturnCreate,
     ReversalCreate,
+    ScrapCreate,
 )
 
 router = APIRouter(prefix="/api/v1/requisitions", tags=["requisitions"])
@@ -277,6 +283,31 @@ def _build_query(
     if req_status is not None:
         query = query.where(Requisition.status == req_status)
     return query
+
+
+
+def _returned_total(db: Session, requisition_id: int) -> int:
+    value = db.scalar(
+        select(func.coalesce(func.sum(RequisitionReturn.quantity), 0)).where(
+            RequisitionReturn.requisition_id == requisition_id
+        )
+    )
+    return int(value or 0)
+
+
+def _scrapped_total(db: Session, requisition_id: int) -> int:
+    value = db.scalar(
+        select(func.coalesce(func.sum(RequisitionScrap.quantity), 0)).where(
+            RequisitionScrap.requisition_id == requisition_id
+        )
+    )
+    return int(value or 0)
+
+
+def _returnable_quantity(requisition: Requisition, returned: int, scrapped: int) -> int:
+    if requisition.type != "normal":
+        return 0
+    return max(0, requisition.quantity - returned - scrapped)
 
 
 def _serialize_row(
@@ -843,6 +874,56 @@ def _latest_correction_for(
     ).first()
 
 
+def _return_out(db: Session, record: RequisitionReturn) -> RequisitionReturnOut:
+    consumable = db.get(Consumable, record.consumable_id)
+    origin = db.get(Requisition, record.requisition_id)
+    return RequisitionReturnOut(
+        id=record.id,
+        order_no=record.order_no,
+        request_id=record.request_id,
+        requisition_id=record.requisition_id,
+        requisition_order_no=origin.order_no if origin is not None else None,
+        consumable_id=record.consumable_id,
+        consumable_name=consumable.name if consumable else f"耗材#{record.consumable_id}",
+        unit=consumable.unit if consumable else "",
+        quantity=record.quantity,
+        stock_before=record.stock_before,
+        stock_after=record.stock_after,
+        reason=record.reason,
+        remark=record.remark,
+        operator_id=record.operator_id,
+        operator_name=record.operator_name,
+        operator_role=record.operator_role,
+        event_id=record.event_id,
+        created_at=record.created_at,
+    )
+
+
+def _scrap_out(db: Session, record: RequisitionScrap) -> RequisitionScrapOut:
+    consumable = db.get(Consumable, record.consumable_id)
+    origin = db.get(Requisition, record.requisition_id)
+    return RequisitionScrapOut(
+        id=record.id,
+        order_no=record.order_no,
+        request_id=record.request_id,
+        requisition_id=record.requisition_id,
+        requisition_order_no=origin.order_no if origin is not None else None,
+        consumable_id=record.consumable_id,
+        consumable_name=consumable.name if consumable else f"耗材#{record.consumable_id}",
+        unit=consumable.unit if consumable else "",
+        quantity=record.quantity,
+        stock_before=record.stock_before,
+        stock_after=record.stock_after,
+        reason=record.reason,
+        remark=record.remark,
+        operator_id=record.operator_id,
+        operator_name=record.operator_name,
+        operator_role=record.operator_role,
+        event_id=record.event_id,
+        created_at=record.created_at,
+    )
+
+
 def _detail_out(db: Session, requisition: Requisition) -> RequisitionDetailOut:
     correction_target_id = requisition.id
     origin_reversal: Requisition | None = None
@@ -893,6 +974,28 @@ def _detail_out(db: Session, requisition: Requisition) -> RequisitionDetailOut:
             ).first()
             if reentry is not None:
                 detail.reentry = _related_out(reentry)
+
+    detail.returned_quantity = _returned_total(db, requisition.id)
+    detail.scrapped_quantity = _scrapped_total(db, requisition.id)
+    detail.returnable_quantity = _returnable_quantity(
+        requisition, detail.returned_quantity, detail.scrapped_quantity
+    )
+    detail.returns = [
+        _return_out(db, record)
+        for record in db.scalars(
+            select(RequisitionReturn)
+            .where(RequisitionReturn.requisition_id == requisition.id)
+            .order_by(RequisitionReturn.created_at, RequisitionReturn.id)
+        )
+    ]
+    detail.scraps = [
+        _scrap_out(db, record)
+        for record in db.scalars(
+            select(RequisitionScrap)
+            .where(RequisitionScrap.requisition_id == requisition.id)
+            .order_by(RequisitionScrap.created_at, RequisitionScrap.id)
+        )
+    ]
     return detail
 
 
@@ -1392,6 +1495,292 @@ def reverse_requisition(
     service.clear_cache()
     db.refresh(reversal)
     return _detail_out(db, reversal)
+
+
+def _load_action_target(
+    db: Session,
+    requisition_id: int,
+    current_user: User,
+    *,
+    staff_only: bool,
+) -> Requisition:
+    requisition = db.get(Requisition, requisition_id, with_for_update=True)
+    if requisition is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="流水不存在"
+        )
+    if staff_only:
+        if current_user.role == "student":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="学生不能登记报损，请由教师或班委处理",
+            )
+        if requisition.class_id != current_user.class_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, detail="无权限处理该流水"
+            )
+    elif current_user.role == "student":
+        if requisition.user_id != current_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="学生只能登记本人领用的退库",
+            )
+    elif requisition.class_id != current_user.class_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="无权限处理该流水"
+        )
+    if requisition.type != "normal" or requisition.status != "active":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="仅有效领用记录可以登记退库或报损",
+        )
+    return requisition
+
+
+@router.post("/{requisition_id}/returns", status_code=status.HTTP_201_CREATED)
+def create_return(
+    requisition_id: int,
+    payload: ReturnCreate,
+    db: Annotated[Session, Depends(get_db)],
+    current_user: CurrentUser,
+) -> JSONResponse:
+    requisition = _load_action_target(
+        db, requisition_id, current_user, staff_only=False
+    )
+    request_id = payload.request_id or uuid.uuid4().hex
+    existing = db.scalars(
+        select(RequisitionReturn).where(RequisitionReturn.request_id == request_id)
+    ).first()
+    if existing is not None:
+        if (
+            existing.requisition_id != requisition.id
+            or existing.quantity != payload.quantity
+            or (existing.reason or None) != payload.reason
+            or (existing.remark or None) != payload.remark
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="请求标识已用于不同内容，请勿复用",
+            )
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content=jsonable_encoder(_return_out(db, existing)),
+        )
+
+    consumable = db.get(Consumable, requisition.consumable_id, with_for_update=True)
+    if consumable is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="流水不存在"
+        )
+    returnable = _returnable_quantity(
+        requisition,
+        _returned_total(db, requisition.id),
+        _scrapped_total(db, requisition.id),
+    )
+    if payload.quantity > returnable:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"退库数量不能超过可退数量 {returnable}",
+        )
+
+    posted_at = business_time.now().replace(microsecond=0)
+    stock_before = consumable.current_stock
+    db.execute(
+        update(Consumable)
+        .where(Consumable.id == consumable.id)
+        .values(current_stock=Consumable.current_stock + payload.quantity)
+    )
+    db.flush()
+    db.refresh(consumable)
+    stock_after = consumable.current_stock
+
+    record = RequisitionReturn(
+        order_no=inventory_ledger.return_order_no_for(request_id, posted_at),
+        request_id=request_id,
+        requisition_id=requisition.id,
+        consumable_id=requisition.consumable_id,
+        quantity=payload.quantity,
+        stock_before=stock_before,
+        stock_after=stock_after,
+        reason=payload.reason,
+        remark=payload.remark,
+        operator_id=current_user.id,
+        operator_name=current_user.name,
+        operator_role=current_user.role,
+        class_id=requisition.class_id,
+        business_at=posted_at,
+        posted_at=posted_at,
+        created_at=posted_at,
+    )
+    db.add(record)
+    db.flush()
+    event = inventory_ledger.append_event(
+        db,
+        consumable=consumable,
+        event_type=inventory_ledger.EVENT_RETURN,
+        delta=payload.quantity,
+        stock_before=stock_before,
+        stock_after=stock_after,
+        business_at=posted_at,
+        posted_at=posted_at,
+        source_type=inventory_ledger.SOURCE_REQUISITION_RETURN,
+        source_id=record.id,
+        requisition_id=requisition.id,
+        operator=current_user,
+        unit_snapshot=consumable.unit,
+    )
+    record.event_id = event.id
+    db.add(
+        OperationLog(
+            operator_id=current_user.id,
+            role=current_user.role,
+            action="requisition_return",
+            target_type="requisition",
+            target_id=requisition.id,
+            before_value=json.dumps(
+                {"status": requisition.status, "stock_before": stock_before},
+                ensure_ascii=False,
+            ),
+            after_value=json.dumps(
+                {
+                    "return_id": record.id,
+                    "return_order_no": record.order_no,
+                    "requisition_id": requisition.id,
+                    "quantity": payload.quantity,
+                    "reason": payload.reason,
+                    "stock_before": stock_before,
+                    "stock_after": stock_after,
+                    "event_id": event.id,
+                },
+                ensure_ascii=False,
+            ),
+        )
+    )
+    db.commit()
+    service.clear_cache(consumable.id)
+    return JSONResponse(
+        status_code=status.HTTP_201_CREATED,
+        content=jsonable_encoder(_return_out(db, record)),
+    )
+
+
+@router.post("/{requisition_id}/scraps", status_code=status.HTTP_201_CREATED)
+def create_scrap(
+    requisition_id: int,
+    payload: ScrapCreate,
+    db: Annotated[Session, Depends(get_db)],
+    current_user: CurrentUser,
+) -> JSONResponse:
+    requisition = _load_action_target(
+        db, requisition_id, current_user, staff_only=True
+    )
+    request_id = payload.request_id or uuid.uuid4().hex
+    existing = db.scalars(
+        select(RequisitionScrap).where(RequisitionScrap.request_id == request_id)
+    ).first()
+    if existing is not None:
+        if (
+            existing.requisition_id != requisition.id
+            or existing.quantity != payload.quantity
+            or (existing.reason or None) != payload.reason
+            or (existing.remark or None) != payload.remark
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="请求标识已用于不同内容，请勿复用",
+            )
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content=jsonable_encoder(_scrap_out(db, existing)),
+        )
+
+    consumable = db.get(Consumable, requisition.consumable_id, with_for_update=True)
+    if consumable is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="流水不存在"
+        )
+    returnable = _returnable_quantity(
+        requisition,
+        _returned_total(db, requisition.id),
+        _scrapped_total(db, requisition.id),
+    )
+    if payload.quantity > returnable:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"报损数量不能超过可退数量 {returnable}",
+        )
+
+    posted_at = business_time.now().replace(microsecond=0)
+    stock_before = consumable.current_stock
+    stock_after = stock_before
+
+    record = RequisitionScrap(
+        order_no=inventory_ledger.scrap_order_no_for(request_id, posted_at),
+        request_id=request_id,
+        requisition_id=requisition.id,
+        consumable_id=requisition.consumable_id,
+        quantity=payload.quantity,
+        stock_before=stock_before,
+        stock_after=stock_after,
+        reason=payload.reason,
+        remark=payload.remark,
+        operator_id=current_user.id,
+        operator_name=current_user.name,
+        operator_role=current_user.role,
+        class_id=requisition.class_id,
+        business_at=posted_at,
+        posted_at=posted_at,
+        created_at=posted_at,
+    )
+    db.add(record)
+    db.flush()
+    event = inventory_ledger.append_event(
+        db,
+        consumable=consumable,
+        event_type=inventory_ledger.EVENT_SCRAP,
+        delta=0,
+        stock_before=stock_before,
+        stock_after=stock_after,
+        business_at=posted_at,
+        posted_at=posted_at,
+        source_type=inventory_ledger.SOURCE_REQUISITION_SCRAP,
+        source_id=record.id,
+        requisition_id=requisition.id,
+        operator=current_user,
+        unit_snapshot=consumable.unit,
+    )
+    record.event_id = event.id
+    db.add(
+        OperationLog(
+            operator_id=current_user.id,
+            role=current_user.role,
+            action="requisition_scrap",
+            target_type="requisition",
+            target_id=requisition.id,
+            before_value=json.dumps(
+                {"status": requisition.status, "current_stock": stock_before},
+                ensure_ascii=False,
+            ),
+            after_value=json.dumps(
+                {
+                    "scrap_id": record.id,
+                    "scrap_order_no": record.order_no,
+                    "requisition_id": requisition.id,
+                    "quantity": payload.quantity,
+                    "reason": payload.reason,
+                    "current_stock": stock_after,
+                    "event_id": event.id,
+                },
+                ensure_ascii=False,
+            ),
+        )
+    )
+    db.commit()
+    service.clear_cache(consumable.id)
+    return JSONResponse(
+        status_code=status.HTTP_201_CREATED,
+        content=jsonable_encoder(_scrap_out(db, record)),
+    )
 
 
 @router.get("/{requisition_id}")

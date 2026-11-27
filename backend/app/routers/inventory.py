@@ -15,6 +15,8 @@ from app.models import (
     Consumable,
     Requisition,
     RequisitionOrder,
+    RequisitionReturn,
+    RequisitionScrap,
     RestockOrder,
     User,
 )
@@ -196,6 +198,38 @@ def get_inventory_ledger(
         if requisition_ids
         else {}
     )
+    return_ids = {
+        event.source_id
+        for event in events
+        if event.source_type == inventory_ledger.SOURCE_REQUISITION_RETURN
+        and event.source_id is not None
+    }
+    return_numbers = (
+        {
+            record.id: record.order_no
+            for record in db.scalars(
+                select(RequisitionReturn).where(RequisitionReturn.id.in_(return_ids))
+            )
+        }
+        if return_ids
+        else {}
+    )
+    scrap_ids = {
+        event.source_id
+        for event in events
+        if event.source_type == inventory_ledger.SOURCE_REQUISITION_SCRAP
+        and event.source_id is not None
+    }
+    scrap_numbers = (
+        {
+            record.id: record.order_no
+            for record in db.scalars(
+                select(RequisitionScrap).where(RequisitionScrap.id.in_(scrap_ids))
+            )
+        }
+        if scrap_ids
+        else {}
+    )
 
     consistent = bool(events) and events[-1].stock_after == consumable.current_stock
     if consistent:
@@ -210,6 +244,18 @@ def get_inventory_ledger(
         if events and events[0].event_type == inventory_ledger.EVENT_OPENING
         else None
     )
+
+    def _event_order_no(event):
+        if event.source_type in (
+            inventory_ledger.SOURCE_REQUISITION_REVERSAL,
+            inventory_ledger.SOURCE_REQUISITION_REENTRY,
+        ):
+            return requisition_numbers.get(event.requisition_id)
+        if event.source_type == inventory_ledger.SOURCE_REQUISITION_RETURN:
+            return return_numbers.get(event.source_id)
+        if event.source_type == inventory_ledger.SOURCE_REQUISITION_SCRAP:
+            return scrap_numbers.get(event.source_id)
+        return order_numbers.get(event.source_id) or restock_numbers.get(event.source_id)
 
     return InventoryLedgerOut(
         consumable_id=consumable.id,
@@ -230,16 +276,7 @@ def get_inventory_ledger(
                 posted_at=event.posted_at,
                 source_type=event.source_type,
                 source_id=event.source_id,
-                order_no=(
-                    requisition_numbers.get(event.requisition_id)
-                    if event.source_type
-                    in (
-                        inventory_ledger.SOURCE_REQUISITION_REVERSAL,
-                        inventory_ledger.SOURCE_REQUISITION_REENTRY,
-                    )
-                    else order_numbers.get(event.source_id)
-                    or restock_numbers.get(event.source_id)
-                ),
+                order_no=_event_order_no(event),
                 requisition_id=event.requisition_id,
                 line_no=event.line_no,
                 operator_id=event.operator_id,
