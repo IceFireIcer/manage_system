@@ -31,6 +31,7 @@ from app.schemas_requisitions import (
     CorrectionCreate,
     CorrectionHandle,
     CorrectionOut,
+    RequisitionConsumableOptionOut,
     RequisitionCreate,
     RequisitionCreateOut,
     RequisitionDetailOut,
@@ -320,8 +321,9 @@ def _serialize_row(
     return RequisitionListItemOut(
         id=requisition.id,
         created_at=requisition.created_at,
-        consumable_name=consumable.name,
-        consumable_spec=consumable.spec,
+        consumable_name=requisition.name_snapshot or consumable.name,
+        consumable_spec=requisition.spec_snapshot or consumable.spec,
+        unit=requisition.unit_snapshot,
         quantity=requisition.quantity,
         user_id=requisition.user_id,
         user_name=user.name,
@@ -524,11 +526,13 @@ def export_requisitions_csv(
     writer = csv.writer(buffer)
     writer.writerow(CSV_HEADERS)
     for record, consumable, user in rows:
-        spec_suffix = f"（{consumable.spec}）" if consumable.spec else ""
+        name = record.name_snapshot or consumable.name
+        spec = record.spec_snapshot or consumable.spec
+        spec_suffix = f"（{spec}）" if spec else ""
         writer.writerow(
             [
                 record.created_at.strftime("%Y-%m-%d %H:%M:%S"),
-                f"{consumable.name}{spec_suffix}",
+                f"{name}{spec_suffix}",
                 record.quantity,
                 user.name,
                 record.stock_after,
@@ -545,6 +549,31 @@ def export_requisitions_csv(
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+@router.get("/consumable-options")
+def list_consumable_options(
+    db: Annotated[Session, Depends(get_db)],
+    current_user: CurrentUser,
+) -> list[RequisitionConsumableOptionOut]:
+    query = (
+        select(Consumable)
+        .join(Requisition, Requisition.consumable_id == Consumable.id)
+        .where(Requisition.class_id == current_user.class_id)
+    )
+    if current_user.role == "student":
+        query = query.where(Requisition.user_id == current_user.id)
+    rows = db.scalars(query.distinct().order_by(Consumable.id)).all()
+    return [
+        RequisitionConsumableOptionOut(
+            id=row.id,
+            name=row.name,
+            spec=row.spec,
+            unit=row.unit,
+            status=row.status,
+        )
+        for row in rows
+    ]
 
 
 @router.get("/requests/{request_id}")
@@ -709,6 +738,9 @@ def create_requisition(
 
             requisition = Requisition(
                 consumable_id=item.consumable_id,
+                name_snapshot=consumable.name,
+                spec_snapshot=consumable.spec,
+                unit_snapshot=consumable.unit,
                 user_id=owner.id,
                 quantity=item.quantity,
                 stock_after=stock_after,
@@ -832,8 +864,11 @@ def _record_out(
     return RequisitionRecordOut(
         id=record.id,
         consumable_id=record.consumable_id,
-        consumable_name=consumable.name if consumable else f"耗材#{record.consumable_id}",
-        unit=consumable.unit if consumable else "",
+        consumable_name=(
+            record.name_snapshot
+            or (consumable.name if consumable else f"耗材#{record.consumable_id}")
+        ),
+        unit=record.unit_snapshot,
         user_id=record.user_id,
         user_name=user.name if user else f"用户#{record.user_id}",
         quantity=record.quantity,
@@ -1289,6 +1324,9 @@ def reverse_requisition(
 
         reversal = Requisition(
             consumable_id=requisition.consumable_id,
+            name_snapshot=consumable.name,
+            spec_snapshot=consumable.spec,
+            unit_snapshot=consumable.unit,
             user_id=origin_user_id,
             quantity=origin_quantity,
             stock_after=stock_after,
@@ -1361,6 +1399,9 @@ def reverse_requisition(
             reentry_stock_after = consumable.current_stock
             reentry = Requisition(
                 consumable_id=consumable.id,
+                name_snapshot=consumable.name,
+                spec_snapshot=consumable.spec,
+                unit_snapshot=consumable.unit,
                 user_id=origin_user_id,
                 quantity=payload.reentry.quantity,
                 stock_after=reentry_stock_after,

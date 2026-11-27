@@ -90,20 +90,24 @@ function eventTime(event) {
   return basisKey.value === 'business' ? event.business_at : event.posted_at
 }
 
-function formatStock(value) {
+function displayUnit(value) {
+  return value || '待核对'
+}
+
+function formatStock(value, snapshot) {
   if (value === null || value === undefined) return '—'
-  return `${value}${unit.value}`
+  return `${value}${displayUnit(snapshot === undefined ? unit.value : snapshot)}`
 }
 
 function formatDelta(event) {
   const prefix = event.delta > 0 ? '+' : ''
-  return `${prefix}${event.delta}${unit.value}`
+  return `${prefix}${event.delta}${displayUnit(event.unit_snapshot)}`
 }
 
 function formatDiff(value) {
   if (value === null || value === undefined) return '—'
   const prefix = value > 0 ? '+' : ''
-  return `${prefix}${value}${unit.value}`
+  return `${prefix}${value}${displayUnit(unit.value)}`
 }
 
 function sourceMeta(event) {
@@ -340,10 +344,10 @@ onBeforeUnmount(() => {
             <template #default="{ row }">{{ formatDelta(row) }}</template>
           </el-table-column>
           <el-table-column label="变动前" width="88" align="right">
-            <template #default="{ row }">{{ formatStock(row.stock_before) }}</template>
+            <template #default="{ row }">{{ formatStock(row.stock_before, row.unit_snapshot) }}</template>
           </el-table-column>
           <el-table-column label="变动后" width="88" align="right">
-            <template #default="{ row }">{{ formatStock(row.stock_after) }}</template>
+            <template #default="{ row }">{{ formatStock(row.stock_after, row.unit_snapshot) }}</template>
           </el-table-column>
           <el-table-column label="证据" width="92">
             <template #default="{ row }">

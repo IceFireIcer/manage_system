@@ -11,7 +11,7 @@ from app import business_time, consumable_import, inventory_ledger
 from app.agent import service
 from app.database import get_db
 from app.deps import CurrentUser, require_role
-from app.models import Consumable, OperationLog, User
+from app.models import Consumable, InventoryEvent, OperationLog, User
 from app.schemas_consumables import (
     STATUS_ENABLED,
     ConsumableCreate,
@@ -230,9 +230,25 @@ def update_consumable(
         )
         consumable.name = name
         consumable.spec = spec
-    for field in ("unit", "location"):
-        if field in data:
-            setattr(consumable, field, data[field].strip())
+    if "unit" in data:
+        new_unit = data["unit"].strip()
+        if new_unit != consumable.unit:
+            has_events = db.scalars(
+                select(InventoryEvent.id)
+                .where(InventoryEvent.consumable_id == consumable.id)
+                .limit(1)
+            ).first()
+            if consumable.current_stock != 0 or has_events is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=(
+                        "耗材已有余额或历史流水，不能直接修改计量单位；"
+                        "请新建档案并在备注中保留旧单位、换算依据与来源"
+                    ),
+                )
+            consumable.unit = new_unit
+    if "location" in data:
+        consumable.location = data["location"].strip()
     if "safety_stock" in data:
         consumable.safety_stock = data["safety_stock"]
 

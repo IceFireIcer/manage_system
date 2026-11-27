@@ -1,5 +1,5 @@
 <script setup>
-import { computed, nextTick, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import api from '../api'
@@ -94,13 +94,6 @@ const lastTrigger = ref(null)
 let requestSerial = 0
 let pendingRequisitionId = null
 
-const unitByName = computed(() => {
-  const map = new Map()
-  for (const item of consumables.value) {
-    if (item.name) map.set(item.name, item.unit || '')
-  }
-  return map
-})
 
 const quickKey = computed(() => {
   if (!applied.type && !applied.status) return 'all'
@@ -197,11 +190,22 @@ function formatTime(value) {
 }
 
 function rowUnit(row) {
-  return unitByName.value.get(row.consumable_name) ?? ''
+  return row.unit || '待核对'
 }
 
 function consumableLabel(row) {
   return row.consumable_spec ? `${row.consumable_name}（${row.consumable_spec}）` : row.consumable_name
+}
+
+function consumableOptionLabel(item) {
+  const base = item.spec ? `${item.name}（${item.spec}）` : item.name
+  return item.status === 'disabled' ? `${base}（已停用）` : base
+}
+
+function userOptionLabel(option) {
+  const role = option.role === 'teacher' ? '教师' : option.role === 'admin' ? '班委' : '学生'
+  const disabled = option.status === 'disabled' ? '·已停用' : ''
+  return `${option.name}（${role}·${option.account}${disabled}）`
 }
 
 function quantityText(row) {
@@ -288,6 +292,7 @@ function buildRouteQuery() {
     query.start_date = applied.dateRange[0]
     query.end_date = applied.dateRange[1]
   }
+  if (page.current > 1) query.page = page.current
   return query
 }
 
@@ -384,21 +389,23 @@ function handleQuick(key) {
 
 function handlePageChange(nextPage) {
   page.current = nextPage
+  syncRouteQuery()
   fetchRecords()
 }
 
 function handleSizeChange(nextSize) {
   page.size = nextSize
   page.current = 1
+  syncRouteQuery()
   fetchRecords()
 }
 
 async function fetchConsumableOptions() {
   consumablesLoadError.value = ''
   try {
-    const { data } = await api.get('/consumables', {
-      params: isStaff.value ? { status: 'all' } : {},
-    })
+    const { data } = isStudent.value
+      ? await api.get('/requisitions/consumable-options')
+      : await api.get('/consumables', { params: { status: 'all' } })
     consumables.value = data
   } catch {
     consumablesLoadError.value = '耗材筛选选项加载失败'
@@ -497,7 +504,7 @@ async function openStockAction(record, kind, event) {
   if (event?.currentTarget) {
     lastTrigger.value = event.currentTarget
   }
-  let target = { ...record, unit: record.unit ?? rowUnit(record) }
+  let target = { ...record, unit: record.unit || rowUnit(record) }
   if (target.returnable_quantity === undefined) {
     try {
       const { data } = await api.get(`/requisitions/${record.id}`)
@@ -595,6 +602,10 @@ function applyRouteQuery() {
   if (Number.isInteger(requisitionId) && requisitionId > 0) {
     pendingRequisitionId = requisitionId
   }
+  const routePage = Number(query.page)
+  if (Number.isInteger(routePage) && routePage > 0) {
+    page.current = routePage
+  }
 }
 
 async function openRouteRequisition() {
@@ -603,11 +614,26 @@ async function openRouteRequisition() {
   if (!id) return
   try {
     await api.get(`/requisitions/${id}`)
-  } catch {
+  } catch (error) {
+    const code = error.response?.status
+    if (code === 404 || code === 403) {
+      ElMessage.warning('该流水不存在或无权查看')
+    }
     return
   }
   openDetail(id)
 }
+
+watch(
+  () => route.query.requisition_id,
+  (value) => {
+    const id = Number(value)
+    if (!value || !Number.isInteger(id) || id <= 0) return
+    if (detailVisible.value && detailId.value === id) return
+    pendingRequisitionId = id
+    openRouteRequisition()
+  },
+)
 
 onMounted(async () => {
   applyRouteQuery()
@@ -679,7 +705,7 @@ onMounted(async () => {
             <el-option
               v-for="item in consumables"
               :key="item.id"
-              :label="item.spec ? `${item.name}（${item.spec}）` : item.name"
+              :label="consumableOptionLabel(item)"
               :value="item.id"
             />
           </el-select>
@@ -698,7 +724,7 @@ onMounted(async () => {
             <el-option
               v-for="option in userOptions"
               :key="option.id"
-              :label="`${option.name}（${option.role === 'teacher' ? '教师' : option.role === 'admin' ? '班委' : '学生'}·${option.account}）`"
+              :label="userOptionLabel(option)"
               :value="option.id"
             />
           </el-select>
@@ -876,6 +902,11 @@ onMounted(async () => {
               <span v-else class="status-tag" :class="statusMeta(row).className">
                 {{ statusMeta(row).label }}
               </span>
+            </template>
+          </el-table-column>
+          <el-table-column label="备注" min-width="160" show-overflow-tooltip>
+            <template #default="{ row }">
+              <span :class="{ 'records__muted': !row.remark }">{{ row.remark || '—' }}</span>
             </template>
           </el-table-column>
           <el-table-column label="纠错" width="100">
