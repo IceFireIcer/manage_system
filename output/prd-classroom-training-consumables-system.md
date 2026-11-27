@@ -9,6 +9,8 @@
 | 决策基线 | ADR-0001~0004、`GLOSSARY.md`、2026-11-26 四轮访谈共识 |
 | 密级 | 内部 |
 
+> **2026-11-27 修订**：代码托管与 CI/CD 已从 AtomGit/CodeArts 迁移到 GitHub（GitHub Actions + GHCR），部署路径与端口以 README / docs/deploy.md 为准；赛事 CodeArts 要求作为历史背景保留（迁移决策见 docs/adr/0005）。
+
 ---
 
 ## 1. 需求背景
@@ -19,7 +21,7 @@
 
 为此，本项目构建一个轻量化 Web 管理系统，解决小班实训耗材的领用登记、库存监控与补货提醒问题；并引入智能补货 Agent，将"库存控制"知识落地为分级补货建议；最终基于华为云 CodeArts 完成代码托管、流水线构建与云端部署，形成可稳定访问、可完整演示的业务闭环。
 
-本项目同时作为参赛作品。赛事要求依托华为云 CodeArts 码道平台完成代码托管、版本管理、CI/CD 流水线发布与项目协同，综合考察系统功能完整性、业务场景贴合度、创新拓展性与软件工程实践能力。本 PRD 的技术范围与验收标准均按赛事要求约束。
+本项目同时作为参赛作品。赛事要求依托华为云 CodeArts 码道平台完成代码托管、版本管理、CI/CD 流水线发布与项目协同，综合考察系统功能完整性、业务场景贴合度、创新拓展性与软件工程实践能力。本 PRD 的技术范围与验收标准均按赛事要求约束。项目实际实施于 2026-11-27 迁移至 GitHub（见修订说明）。
 
 ## 2. 目标与价值
 
@@ -30,7 +32,7 @@
 - 搭建库存总览页面，实时显示剩余数量；低于安全库存的条目 100% 被标记预警，并可快速识别
 - 引入智能补货 Agent：按"紧急 / 一般 / 观察"三级输出结构化补货建议与可解释判断依据；大模型不可用时自动降级为规则模板文案
 - 建立完整库存闭环：领用、撤销（红冲）、补货入库三类变动全部留痕，库存只减不增的风险被消除
-- 基于华为云 CodeArts 完成代码托管、版本管理、CI/CD 流水线（前端构建 → pytest → 镜像发布）与云端部署，Web 端可稳定访问演示；本地保留零 Docker 的裸机启动方式作为兜底
+- 基于 GitHub 完成代码托管、版本管理、CI/CD（GitHub Actions）与云端部署，Web 端可稳定访问演示；本地保留零 Docker 的裸机启动方式作为兜底
 - 预期成效（示例目标，按实际测算调整）：以单班级一学期约 20 次领用、5 类耗材估算，单次登记时间由约 1 分钟缩短为 10 秒以内，库存盘点由每周人工翻阅改为实时查看，缺料由被动应对转为提前 1 至 3 天预警，登记与盘点耗时预计下降约 50%
 
 **价值：**
@@ -81,14 +83,14 @@
 
 **技术范围（依据 ADR-0004）：**
 
-- 开发平台：华为云 CodeArts（代码托管、分支管理、CI/CD 流水线、自动化测试与部署、项目协同）；仓库托管于 AtomGit（https://atomgit.com/IceFire_Icer/manage_system，2026-11-26 已确认，无需迁移）
+- 开发平台：GitHub（代码托管、分支管理、CI/CD、自动化测试与部署、项目协同）；仓库托管于 GitHub（https://github.com/IceFireIcer/manage_system，2026-11-27 由 AtomGit 迁移，见 ADR-0005）
 - 前端：Vue 3 + Vite + Element Plus + Pinia + Axios + vue-router 4 + ECharts 5（库存总览 / 领用登记 / 记录查询 / 建议卡片）
 - 后端：Python 3.12 + FastAPI + pydantic v2 + uvicorn（单进程）；数据访问 SQLAlchemy 2.0（同步 Session）+ Alembic + PyMySQL；认证 PyJWT + bcrypt，JWT 存 httpOnly Cookie（SameSite=Lax）
 - 数据库：MySQL 8.0（`users`、`consumables`、`requisitions`、`operation_logs` 四张业务表）
 - AI 能力：规则引擎负责三级决策计算；默认 DeepSeek API（OpenAI 兼容 SDK）经适配层润色判断依据，适配层保留切换华为云盘古的能力
 - 测试与质量：pytest + httpx + pytest-cov + ruff（不引入 mypy）
 - 部署：云端单台华为云 ECS（2C4G）+ Docker Compose（nginx:alpine + python:3.12-slim + mysql:8.0），公网 IP + HTTP 直接访问；本地开发不启动 Docker，使用已装 Python 3.12.7 / MySQL 8.0.46 / Node 25.4.0 裸机运行
-- CI/CD：CodeArts 流水线三阶段——前端构建 → 后端 pytest → 镜像构建推送（SWR）并发布到 ECS；镜像带版本标签，回滚即切换标签
+- CI/CD：GitHub Actions 双工作流——`ci.yml`（前端构建 + 后端 pytest + ruff）与 `docker-publish.yml`（构建并推送 GHCR 镜像 `labstock-api` / `labstock-web`），服务器拉取部署；镜像带版本标签，回滚即切换标签
 
 **终端范围：** PC 浏览器为主（Chrome / Edge 最新版），移动端浏览器可正常浏览页面（不要求原生 App）。
 
@@ -235,7 +237,7 @@ Agent 采用"规则引擎计算 + 大模型润色"的两段式实现：规则引
 - FR-9.1：提供 Alembic 迁移脚本建四张表，并提供独立 seed 脚本：预置 5 类耗材（含示例安全库存线：焊丝 5 卷、砂纸 20 张、记号笔 8 支、电阻 200 个、实训导线 40 根，按真实调研替换）、三个角色演示账号、近 3 个月模拟流水（约 20 次/学期）；演示数据刻意制造三级场景——1 类缺货（紧急）、1 类低库存（一般）、1 类趋势上升（观察），确保答辩时 Agent 有分级建议可展示
 - FR-9.2：本地启动方式（零 Docker）：Python venv + `requirements.txt` + 本地 MySQL 8.0.46 + Vite dev server；README 提供一键启动脚本，作为云端不可用时的演示兜底
 - FR-9.3：云端部署：单台华为云 ECS（2C4G）+ Docker Compose（nginx:alpine 托管前端静态文件并反代 /api、python:3.12-slim 运行 FastAPI、mysql:8.0）；公网 IP + HTTP 直接访问；云端地址写入交付说明文档
-- FR-9.4：CodeArts 流水线三阶段：前端构建（node:22-alpine）→ 后端 pytest（含覆盖率）→ 镜像构建推送 SWR 并发布到 ECS；镜像带版本标签，回滚即切换标签
+- FR-9.4：GitHub Actions 双工作流——`ci.yml` 前端构建（Node 22）+ 后端 pytest + ruff；`docker-publish.yml` 构建并推送 GHCR 镜像 `labstock-api` / `labstock-web`，服务器拉取部署；镜像带版本标签，回滚即切换标签
 - FR-9.5：自动化测试范围（pytest）：分级规则与补货量公式（纯函数单测）、库存事务原子性（领用/撤销/入库，含库存不足整单拒绝）、鉴权与越权拒绝（403）；前端不做自动化测试，由 3 分钟演示脚本人工覆盖
 - FR-9.6：交付物包含：源码仓库、Alembic 迁移与 seed 脚本、部署说明、3 分钟演示视频、功能说明文档
 
@@ -281,7 +283,7 @@ Agent 采用"规则引擎计算 + 大模型润色"的两段式实现：规则引
 
 | 风险 | 影响 | 应对措施 |
 |---|---|---|
-| 赛事合规：托管平台 AtomGit 与赛事"CodeArts 码道平台"要求的兼容性 | 答辩资格或工程实践评分受影响 | 已按用户确认 AtomGit 为赛事使用平台（2026-11-26）；建议存档赛事方书面/官方说明，若后续被要求迁移再将仓库与流水线切换 CodeArts Repo |
+| 赛事合规：托管平台 GitHub 与赛事"CodeArts 码道平台"要求的兼容性 | 答辩资格或工程实践评分受影响 | 2026-11-27 已按用户决定迁移至 GitHub（ADR-0005）；建议存档赛事方书面/官方说明，若后续被要求再切换 CodeArts Repo |
 | 大模型 API 超时/配额不足/计费波动 | 判断依据无法生成，演示中断 | 仅非正常档调用 + 3 秒超时 + 规则模板降级；缓存巡检结果 10 分钟；提前申请配额并演练 |
 | LLM 输出编造数据或偏离规则结论 | 建议误导、答辩失分 | 提示词严格约束引用输入数据；UI 标注"规则判定 + AI 润色"；保留规则原文 |
 | 并发领用导致超卖 | 库存为负、数据失真 | 整单事务 + 行级锁/条件原子更新 + 提交防抖 |
@@ -293,7 +295,7 @@ Agent 采用"规则引擎计算 + 大模型润色"的两段式实现：规则引
 
 **依赖：**
 
-- 华为云 CodeArts 平台：代码托管、分支管理、CI/CD 流水线、项目协同（合规性待确认）
+- 华为云 CodeArts 平台：代码托管、分支管理、CI/CD 流水线、项目协同（赛事历史要求，合规性待确认；本项目已迁移 GitHub，见 ADR-0005）
 - 华为云 ECS（2C4G）与公网 IP；MySQL 8.0 可用
 - DeepSeek API 的账号、密钥与配额（或华为云盘古配额）
 - 实训教师与班委配合完成需求调研、真实安全线数据与试用验收
@@ -317,7 +319,7 @@ Agent 采用"规则引擎计算 + 大模型润色"的两段式实现：规则引
 - [ ] 建议处置即入库：填写入库数量后库存增加、日志留痕、建议从待处理列表移除；无其他改库存入口
 - [ ] 操作日志完整覆盖登录、领用、撤销、档案变更、建议处置；库存变动与流水/日志一一对应可追溯
 - [ ] pytest 三类核心测试全部通过（分级规则/补货公式、库存事务原子性、鉴权越权）
-- [ ] CodeArts 流水线三阶段（前端构建 → pytest → 镜像发布）可一键执行；镜像带版本标签可回滚
+- [ ] GitHub Actions 双工作流（ci.yml + docker-publish.yml）可一键执行并推送 GHCR 镜像；镜像带版本标签可回滚
 - [ ] 云端 Web 端可稳定访问演示；本地裸机启动方式可用（零 Docker）
 - [ ] 3 分钟演示视频完整走通"登录→建档→批量领用→撤销→预警→Agent 建议→处置入库→日志"闭环
 - [ ] 并发提交同一耗材领用无超卖、无重复流水
@@ -328,8 +330,8 @@ Agent 采用"规则引擎计算 + 大模型润色"的两段式实现：规则引
 
 **已完成的实施前置：**
 
-1. **赛事合规（已确认）**：按用户确认，AtomGit（https://atomgit.com/IceFire_Icer/manage_system）为赛事使用平台，无需迁移
-2. **AtomGit API 接入（已完成）**：v5 API 已验证并写入 `docs/agents/issue-tracker.md`；`ATOMGIT_TOKEN` 已配置为用户环境变量；5 个 triage 标签已创建（needs-triage / needs-info / ready-for-agent / ready-for-human / wontfix）；关闭 Issue 的 API 不生效（已验证），降级为网页关闭或 wontfix 标签 + 评论
+1. **赛事合规（历史记录，2026-11-26 确认）**：当时确认 AtomGit（https://atomgit.com/IceFire_Icer/manage_system）为赛事使用平台；2026-11-27 已按用户决定迁移至 GitHub（ADR-0005）
+2. **AtomGit API 接入（历史记录，已完成）**：v5 API 已验证并写入 `docs/agents/issue-tracker.md`；`ATOMGIT_TOKEN` 已配置为用户环境变量；5 个 triage 标签已创建（needs-triage / needs-info / ready-for-agent / ready-for-human / wontfix）；关闭 Issue 的 API 不生效（已验证），降级为网页关闭或 wontfix 标签 + 评论
 
 **仍待用户侧完成：**
 

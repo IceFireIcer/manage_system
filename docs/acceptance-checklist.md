@@ -7,7 +7,7 @@ pytest
 ruff check .
 ```
 
-本轮结果：**238 passed**；`ruff check .` 通过；前端 `npm run build` 成功；真实 API 冒烟主线通过（2026-11-27）。
+本轮结果：**240 passed**；`ruff check .` 通过；前端 `npm run build` 成功；真实 API 冒烟主线通过（2026-11-27）。
 
 ## 1. 账号、权限与用户管理
 
@@ -64,7 +64,7 @@ ruff check .
 | 库存反推审计（流水 + 补货事件） | `test_consumption.py::test_audit_reconstructs_stock_from_all_sources`、`test_reconstruct_stock_detects_inconsistent_sequence` | 可选展示审计接口 | 通过 |
 | 操作日志覆盖登录/领用/撤销/档案/用户/入库 | `test_logs.py::test_login_and_logout_are_logged`、`test_requisition_reversal_and_restock_logged`、`test_consumable_lifecycle_logged_with_snapshots`、`test_user_create_logged_without_password` | 日志页筛选各动作 | 通过 |
 | 日志不含敏感字段、只读、分页 | `test_logs.py::test_logs_have_no_sensitive_fields`、`test_logs_read_only`、`test_logs_pagination_and_desc_order` | 日志页 | 通过 |
-| 全量自动测试与 Lint | `cd backend && pytest`、`cd backend && ruff check .` | 238 passed；ruff 通过 | 通过 |
+| 全量自动测试与 Lint | `cd backend && pytest`、`cd backend && ruff check .` | 240 passed；ruff 通过 | 通过 |
 | 前端生产构建 | `cd frontend && npm run build` | 构建成功 | 通过 |
 | 本地零 Docker 启动 | — | `scripts/dev-start.ps1` / `dev-start.sh`；见 README | 通过 |
 | 云端部署与 GitHub Actions + GHCR 镜像 | `docs/deploy.md` 第 13 节 | 由用户在自有服务器执行 | 待用户执行 |

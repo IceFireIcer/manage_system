@@ -204,7 +204,7 @@ cd backend && ruff check .
 cd frontend && npm run build
 ```
 
-当前基线：后端 **238 passed**，`ruff check .` 通过，前端生产构建成功。
+当前基线：后端 **240 passed**，`ruff check .` 通过，前端生产构建成功。
 
 ## 部署与流水线
 

@@ -1,5 +1,7 @@
 # SPEC：班级实训耗材智能管理系统 v1.1
 
+> **2026-11-27 修订**：代码托管与 CI/CD 已从 AtomGit/CodeArts 迁移到 GitHub（GitHub Actions + GHCR），实施路径以 README / docs/deploy.md 为准；赛事 CodeArts 要求作为历史背景保留（迁移决策见 docs/adr/0005）。
+
 ## Problem Statement
 
 班级实训课耗材（焊丝、砂纸、记号笔、电阻、实训导线等）目前靠纸质本子登记：库存余量不透明、领用无法追溯、临上课才发现缺料，班委人工统计费时且易漏记。需要一个轻量 Web 系统完成"登记—扣减—巡检—提醒—补货"的业务闭环，并用"规则引擎 + 大模型润色"的分级补货 Agent 辅助教师决策；同时满足赛事对 CodeArts CI/CD 流水线发布的硬性要求。
@@ -12,7 +14,7 @@
 - 耗材档案（含安全库存线）、批量领用（最多 5 行、整单原子）、撤销红冲、库存总览预警、流水查询与 CSV 导出
 - 智能补货 Agent：规则引擎输出紧急/一般/观察三级分级，DeepSeek 经适配层润色判断依据，3 秒超时降级为规则模板
 - 建议处置即入库：录入实际入库数量即完成补货，全程操作日志可追溯
-- CodeArts 三阶段流水线（前端构建 → pytest → 镜像构建发布）；云端单台 ECS + Docker Compose；本地裸机零 Docker 启动兜底
+- GitHub Actions 双工作流（`ci.yml` + `docker-publish.yml`）+ GHCR 镜像（labstock-api / labstock-web）；云端单台 ECS + Docker Compose；本地裸机零 Docker 启动兜底
 
 ## User Stories
 
@@ -63,7 +65,7 @@
 34. 作为教师/班委，我想通过流水与操作日志反推任一时点的库存，以便对账。
 
 ### 工程与交付
-35. 作为开发者，我想 CodeArts 流水线三阶段（前端构建 → pytest → 镜像构建发布）可一键执行且镜像可回滚，以便满足赛事工程要求。
+35. 作为开发者，我想 GitHub Actions 自动构建并推送 GHCR 镜像、镜像可回滚，以便满足工程交付要求。
 36. 作为演示者，我想本地零 Docker 启动系统（venv + 本地 MySQL + Vite），以便云端故障时兜底。
 37. 作为演示者，我想 seed 数据包含三级场景（1 缺货 + 1 低库存 + 1 趋势上升），以便 3 分钟演示闭环完整。
 
@@ -120,7 +122,7 @@
 ### 部署与流水线
 - 云端：单台华为云 ECS（2C4G）+ Docker Compose（nginx:alpine 托管前端并反代 /api、python:3.12-slim 运行 FastAPI、mysql:8.0），公网 IP + HTTP
 - 本地：Python venv + `requirements.txt` + 本地 MySQL 8.0 + Vite dev server，零 Docker
-- CodeArts 流水线三阶段：前端构建（node:22-alpine）→ pytest（含覆盖率）→ 镜像构建推送 SWR 并发布 ECS；镜像携带版本标签支持回滚
+- GitHub Actions 双工作流（`ci.yml` + `docker-publish.yml`）：前端构建（Node 22）与后端 pytest + ruff → 构建并推送 GHCR 镜像 `labstock-api` / `labstock-web` → 服务器 pull 部署（端口 4900）；镜像携带版本标签支持回滚
 
 ### 配置
 - pydantic-settings 读取 `.env`：数据库连接、JWT 密钥、LLM 供应商与密钥、时区 Asia/Shanghai
@@ -167,6 +169,6 @@
 ## Further Notes
 
 - 决策基线：`ADR-0001`（四表）、`ADR-0002`（处置即入库）、`ADR-0003`（红冲撤销）、`ADR-0004`（技术栈与部署）；术语以 `GLOSSARY.md` 为准；需求全文见 `output/prd-classroom-training-consumables-system.md`（v1.1）
-- 赛事约束：必须完成 CodeArts CI/CD 流水线发布；AtomGit 已确认作为托管平台（2026-11-26）
+- 赛事约束：赛事原始要求为 CodeArts CI/CD 流水线发布；本项目 2026-11-27 按用户决定迁移 GitHub（GitHub Actions + GHCR），合规性待与赛事方确认（ADR-0005）
 - 实施前置（不阻塞开发）：ECS 开通、DeepSeek API Key、真实安全线数据校准
-- 本 spec 发布至 AtomGit Issue 并标记 `ready-for-agent`；后续由 to-tickets 拆分为带阻塞边的实现票据
+- 本 spec 发布至 GitHub Issues（IceFireIcer/manage_system）并标记 `ready-for-agent`；后续由 to-tickets 拆分为带阻塞边的实现票据

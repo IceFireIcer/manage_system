@@ -141,7 +141,7 @@ cd backend && ruff check .
 cd frontend && npm run build
 ```
 
-当前基线：**238 passed**；`ruff check .` 通过；前端构建成功；真实 API 冒烟主线（登录 → 领用 → 撤销 → 建议 → 处置 → 统计 → 日志）通过。
+当前基线：**240 passed**；`ruff check .` 通过；前端构建成功；真实 API 冒烟主线（登录 → 领用 → 撤销 → 建议 → 处置 → 统计 → 日志）通过。
 
 ## 8. 已知限制与用户待办
 

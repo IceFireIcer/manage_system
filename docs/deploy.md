@@ -3,7 +3,7 @@
 本手册面向**任意一台 Ubuntu 云服务器**（阿里云 / 腾讯云 / 华为云 / 自建虚拟机均可），从零完成本系统的部署、验证、升级与回滚。不依赖任何云厂商控制台，控制台操作仅限「开放 4900 端口 / 拿到公网 IP」这类通用步骤。
 
 - 本地零 Docker 开发：见 [README](../README.md#本地开发) 与 `scripts/dev-start.sh`、`scripts/dev-start.ps1`
-- GitHub Actions 与 GHCR 镜像发布（可选）：见本文 [第 13 节](#13-可选github-actions-与-ghcr-镜像发布)
+- GitHub Actions 与 GHCR 镜像发布：见本文 [第 13 节](#13-github-actions-与-ghcr-镜像发布)
 
 ## 0. 快速部署（推荐）
 
@@ -377,7 +377,7 @@ docker compose logs --no-color > /tmp/compose-logs.txt
 docker inspect --format '{{json .State.Health}}' "$(docker compose ps -q backend)"
 ```
 
-## 13. 可选：GitHub Actions 与 GHCR 镜像发布
+## 13. GitHub Actions 与 GHCR 镜像发布
 
 仓库内置两条 GitHub Actions 工作流，推送到 GitHub 后自动运行，无需在服务器或平台侧搭建流水线。
 
