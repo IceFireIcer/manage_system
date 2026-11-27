@@ -1,3 +1,4 @@
+import json
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
@@ -59,7 +60,30 @@ def login(
 
 
 @router.post("/logout")
-def logout(response: Response) -> dict[str, str]:
+def logout(
+    response: Response,
+    db: Annotated[Session, Depends(get_db)],
+    current_user: CurrentUser,
+) -> dict[str, str]:
+    db.add(
+        OperationLog(
+            operator_id=current_user.id,
+            role=current_user.role,
+            action="logout",
+            target_type="user",
+            target_id=current_user.id,
+            after_value=json.dumps(
+                {
+                    "account": current_user.account,
+                    "name": current_user.name,
+                    "role": current_user.role,
+                },
+                ensure_ascii=False,
+            ),
+            remark=f"账号 {current_user.account} 退出登录",
+        )
+    )
+    db.commit()
     response.delete_cookie(key=TOKEN_COOKIE_NAME)
     return {"status": "ok"}
 

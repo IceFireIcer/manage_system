@@ -1,3 +1,4 @@
+import json
 from datetime import datetime
 from typing import Annotated
 
@@ -67,6 +68,20 @@ def _log_operation(
     )
 
 
+def _user_snapshot(user: User) -> str:
+    """账号快照：只含身份与状态，不写入任何密码材料。"""
+    return json.dumps(
+        {
+            "id": user.id,
+            "account": user.account,
+            "name": user.name,
+            "role": user.role,
+            "status": user.status,
+        },
+        ensure_ascii=False,
+    )
+
+
 @router.get("")
 def list_users(
     db: Annotated[Session, Depends(get_db)],
@@ -119,7 +134,7 @@ def create_user(
     )
     db.add(user)
     db.flush()
-    _log_operation(db, current_user, "user_create", user, None, user.account)
+    _log_operation(db, current_user, "user_create", user, None, _user_snapshot(user))
     db.commit()
     db.refresh(user)
     return user
