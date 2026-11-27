@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.database import get_db
 from app.deps import CurrentUser
 from app.models import OperationLog, User
@@ -48,6 +49,7 @@ def login(
     _log_login(db, user, payload.account, None)
     db.commit()
 
+    settings = get_settings()
     token, expire_seconds = create_access_token(user.id, user.role)
     response.set_cookie(
         key=TOKEN_COOKIE_NAME,
@@ -55,6 +57,8 @@ def login(
         max_age=expire_seconds,
         httponly=True,
         samesite="lax",
+        secure=settings.cookie_secure_effective,
+        path="/",
     )
     return user
 
@@ -84,7 +88,13 @@ def logout(
         )
     )
     db.commit()
-    response.delete_cookie(key=TOKEN_COOKIE_NAME)
+    settings = get_settings()
+    response.delete_cookie(
+        key=TOKEN_COOKIE_NAME,
+        path="/",
+        secure=settings.cookie_secure_effective,
+        samesite="lax",
+    )
     return {"status": "ok"}
 
 

@@ -223,7 +223,7 @@ cd frontend && npm run build
 
 - **密钥**：生产必须覆盖 `MYSQL_ROOT_PASSWORD` 与 `JWT_SECRET_KEY`；`.env` 权限设为 600 且不提交
 - **管理员密码**：首次启动后立即修改随机初始密码；丢弃该密码后按上文容器内脚本重置
-- **网络**：仅暴露 `WEB_PORT`（默认 4900），不对外开放 3306 / 8000；HTTPS 建议在前置 nginx/Caddy 或云负载均衡终止
+- **网络**：仅暴露 `WEB_PORT`（默认 4900），不对外开放 3306 / 8000；正式环境按 [deploy.md 5.1](docs/deploy.md#51-启用-https-与安全头正式必做) 叠加 `docker-compose.https.yml` 启用 HTTPS，`APP_ENV=prod` 下缺有效密钥或使用 HTTP 会拒绝启动/访问；密钥轮换见 5.2
 - **备份**：定期 `mysqldump` 或对数据卷做快照，升级前必须先备份
 - **升级/回滚**：升级用 `docker compose pull && docker compose up -d`；回滚切换历史 `IMAGE_TAG`（`sha-<short>` 或版本标签）后 `docker compose pull` 再启动；本地开发调试如需构建可用 `docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build`（**仅本地开发，服务器部署不要构建**）。数据库迁移通常单向，回滚前确认表结构兼容
 - **日志**：`docker compose logs -f backend` 查看运行与 `[bootstrap]` 记录；定期巡检并清理旧镜像

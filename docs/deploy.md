@@ -78,7 +78,7 @@ docker compose logs backend | grep bootstrap
 - 已存在启用的管理员时日志为 `[bootstrap] 管理员账号已存在，跳过`；`ADMIN_INIT_PASSWORD` 不会重置已有账号密码
 - 修改初始密码的方法见 [README「管理员初始化」](../README.md#管理员初始化)
 
-访问 `http://<服务器IP>:4900/` 登录；新建耗材档案与用户后即可开始日常使用。
+访问 `http://<服务器IP>:4900/` 登录（演示/联调）；**正式环境必须按第 5.1 节叠加 `docker-compose.https.yml` 以 HTTPS 访问**；新建耗材档案与用户后即可开始日常使用。
 
 > GHCR 包默认私有：可在 GitHub Packages 将 `labstock-api` / `labstock-web` 设为 public；或服务器使用带 `read:packages` 权限的 PAT 执行 `docker login ghcr.io -u <GitHub 用户名>`。拉取慢时优先按第 3.1 节加速或重试；仍失败时再把镜像转存自有仓库。**本地构建不是服务器部署路径**，仅作无法访问 GHCR 时的临时手段（见 0.2）。
 
@@ -254,12 +254,77 @@ vi .env
 | `JWT_SECRET_KEY` | JWT 签名密钥，至少 32 位随机字符；变更后旧登录态失效；生产必填 |
 | `ADMIN_INIT_ACCOUNT` / `ADMIN_INIT_PASSWORD` / `ADMIN_INIT_NAME` | 首次创建的管理员账号、密码、姓名；仅首次创建生效 |
 | `LLM_API_KEY` / `LLM_BASE_URL` / `LLM_MODEL` | OpenAI 兼容接口；留空则只用规则引擎 |
+| `APP_ENV` | 应用环境；`prod` 正式（强制 HTTPS/Secure Cookie 与密钥校验），`demo` 演示（可 HTTP，Cookie 不带 Secure） |
+| `COOKIE_SECURE` | 登录 Cookie 的 `Secure` 属性；留空时随 `APP_ENV` 自动决定（prod 为 true） |
+| `TRUSTED_HOSTS` | 允许的来源主机，逗号分隔；留空不限制，正式建议填写公网域名 |
+| `TRUSTED_PROXIES` | 可信反向代理来源 IP/网段（支持 CIDR）；仅这些来源的 `X-Forwarded-Proto` 会被采信 |
 | `WEB_PORT` | 对外 HTTP 端口，默认 `4900` |
+| `HTTPS_PORT` | 叠加 HTTPS 文件时对外 443 端口，默认 `443` |
 | `IMAGE_TAG` | 应用镜像版本标签，默认 `latest`；升级/回滚切换为 `sha-<short>` 或 `v*` 版本标签 |
 
 > `.env` 已在 `.gitignore` 中，**不要提交**。密码若包含 `@ : / # ?` 等字符，需要 URL 编码（`DATABASE_URL` 由 Compose 自动拼接，未编码会连不上库）。
 
 `backend/.env` 是**本地零 Docker 开发**用的配置，云端不使用它（容器内配置全部来自 Compose 的 `environment`）。
+
+### 5.1 启用 HTTPS 与安全头（正式必做）
+
+正式入口由 `docker-compose.https.yml` 叠加提供 TLS 终止、HTTP→HTTPS 跳转与安全响应头，应用层同时校验协议、代理与来源主机：
+
+1. 准备证书：将由 CA 签发的 `fullchain.pem` 与 `privkey.pem` 放入仓库根 `certs/`（仅放服务器，勿提交仓库）。自测可用自签证书临时验证：
+
+   ```bash
+   mkdir -p certs
+   openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+     -keyout certs/privkey.pem -out certs/fullchain.pem \
+     -subj "/CN=<正式域名>"
+   ```
+
+2. 在 `.env` 确认 `APP_ENV=prod`、`TRUSTED_HOSTS=<正式域名>`，并按实际反向代理网段设置 `TRUSTED_PROXIES`（Compose 默认 `172.16.0.0/12` 覆盖容器内网）。
+3. 叠加启动并核对：
+
+   ```bash
+   docker compose -f docker-compose.yml -f docker-compose.https.yml up -d
+   docker compose -f docker-compose.yml -f docker-compose.https.yml ps
+   curl -fsSI https://<正式域名>/ | grep -i strict-transport-security   # 期望出现 max-age=
+   curl -fsS  https://<正式域名>/api/v1/health                            # 期望 {"status":"ok"}
+   ```
+
+   叠加文件挂载 `frontend/nginx.https.conf`：80 端口 301 跳转 443，443 启用 TLSv1.2/1.3、HSTS、`X-Content-Type-Options`、`X-Frame-Options`、`Referrer-Policy`，并以 `X-Forwarded-Proto: https` 转发到后端。
+
+4. 后端行为：`APP_ENV=prod` 时，非 HTTPS 请求、缺失/不可信代理来源、非允许主机的请求返回 400；登录 Cookie 带 `Secure`（同时保留 `HttpOnly`、`SameSite=Lax`）。`/api/v1/health` 仅允许容器内回环直连，不对外暴露。
+
+> 演示/联调：设 `APP_ENV=demo` 即可用 HTTP 启动，此时不校验生产密钥、Cookie 不带 `Secure`，与正式配置明确区分；演示环境不得承载真实账号与数据。
+
+### 5.2 密钥轮换步骤与会话策略
+
+JWT 密钥决定登录 Cookie 的签名。轮换后所有旧令牌立即失效，用户需重新登录（会话策略为“轮换即全量失效、保留账号与历史数据”）。可核对步骤：
+
+```bash
+cd /opt/manage_system
+
+# 1) 记录当前密钥指纹（不打印明文），便于留痕
+docker compose exec -T backend python - <<'PY'
+import hashlib, os
+print("old-jwt-sha256:", hashlib.sha256(os.environ["JWT_SECRET_KEY"].encode()).hexdigest())
+PY
+
+# 2) 生成新密钥并写入 .env（保留旧值备份以便短时回退）
+cp .env .env.bak.$(date +%Y%m%d%H%M)
+NEW_JWT="$(openssl rand -hex 32)"
+sed -i "s/^JWT_SECRET_KEY=.*/JWT_SECRET_KEY=${NEW_JWT}/" .env
+
+# 3) 仅重建后端使新密钥生效（web/db 不动，无需刷新代理）
+docker compose up -d backend
+
+# 4) 核对：旧会话失效、需重新登录；新指纹生效
+curl -s -o /dev/null -w "%{http_code}\n" https://<正式域名>/api/v1/auth/me   # 旧 Cookie 期望 401
+docker compose exec -T backend python - <<'PY'
+import hashlib, os
+print("new-jwt-sha256:", hashlib.sha256(os.environ["JWT_SECRET_KEY"].encode()).hexdigest())
+PY
+```
+
+轮换核对清单：轮换后原登录态全部 401；用 `ADMIN_INIT_ACCOUNT` 或既有账号重新登录成功且 Cookie 带 `Secure`；账号、耗材、领用、入库与操作日志数据不受影响；`certs/`、`.env` 权限 600 且未入库。数据库凭据轮换按 FR-S7-03（P1-25）流程单独执行，本节不替代。
 
 ## 6. 拉取镜像并启动（推荐）
 
@@ -322,11 +387,16 @@ curl -fsS http://127.0.0.1:4900/api/v1/health
 curl -sI http://127.0.0.1:4900/ | head -1
 # 期望：HTTP/1.1 200 OK
 
+# 正式 HTTPS（叠加 5.1 文件后）：协议、跳转与安全头
+curl -sI http://<正式域名>/ | head -1                  # 期望 301 到 https
+curl -fsSI https://<正式域名>/ | grep -i strict-transport-security
+curl -fsS https://<正式域名>/api/v1/health              # 期望 {"status":"ok"}
+
 # 确认管理员已初始化
 docker compose logs backend | grep bootstrap
 ```
 
-浏览器访问 `http://<服务器公网IP>:4900/`（或 `http://<IP>:<WEB_PORT>/`）：
+浏览器访问 `http://<服务器公网IP>:4900/`（或 `http://<IP>:<WEB_PORT>/`）；正式环境访问 `https://<正式域名>/`（按第 5.1 节叠加 HTTPS 文件，80 端口自动跳转）：
 
 1. 自动跳转 `/login`
 2. 用 bootstrap 打印的管理员账号登录，进入「库存总览」
@@ -604,12 +674,14 @@ IMAGE_TAG="$(date +%Y%m%d%H%M)" bash scripts/ci/stage3-image-publish.sh
 
 - [ ] `.env` 权限 600，未提交到仓库（`git status` 确认无 `.env`）
 - [ ] `docker compose version` 可用（Compose 插件已安装），`docker compose config --quiet` 校验通过且 backend/web 无 `build` 段
-- [ ] `MYSQL_ROOT_PASSWORD` 与 `JWT_SECRET_KEY` 均为随机强值，未使用内置默认值
+- [ ] `MYSQL_ROOT_PASSWORD` 与 `JWT_SECRET_KEY` 均为随机强值，未使用内置默认值；`APP_ENV=prod` 下占位或缺失时后端明确拒绝启动（见 5.1）
+- [ ] 正式入口已按 5.1 叠加 `docker-compose.https.yml`：HTTPS 登录成功、HTTP 自动跳转、HSTS 与安全头存在、登录 Cookie 带 `Secure`
+- [ ] 已按 5.2 完成一次可核对的密钥轮换：旧会话全部 401，重新登录正常，业务数据无损
 - [ ] 已从日志获取管理员初始密码并**立即修改**，新密码妥善保存
 - [ ] 未将 `ADMIN_INIT_PASSWORD` 明文长期保留在 `.env` 或交付材料中
 - [ ] 安全组仅放行 22 / 4900（或自定义端口），不暴露 3306 / 8000
 - [ ] 已按 11.3.1 配置每日备份与保留期，备份写入独立副本并完成一次隔离库恢复演练（11.3.3）
 - [ ] GHCR 包可见性已确认：公开拉取，或服务器已用带 `read:packages` 的 PAT 登录
 - [ ] GitHub Actions（`ci.yml`、`docker-publish.yml`）在 `main` 上通过，GHCR 存在可用 `sha-<short>` 或 `v*` 标签
-- [ ] 建议接入 HTTPS：在前置 nginx/Caddy 或云负载均衡上终止 TLS（当前 Compose 默认 HTTP）
+
 - [ ] 定期 `docker compose logs` 巡检与 `docker image prune` 清理
