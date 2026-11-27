@@ -1,13 +1,13 @@
 # 云端部署手册：通用 Ubuntu 云服务器 + Docker Compose
 
-本手册面向**任意一台 Ubuntu 云服务器**（阿里云 / 腾讯云 / 华为云 / 自建虚拟机均可），从零完成本系统的部署、验证、升级与回滚。不依赖任何云厂商控制台，控制台操作仅限"开放 80 端口 / 拿到公网 IP"这类通用步骤。
+本手册面向**任意一台 Ubuntu 云服务器**（阿里云 / 腾讯云 / 华为云 / 自建虚拟机均可），从零完成本系统的部署、验证、升级与回滚。不依赖任何云厂商控制台，控制台操作仅限「开放 80 端口 / 拿到公网 IP」这类通用步骤。
 
-- 本地零 Docker 开发：见 [README](../README.md#本地零-docker-启动推荐) 与 `scripts/dev-start.sh`、`scripts/dev-start.ps1`
-- CodeArts 流水线（赛事加分项）：见本文 [第 13 节](#13-可选codearts-流水线三阶段)，属可选附加内容
+- 本地零 Docker 开发：见 [README](../README.md#本地开发) 与 `scripts/dev-start.sh`、`scripts/dev-start.ps1`
+- CodeArts 流水线（可选）：见本文 [第 13 节](#13-可选codearts-流水线三阶段)
 
-## 0. 一条命令部署（推荐，零配置）
+## 0. 快速部署（推荐）
 
-**无需 `.env`、无需手填密钥、无需预装 MySQL。** 数据库（`mysql:8.0`）由 Compose 自带并随 `up` 一起启动；密钥使用内置默认值；后端每次启动自动建表并灌入演示数据。
+Compose 内置 `mysql:8.0`、nginx 与 uvicorn，服务器只需安装 Docker；首次启动自动建表并创建管理员账号。
 
 ```bash
 # 服务器只需安装 Docker（Ubuntu）
@@ -16,26 +16,37 @@ systemctl enable --now docker
 
 git clone https://atomgit.com/IceFire_Icer/manage_system.git
 cd manage_system
+
+# 生产环境必须替换密钥（详见第 5 节）
+cp .env.example .env
+chmod 600 .env
+# 编辑 .env：MYSQL_ROOT_PASSWORD、JWT_SECRET_KEY 填随机值
+
 docker compose up -d --build
 ```
 
 首次启动约 3-8 分钟（构建镜像 + 拉取 mysql:8.0）：
 
 1. `db` 容器初始化 `manage_system` 库（utf8mb4），健康检查通过后才启动 `backend`
-2. `backend` 执行 `alembic upgrade head` 建表，再执行 `scripts/seed_demo.py` 灌入演示数据（幂等，重复启动不会重复写入）
-3. `web`（nginx）等待 `backend` 健康后启动并监听 80
+2. `backend` 执行 `alembic upgrade head` 建四张核心表，再执行 `scripts/bootstrap_admin.py` 创建管理员（幂等）
+3. `web`（nginx）等待 `backend` 健康后启动并监听 `WEB_PORT`（默认 80）
 
-访问 `http://<服务器IP>/`，演示账号：
+### 0.1 获取管理员初始密码
 
-| 账号 | 密码 | 角色 |
-| --- | --- | --- |
-| teacher01 | `Teacher@123` | 教师 |
-| admin01 | `Admin@123` | 班委 |
-| student01 | `Student@123` | 学生 |
+首次启动在日志中打印管理员账号与初始密码：
 
-演示数据即"紧急 / 一般 / 观察"三级补货场景，登录后「补货建议」页可直接看到分级卡片。
+```bash
+docker compose logs backend | grep bootstrap
+# [bootstrap] 已创建管理员账号: admin；初始密码: <随机密码>（请首次登录后立即修改并妥善保存）
+```
 
-> **安全提示**：内置默认密钥（`MYSQL_ROOT_PASSWORD=ManageSystem2026`、`JWT_SECRET_KEY=manage-system-demo-…`）**仅供演示**。生产环境建议 `cp .env.example .env` 覆盖这两个变量后再 `docker compose up -d`。第 `1`~`14` 节为手动/进阶部署与运维说明：安装与首次启动已包含在本节，可跳过第 `3`~`6` 节；后续运维、升级、备份与排错仍按下文执行。
+- 如需指定账号/密码，先在 `.env` 设置 `ADMIN_INIT_ACCOUNT` / `ADMIN_INIT_PASSWORD`（及可选 `ADMIN_INIT_NAME`）再启动
+- 已存在启用的管理员时日志为 `[bootstrap] 管理员账号已存在，跳过`；`ADMIN_INIT_PASSWORD` 不会重置已有账号密码
+- 修改初始密码的方法见 [README「管理员初始化」](../README.md#管理员初始化)
+
+访问 `http://<服务器IP>/` 登录；新建耗材档案与用户后即可开始日常使用。
+
+> **安全提示**：Compose 内置的默认 `MYSQL_ROOT_PASSWORD` 与 `JWT_SECRET_KEY` 仅用于首次开箱启动，**不具备生产安全性**。生产部署必须通过 `.env` 覆盖。第 `1`~`14` 节为完整部署与运维说明：安装与首次启动已包含在本节，可跳过第 `3`~`6` 节；后续运维、升级、备份与排错仍按下文执行。
 
 ## 1. 部署拓扑
 
@@ -115,9 +126,9 @@ scp manage_system.tar.gz <user>@<服务器IP>:/opt/manage_system/
 
 服务器上解压到 `/opt/manage_system` 即可。
 
-## 5.（可选）覆盖默认密钥 `.env`
+## 5. 配置生产密钥（生产必做）
 
-**跳过本节亦可正常启动**：Compose 已内置默认 `MYSQL_ROOT_PASSWORD` 与 `JWT_SECRET_KEY`。仅当需要为生产环境替换默认密钥时才执行本节的构建。手动章节（第 5、6 节）仅保留为进阶步骤。
+内置默认密钥仅供首次启动，生产必须写入自有密钥：
 
 ```bash
 cd /opt/manage_system
@@ -132,7 +143,11 @@ sed -i "s/^JWT_SECRET_KEY=.*/JWT_SECRET_KEY=${JWT_SECRET}/" .env
 DB_PASS="$(openssl rand -hex 12)"
 sed -i "s/^MYSQL_ROOT_PASSWORD=.*/MYSQL_ROOT_PASSWORD=${DB_PASS}/" .env
 
-# 按需填写 LLM（留空则智能补货自动降级为规则模板）
+# 可选：指定首次创建的管理员账号/密码；不填则随机生成并打印到日志
+# ADMIN_INIT_ACCOUNT=admin
+# ADMIN_INIT_PASSWORD=<强密码>
+
+# 按需填写 LLM（留空则智能补货降级为规则模板）
 vi .env
 ```
 
@@ -142,9 +157,10 @@ vi .env
 
 | 变量 | 说明 |
 | --- | --- |
-| `MYSQL_ROOT_PASSWORD` | MySQL root 密码；会拼进 `DATABASE_URL`，**建议只用字母数字** |
-| `JWT_SECRET_KEY` | JWT 签名密钥，至少 32 位随机字符；变更后旧登录态失效 |
-| `LLM_API_KEY` / `LLM_BASE_URL` / `LLM_MODEL` | DeepSeek 等 OpenAI 兼容接口；留空则只用规则引擎 |
+| `MYSQL_ROOT_PASSWORD` | MySQL root 密码；会拼进 `DATABASE_URL`，**建议只用字母数字**；生产必填 |
+| `JWT_SECRET_KEY` | JWT 签名密钥，至少 32 位随机字符；变更后旧登录态失效；生产必填 |
+| `ADMIN_INIT_ACCOUNT` / `ADMIN_INIT_PASSWORD` / `ADMIN_INIT_NAME` | 首次创建的管理员账号、密码、姓名；仅首次创建生效 |
+| `LLM_API_KEY` / `LLM_BASE_URL` / `LLM_MODEL` | OpenAI 兼容接口；留空则只用规则引擎 |
 | `WEB_PORT` | 对外 HTTP 端口，默认 `80` |
 | `IMAGE_TAG` | 镜像版本标签，默认 `latest`，升级/回滚时切换 |
 
@@ -156,7 +172,7 @@ vi .env
 
 ```bash
 cd /opt/manage_system
-docker compose config          # 静态校验（不连 daemon，配置错误会立即报出；无 .env 也可通过）
+docker compose config          # 静态校验（不连 daemon，配置错误会立即报出）
 docker compose up -d --build   # 首次构建 + 后台启动，约 3-8 分钟（视网络）
 docker compose ps              # 三个服务应为 running / healthy
 ```
@@ -164,12 +180,14 @@ docker compose ps              # 三个服务应为 running / healthy
 首次启动时：
 
 1. `db` 初始化数据库 `manage_system`（utf8mb4），健康检查通过后才启动 backend
-2. `backend` 启动脚本先执行 `alembic upgrade head`（建表），再执行 `scripts/seed_demo.py` 写入演示数据（幂等），最后启动 uvicorn
+2. `backend` 启动脚本先执行 `alembic upgrade head`（建四张核心表），再执行 `scripts/bootstrap_admin.py` 创建管理员（幂等），最后启动 uvicorn
 3. `web` 等待 backend 健康后启动 nginx
 
-## 7. 数据库迁移与种子数据
+随后按第 0.1 节从日志获取管理员初始密码。
 
-正常流程无需手工操作：`backend` 容器每次启动都会执行 `alembic upgrade head`（幂等）。
+## 7. 数据库迁移与管理员初始化
+
+正常流程无需手工操作：`backend` 容器每次启动都会执行 `alembic upgrade head`（幂等）与管理员自举。
 
 需要手动执行时：
 
@@ -182,11 +200,12 @@ docker compose exec backend alembic upgrade head
 
 # 查看迁移历史
 docker compose exec backend alembic history
+
+# 手动执行管理员自举（已存在启用的管理员时自动跳过）
+docker compose exec backend python scripts/bootstrap_admin.py
 ```
 
-演示账号在首次迁移时写入（见 README「演示账号」）：`teacher01 / Teacher@123`、`admin01 / Admin@123`、`student01 / Student@123`。
-
-> **上线后请立即修改演示账号密码**（教师可在系统内维护用户，或直接改数据库并保证口令哈希口径一致）。
+> 系统不预置任何业务数据或账号。首次登录使用 bootstrap 创建的管理员；初始密码获取与修改见第 0.1 节与 [README](../README.md#管理员初始化)。
 
 ## 8. 访问验证
 
@@ -198,14 +217,17 @@ curl -fsS http://127.0.0.1/api/v1/health
 # 检查首页
 curl -sI http://127.0.0.1/ | head -1
 # 期望：HTTP/1.1 200 OK
+
+# 确认管理员已初始化
+docker compose logs backend | grep bootstrap
 ```
 
 浏览器访问 `http://<服务器公网IP>/`（或 `http://<IP>:<WEB_PORT>/`）：
 
 1. 自动跳转 `/login`
-2. 用 `teacher01 / Teacher@123` 登录，进入「库存总览」
-3. 切换 `admin01` 验证耗材档案、用户管理入口
-4. 打开「补货建议」，确认三级分级卡片（未配置 LLM 时使用规则模板，不影响功能）
+2. 用 bootstrap 打印的管理员账号登录，进入「库存总览」
+3. 在「耗材档案」新建耗材并在「用户管理」新建教师/学生账号
+4. 打开「补货建议」：无低库存耗材时列表为空属正常；录入数据后按三级分级展示（未配置 LLM 时使用规则模板，不影响功能）
 
 ## 9. 常用运维命令
 
@@ -260,6 +282,8 @@ curl -fsS http://127.0.0.1/api/v1/health
 ```bash
 docker image prune -f
 ```
+
+> 升级不会重置或重建管理员账号；已存在的启用管理员会被 bootstrap 跳过。
 
 ## 11. 回滚与数据备份
 
@@ -316,6 +340,8 @@ docker compose start backend
 | `docker compose up` 报 `port is already allocated` | 80 被宿主机 nginx/apache 占用：`sudo ss -lntp \| grep :80`；或把 `.env` 的 `WEB_PORT` 改为 8080 并放行安全组 |
 | `db` 反复重启 / `Access denied for user 'root'` | 初始化时的密码已固化在数据卷；改过 `.env` 密码需要 `docker compose down -v`（**会删数据**）或进入容器 `ALTER USER` |
 | `backend` 一直 `unhealthy` | `docker compose logs backend`；常见原因：密码含特殊字符导致 `DATABASE_URL` 非法、db 尚未就绪、迁移失败 |
+| 日志中看不到 `[bootstrap]` 初始密码 | 多为管理员已存在（`管理员账号已存在，跳过`）；如确实缺失，执行 `docker compose exec backend python scripts/bootstrap_admin.py` 查看输出 |
+| 忘记管理员密码 | 使用 [README「管理员初始化」](../README.md#管理员初始化) 的容器内脚本直接更新哈希 |
 | 页面正常但刷新子路由 404 | 确认 `frontend/nginx.conf` 中 `try_files ... /index.html` 存在（本仓库已内置），并重建 web 镜像 |
 | 登录后立刻回到登录页 / 401 | 改过 `JWT_SECRET_KEY` 会使旧 Cookie 失效，重新登录；检查服务器时间是否准确 |
 | 补货建议只有模板文案 | `LLM_API_KEY` 为空或不可用，属预期降级；填好 key 后 `docker compose up -d` 生效 |
@@ -401,9 +427,10 @@ IMAGE_TAG=<上一次成功标签> docker compose up -d --no-build
 ## 14. 上线安全清单
 
 - [ ] `.env` 权限 600，未提交到仓库（`git status` 确认无 `.env`）
-- [ ] `JWT_SECRET_KEY` 为随机 32+ 字符，未使用默认占位值
-- [ ] 修改 `teacher01 / admin01 / student01` 演示密码
+- [ ] `MYSQL_ROOT_PASSWORD` 与 `JWT_SECRET_KEY` 均为随机强值，未使用内置默认值
+- [ ] 已从日志获取管理员初始密码并**立即修改**，新密码妥善保存
+- [ ] 未将 `ADMIN_INIT_PASSWORD` 明文长期保留在 `.env` 或交付材料中
 - [ ] 安全组仅放行 22 / 80（或自定义端口），不暴露 3306 / 8000
 - [ ] 配置数据库定期备份与磁盘快照
-- [ ] 如需 HTTPS：在前置 nginx/Caddy 或云负载均衡上接入证书（当前演示为 HTTP）
+- [ ] 建议接入 HTTPS：在前置 nginx/Caddy 或云负载均衡上终止 TLS（当前 Compose 默认 HTTP）
 - [ ] 定期 `docker compose logs` 巡检与 `docker image prune` 清理
