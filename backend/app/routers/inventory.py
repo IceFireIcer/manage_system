@@ -175,6 +175,27 @@ def get_inventory_ledger(
         if restock_ids
         else {}
     )
+    requisition_ids = {
+        event.requisition_id
+        for event in events
+        if event.source_type
+        in (
+            inventory_ledger.SOURCE_REQUISITION_REVERSAL,
+            inventory_ledger.SOURCE_REQUISITION_REENTRY,
+        )
+        and event.requisition_id is not None
+    }
+    requisition_numbers = (
+        {
+            record.id: record.order_no
+            for record in db.scalars(
+                select(Requisition).where(Requisition.id.in_(requisition_ids))
+            )
+            if record.order_no
+        }
+        if requisition_ids
+        else {}
+    )
 
     consistent = bool(events) and events[-1].stock_after == consumable.current_stock
     if consistent:
@@ -209,8 +230,16 @@ def get_inventory_ledger(
                 posted_at=event.posted_at,
                 source_type=event.source_type,
                 source_id=event.source_id,
-                order_no=order_numbers.get(event.source_id)
-                or restock_numbers.get(event.source_id),
+                order_no=(
+                    requisition_numbers.get(event.requisition_id)
+                    if event.source_type
+                    in (
+                        inventory_ledger.SOURCE_REQUISITION_REVERSAL,
+                        inventory_ledger.SOURCE_REQUISITION_REENTRY,
+                    )
+                    else order_numbers.get(event.source_id)
+                    or restock_numbers.get(event.source_id)
+                ),
                 requisition_id=event.requisition_id,
                 line_no=event.line_no,
                 operator_id=event.operator_id,

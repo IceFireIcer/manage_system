@@ -101,9 +101,24 @@ class RequisitionCreateOut(BaseModel):
     receipt: RequisitionReceiptOut | None = None
 
 
+class ReentryIn(BaseModel):
+    quantity: int = Field(gt=0)
+    remark: str | None = Field(default=None, max_length=255)
+
+    @field_validator("remark", mode="after")
+    @classmethod
+    def normalize_remark(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        stripped = value.strip()
+        return stripped or None
+
+
 class ReversalCreate(BaseModel):
     reason: str = Field(min_length=1, max_length=255)
     remark: str | None = Field(default=None, max_length=255)
+    correction_id: int | None = Field(default=None, gt=0)
+    reentry: ReentryIn | None = None
 
     @field_validator("reason", mode="after")
     @classmethod
@@ -122,6 +137,75 @@ class ReversalCreate(BaseModel):
         return stripped or None
 
 
+class CorrectionCreate(BaseModel):
+    reason: str = Field(min_length=1, max_length=500)
+    remark: str | None = Field(default=None, max_length=255)
+    request_id: str | None = Field(default=None, max_length=64)
+
+    @field_validator("reason", mode="after")
+    @classmethod
+    def normalize_reason(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("纠错说明不能为空")
+        return stripped
+
+    @field_validator("remark", mode="after")
+    @classmethod
+    def normalize_remark(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        stripped = value.strip()
+        return stripped or None
+
+    @field_validator("request_id", mode="after")
+    @classmethod
+    def normalize_request_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        stripped = value.strip()
+        if not stripped:
+            return None
+        if any(ch not in "-_.:" and not ch.isalnum() for ch in stripped):
+            raise ValueError("请求标识仅支持字母、数字与 - _ . : 字符")
+        return stripped
+
+
+class CorrectionHandle(BaseModel):
+    status: str = Field(pattern="^(rejected)$")
+    handling_note: str = Field(min_length=1, max_length=500)
+
+    @field_validator("handling_note", mode="after")
+    @classmethod
+    def normalize_note(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("处理结果不能为空")
+        return stripped
+
+
+class CorrectionOut(BaseModel):
+    id: int
+    requisition_id: int
+    request_id: str
+    status: str
+    reason: str
+    remark: str | None
+    applicant_id: int
+    applicant_name: str
+    applicant_role: str
+    handler_id: int | None = None
+    handler_name: str | None = None
+    handler_role: str | None = None
+    handling_note: str | None = None
+    reversal_id: int | None = None
+    reversal_order_no: str | None = None
+    reentry_id: int | None = None
+    reentry_order_no: str | None = None
+    created_at: datetime
+    handled_at: datetime | None = None
+
+
 class RequisitionRecordOut(BaseModel):
     id: int
     consumable_id: int
@@ -137,6 +221,10 @@ class RequisitionRecordOut(BaseModel):
     reversal_reason: str | None
     created_at: datetime
     remark: str | None
+    order_no: str | None = None
+    handler_name: str | None = None
+    reentry_of: int | None = None
+    correction: CorrectionOut | None = None
 
 
 class RequisitionRelatedOut(BaseModel):
@@ -147,6 +235,7 @@ class RequisitionRelatedOut(BaseModel):
     stock_after: int
     created_at: datetime
     reversal_reason: str | None
+    order_no: str | None = None
 
 
 class RequisitionListItemOut(BaseModel):
@@ -164,6 +253,9 @@ class RequisitionListItemOut(BaseModel):
     reversal_reason: str | None
     remark: str | None
     related: RequisitionRelatedOut | None = None
+    order_no: str | None = None
+    reentry_of: int | None = None
+    correction_status: str | None = None
 
 
 class RequisitionPageOut(BaseModel):
@@ -176,3 +268,4 @@ class RequisitionPageOut(BaseModel):
 class RequisitionDetailOut(RequisitionRecordOut):
     origin: RequisitionRelatedOut | None = None
     reversal: RequisitionRelatedOut | None = None
+    reentry: RequisitionRelatedOut | None = None

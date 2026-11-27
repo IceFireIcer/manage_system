@@ -12,13 +12,34 @@ import { useUserStore } from '../stores/user'
 
 const ROLE_NAMES = { teacher: '教师', admin: '班委', student: '学生', operator: '校方授权人' }
 const STATUS_NAMES = { enabled: '启用', disabled: '停用' }
-const TARGET_NAMES = { user: '用户', consumable: '耗材', requisition: '领用流水' }
+const TARGET_NAMES = {
+  user: '用户',
+  consumable: '耗材',
+  requisition: '领用流水',
+  requisition_correction: '纠错申请',
+}
 
 const ACTIONS = [
   { value: 'login', label: '登录', tagClass: 'status-tag--neutral' },
   { value: 'logout', label: '退出登录', tagClass: 'status-tag--neutral' },
   { value: 'requisition_create', label: '领用登记', tagClass: 'status-tag--info' },
   { value: 'requisition_reverse', label: '撤销领用', tagClass: 'status-tag--reversal' },
+  { value: 'requisition_reentry', label: '关联重登', tagClass: 'status-tag--info' },
+  {
+    value: 'requisition_correction_submit',
+    label: '纠错申请',
+    tagClass: 'status-tag--warning',
+  },
+  {
+    value: 'requisition_correction_accept',
+    label: '纠错受理',
+    tagClass: 'status-tag--success',
+  },
+  {
+    value: 'requisition_correction_handle',
+    label: '纠错处理',
+    tagClass: 'status-tag--neutral',
+  },
   { value: 'restock', label: '补货入库', tagClass: 'status-tag--success' },
   { value: 'restock_correction', label: '入库纠错', tagClass: 'status-tag--warning' },
   { value: 'consumable_create', label: '耗材建档', tagClass: 'status-tag--info' },
@@ -293,8 +314,31 @@ function summaryText(row) {
     case 'requisition_reverse': {
       if (!after) return row.remark || '—'
       const reason = after.reason ? `；原因：${after.reason}` : ''
-      return `回加 ${after.quantity}，库存 ${after.stock_before} → ${after.stock_after}${reason}`
+      const orderNo = after.reversal_order_no
+        ? `；红冲单 ${after.reversal_order_no}`
+        : ''
+      return `回加 ${after.quantity}，库存 ${after.stock_before} → ${after.stock_after}${orderNo}${reason}`
     }
+    case 'requisition_reentry': {
+      if (!after) return row.remark || '—'
+      const orderNo = after.reentry_order_no ? `（${after.reentry_order_no}）` : ''
+      return `关联重登 #${after.reentry_id ?? ''}${orderNo}，重新领用 ${after.quantity}；来源红冲 #${after.reversal_id ?? ''}`
+    }
+    case 'requisition_correction_submit':
+      return after
+        ? `提交纠错 #${after.correction_id ?? ''}：${after.reason ?? '—'}`
+        : row.remark || '—'
+    case 'requisition_correction_accept': {
+      if (!after) return row.remark || '—'
+      const reentry = after.reentry_id
+        ? `；关联重登 ${after.reentry_order_no ?? ''}`
+        : ''
+      return `受理纠错 #${row.target_id ?? ''}：红冲 ${after.reversal_order_no ?? '—'}${reentry}`
+    }
+    case 'requisition_correction_handle':
+      return after
+        ? `处理纠错 #${row.target_id ?? ''}：${after.status === 'rejected' ? '驳回' : after.status}${after.handling_note ? `；${after.handling_note}` : ''}`
+        : row.remark || '—'
     case 'restock': {
       if (!after) return row.remark || '—'
       const beforeStock = before?.current_stock ?? after.stock_before

@@ -51,6 +51,9 @@ class Consumable(Base):
 
 class Requisition(Base):
     __tablename__ = "requisitions"
+    __table_args__ = (
+        UniqueConstraint("order_no", name="uq_requisitions_order_no"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     consumable_id: Mapped[int] = mapped_column(ForeignKey("consumables.id"), nullable=False)
@@ -61,9 +64,56 @@ class Requisition(Base):
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="active")
     reversal_of: Mapped[int | None] = mapped_column(Integer, nullable=True)
     reversal_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reentry_of: Mapped[int | None] = mapped_column(
+        ForeignKey("requisitions.id"), nullable=True, index=True
+    )
+    order_no: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    handler_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id"), nullable=True
+    )
+    handler_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    handler_role: Mapped[str | None] = mapped_column(String(16), nullable=True)
     class_id: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     created_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
     remark: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+
+class RequisitionCorrection(Base):
+    __tablename__ = "requisition_corrections"
+    __table_args__ = (
+        UniqueConstraint("request_id", name="uq_requisition_corrections_request_id"),
+        CheckConstraint(
+            "status IN ('submitted','accepted','rejected')",
+            name="ck_requisition_corrections_status",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    requisition_id: Mapped[int] = mapped_column(
+        ForeignKey("requisitions.id"), nullable=False, index=True
+    )
+    request_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="submitted")
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    remark: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    applicant_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    applicant_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    applicant_role: Mapped[str] = mapped_column(String(16), nullable=False)
+    handler_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id"), nullable=True
+    )
+    handler_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    handler_role: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    handling_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reversal_id: Mapped[int | None] = mapped_column(
+        ForeignKey("requisitions.id"), nullable=True
+    )
+    reentry_id: Mapped[int | None] = mapped_column(
+        ForeignKey("requisitions.id"), nullable=True
+    )
+    class_id: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    created_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
+    handled_at: Mapped[datetime | None] = mapped_column(DATETIME, nullable=True)
 
 
 class RequisitionOrder(Base):
