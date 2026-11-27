@@ -8,7 +8,7 @@ services:
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_unicode_ci
     environment:
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD in .env}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-ManageSystem2026}
       MYSQL_DATABASE: manage_system
       TZ: Asia/Shanghai
     volumes:
@@ -32,8 +32,8 @@ services:
     environment:
       APP_ENV: prod
       DEBUG: "false"
-      DATABASE_URL: mysql+pymysql://root:${MYSQL_ROOT_PASSWORD}@db:3306/manage_system?charset=utf8mb4
-      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?set JWT_SECRET_KEY in .env}
+      DATABASE_URL: mysql+pymysql://root:${MYSQL_ROOT_PASSWORD:-ManageSystem2026}@db:3306/manage_system?charset=utf8mb4
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-manage-system-demo-jwt-secret-change-in-prod-0123456789abcdef}
       JWT_ALGORITHM: HS256
       JWT_EXPIRE_MINUTES: "120"
       LLM_API_KEY: ${LLM_API_KEY:-}

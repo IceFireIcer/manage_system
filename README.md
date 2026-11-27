@@ -65,18 +65,22 @@ bash scripts/dev-start.sh
 - 默认数据库为 `backend/dev.db`（SQLite）；改用本机 MySQL 8.0 时修改 `backend/.env` 的 `DATABASE_URL`
 - 访问 <http://127.0.0.1:5173>
 
-## 云端部署（Docker Compose）
+## 云端部署（Docker Compose，零配置）
 
-单台 Ubuntu 云服务器 + Docker Compose 部署（nginx 托管前端并反代 `/api`、uvicorn 运行后端、MySQL 8.0）：
+单台 Ubuntu 云服务器，三条命令即可上线（nginx 托管前端并反代 `/api`、uvicorn 运行后端、MySQL 8.0 由 Compose 自带）：
 
 ```bash
-cp .env.example .env    # 填 MYSQL_ROOT_PASSWORD、JWT_SECRET_KEY 等
-docker compose config   # 静态校验
+curl -fsSL https://get.docker.com | sh -s -- --mirror Aliyun && systemctl enable --now docker
+git clone https://atomgit.com/IceFire_Icer/manage_system.git && cd manage_system
 docker compose up -d --build
-curl -fsS http://127.0.0.1/api/v1/health
 ```
 
-后端容器启动时自动执行 `alembic upgrade head`（建表 + 演示数据）。完整步骤（安装 Docker、防火墙、迁移、验证、日志、升级、镜像回滚、备份与排错）见 **[docs/deploy.md](docs/deploy.md)**；CodeArts 流水线三阶段配置见该文档第 13 节（可选）。
+- **无需 `.env`、无需手填密钥、无需预装 MySQL**：`mysql:8.0` 随 `up` 启动，密钥使用内置默认值（仅演示用途）
+- 后端启动自动 `alembic upgrade head` 建表，并执行 `scripts/seed_demo.py` 灌入演示数据（幂等，重启不重复写入）
+- 访问 `http://<服务器IP>/`，用 `teacher01/Teacher@123`、`admin01/Admin@123`、`student01/Student@123` 登录
+- 生产环境建议 `cp .env.example .env` 覆盖 `MYSQL_ROOT_PASSWORD`、`JWT_SECRET_KEY` 后再 `docker compose up -d`
+
+静态校验可随时执行 `docker compose config`（无 `.env` 也能通过）。完整步骤（安装 Docker、防火墙、迁移、验证、日志、升级、镜像回滚、备份与排错）见 **[docs/deploy.md](docs/deploy.md)**；CodeArts 流水线三阶段配置见该文档第 13 节（可选）。
 
 ## 测试与 Lint
 

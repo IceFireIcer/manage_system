@@ -3,7 +3,39 @@
 本手册面向**任意一台 Ubuntu 云服务器**（阿里云 / 腾讯云 / 华为云 / 自建虚拟机均可），从零完成本系统的部署、验证、升级与回滚。不依赖任何云厂商控制台，控制台操作仅限"开放 80 端口 / 拿到公网 IP"这类通用步骤。
 
 - 本地零 Docker 开发：见 [README](../README.md#本地零-docker-启动推荐) 与 `scripts/dev-start.sh`、`scripts/dev-start.ps1`
-- CodeArts 流水线（赛事加分项）：见本文 [第 12 节](#12-可选codearts-流水线三阶段)，属可选附加内容
+- CodeArts 流水线（赛事加分项）：见本文 [第 13 节](#13-可选codearts-流水线三阶段)，属可选附加内容
+
+## 0. 一条命令部署（推荐，零配置）
+
+**无需 `.env`、无需手填密钥、无需预装 MySQL。** 数据库（`mysql:8.0`）由 Compose 自带并随 `up` 一起启动；密钥使用内置默认值；后端每次启动自动建表并灌入演示数据。
+
+```bash
+# 服务器只需安装 Docker（Ubuntu）
+curl -fsSL https://get.docker.com | sh -s -- --mirror Aliyun
+systemctl enable --now docker
+
+git clone https://atomgit.com/IceFire_Icer/manage_system.git
+cd manage_system
+docker compose up -d --build
+```
+
+首次启动约 3-8 分钟（构建镜像 + 拉取 mysql:8.0）：
+
+1. `db` 容器初始化 `manage_system` 库（utf8mb4），健康检查通过后才启动 `backend`
+2. `backend` 执行 `alembic upgrade head` 建表，再执行 `scripts/seed_demo.py` 灌入演示数据（幂等，重复启动不会重复写入）
+3. `web`（nginx）等待 `backend` 健康后启动并监听 80
+
+访问 `http://<服务器IP>/`，演示账号：
+
+| 账号 | 密码 | 角色 |
+| --- | --- | --- |
+| teacher01 | `Teacher@123` | 教师 |
+| admin01 | `Admin@123` | 班委 |
+| student01 | `Student@123` | 学生 |
+
+演示数据即"紧急 / 一般 / 观察"三级补货场景，登录后「补货建议」页可直接看到分级卡片。
+
+> **安全提示**：内置默认密钥（`MYSQL_ROOT_PASSWORD=ManageSystem2026`、`JWT_SECRET_KEY=manage-system-demo-…`）**仅供演示**。生产环境建议 `cp .env.example .env` 覆盖这两个变量后再 `docker compose up -d`。第 `1`~`14` 节为手动/进阶部署与运维说明：安装与首次启动已包含在本节，可跳过第 `3`~`6` 节；后续运维、升级、备份与排错仍按下文执行。
 
 ## 1. 部署拓扑
 
@@ -83,7 +115,9 @@ scp manage_system.tar.gz <user>@<服务器IP>:/opt/manage_system/
 
 服务器上解压到 `/opt/manage_system` 即可。
 
-## 5. 配置 `.env`
+## 5.（可选）覆盖默认密钥 `.env`
+
+**跳过本节亦可正常启动**：Compose 已内置默认 `MYSQL_ROOT_PASSWORD` 与 `JWT_SECRET_KEY`。仅当需要为生产环境替换默认密钥时才执行本节的构建。手动章节（第 5、6 节）仅保留为进阶步骤。
 
 ```bash
 cd /opt/manage_system
@@ -101,6 +135,8 @@ sed -i "s/^MYSQL_ROOT_PASSWORD=.*/MYSQL_ROOT_PASSWORD=${DB_PASS}/" .env
 # 按需填写 LLM（留空则智能补货自动降级为规则模板）
 vi .env
 ```
+
+> 若数据库卷已用默认密码初始化过，之后修改 `MYSQL_ROOT_PASSWORD` 会导致 `Access denied`；需 `docker compose down -v`（**会删数据**）或进入容器 `ALTER USER` 重置后再启动。
 
 `.env` 关键字段：
 
@@ -120,7 +156,7 @@ vi .env
 
 ```bash
 cd /opt/manage_system
-docker compose config          # 静态校验（不连 daemon，配置错误会立即报出）
+docker compose config          # 静态校验（不连 daemon，配置错误会立即报出；无 .env 也可通过）
 docker compose up -d --build   # 首次构建 + 后台启动，约 3-8 分钟（视网络）
 docker compose ps              # 三个服务应为 running / healthy
 ```
@@ -128,7 +164,7 @@ docker compose ps              # 三个服务应为 running / healthy
 首次启动时：
 
 1. `db` 初始化数据库 `manage_system`（utf8mb4），健康检查通过后才启动 backend
-2. `backend` 启动脚本先执行 `alembic upgrade head`（建表 + 写入演示数据），再启动 uvicorn
+2. `backend` 启动脚本先执行 `alembic upgrade head`（建表），再执行 `scripts/seed_demo.py` 写入演示数据（幂等），最后启动 uvicorn
 3. `web` 等待 backend 健康后启动 nginx
 
 ## 7. 数据库迁移与种子数据
