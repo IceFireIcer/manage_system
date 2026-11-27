@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     jwt_secret_key: str = "change-me-to-a-random-secret"
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 120
+    jwt_expire_hours: int = 8
 
     llm_api_key: str = "sk-your-api-key-here"
     llm_base_url: str = "https://api.example.com/v1"
