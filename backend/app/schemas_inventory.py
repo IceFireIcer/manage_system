@@ -144,3 +144,66 @@ class InventoryLedgerOut(BaseModel):
     opening_stock: int | None
     consistent: bool
     events: list[InventoryEventOut]
+
+class AuditEventOut(BaseModel):
+    id: int
+    event_type: str
+    source_type: str
+    source_id: int | None
+    requisition_id: int | None
+    order_no: str | None
+    line_no: int | None
+    business_at: datetime
+    posted_at: datetime
+    delta: int
+    stock_before: int
+    stock_after: int
+    exec_seq: int
+    operator_name: str | None
+    unit_snapshot: str
+    evidence_status: str
+    can_open_source: bool
+
+
+class AuditBasisOut(BaseModel):
+    basis: Literal["posted_at", "business_at"]
+    label: str
+    cutoff: datetime | None
+    stock_at_cutoff: int | None
+    ledger_end: int | None
+    events: list[AuditEventOut]
+
+
+class AuditAnomalyOut(BaseModel):
+    event_id: int
+    exec_seq: int
+    at: datetime
+    reason: str
+
+
+class AuditRangeOut(BaseModel):
+    start_event_id: int
+    end_event_id: int
+    start_exec_seq: int
+    end_exec_seq: int
+    start_at: datetime
+    end_at: datetime
+
+
+class InventoryAuditOut(BaseModel):
+    consumable_id: int
+    name: str
+    unit: str
+    current_stock: int
+    opening_stock: int | None
+    opening_event_id: int | None
+    opening_source: str | None
+    ledger_end: int | None
+    diff: int | None
+    evidence_status: Literal["trusted", "insufficient", "unverifiable"]
+    evidence_label: str
+    evidence_reasons: list[str]
+    first_anomaly: AuditAnomalyOut | None
+    affected_range: AuditRangeOut | None
+    posting: AuditBasisOut
+    business: AuditBasisOut

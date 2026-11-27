@@ -281,6 +281,21 @@ function openAudit(row) {
   audit.visible = true
 }
 
+function handleAuditSource(event) {
+  if (!event) return
+  audit.visible = false
+  if (event.requisition_id) {
+    router.push({
+      path: '/records',
+      query: { requisition_id: String(event.requisition_id) },
+    })
+    return
+  }
+  if (event.order_no) {
+    router.push({ path: '/restock', query: { order_no: event.order_no } })
+  }
+}
+
 function openReceive(row) {
   receive.row = row
   receive.visible = true
@@ -591,6 +606,7 @@ onBeforeUnmount(() => {
       v-model="audit.visible"
       :consumable-id="audit.consumableId"
       :consumable-name="audit.consumableName"
+      @view-source="handleAuditSource"
     />
 
     <RestockDialog
