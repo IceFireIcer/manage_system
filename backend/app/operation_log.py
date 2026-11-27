@@ -13,6 +13,7 @@ RESULT_VALUES: Final = (RESULT_SUCCESS, RESULT_FAILURE, RESULT_REJECTED)
 SESSION_ACTIONS: Final = ("login", "logout", "logout_all")
 AUDIT_ACTIONS: Final = (
     "log_export",
+    "requisition_export",
     "password_change",
     "user_password_reset",
     "admin_bootstrap",

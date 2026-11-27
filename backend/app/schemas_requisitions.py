@@ -430,6 +430,15 @@ class RequisitionPageOut(BaseModel):
     page_size: int
 
 
+class RequisitionExportPreviewOut(BaseModel):
+    total: int
+    first_at: datetime | None = None
+    last_at: datetime | None = None
+    limit: int
+    segments: int
+    fields: list[str]
+
+
 class RequisitionConsumableOptionOut(BaseModel):
     id: int
     name: str
