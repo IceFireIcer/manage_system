@@ -416,7 +416,7 @@ def test_migration_creates_restock_tables(tmp_path: Path) -> None:
     finally:
         conn.close()
 
-    assert version == ("c8d2e4f6a9b1",)
+    assert version == ("e5f6a7b8c9d0",)
     assert {
         "restock_orders",
         "restock_lines",

@@ -6,6 +6,7 @@ import api from '../api'
 import PageHeader from '../components/PageHeader.vue'
 import EmptyState from '../components/EmptyState.vue'
 import RestockDialog from '../components/RestockDialog.vue'
+import LedgerImportDialog from '../components/LedgerImportDialog.vue'
 
 const router = useRouter()
 
@@ -40,7 +41,10 @@ const receive = reactive({
   row: null,
 })
 
+const ledgerImportVisible = ref(false)
+
 const emptyForm = {
+  code: '',
   name: '',
   spec: '',
   unit: '',
@@ -69,7 +73,7 @@ const appliedKeyword = computed(() => keyword.value.trim().toLowerCase())
 const visibleItems = computed(() => {
   if (!appliedKeyword.value) return items.value
   return items.value.filter((item) =>
-    [item.name, item.spec, item.location].some((field) =>
+    [item.code, item.name, item.spec, item.location].some((field) =>
       String(field ?? '')
         .toLowerCase()
         .includes(appliedKeyword.value),
@@ -194,7 +198,7 @@ function clearFilters() {
 function matchesFilters(row) {
   if (statusFilter.value !== 'enabled') return false
   if (!appliedKeyword.value) return true
-  return [row.name, row.spec, row.location].some((field) =>
+  return [row.code, row.name, row.spec, row.location].some((field) =>
     String(field ?? '')
       .toLowerCase()
       .includes(appliedKeyword.value),
@@ -212,6 +216,7 @@ function openCreate() {
 function openEdit(row) {
   editingId.value = row.id
   Object.assign(form, {
+    code: row.code ?? '',
     name: row.name,
     spec: row.spec,
     unit: row.unit,
@@ -348,6 +353,12 @@ function handleReceived() {
   fetchList('已入库，暂时无法刷新列表')
 }
 
+function handleLedgerImported() {
+  statusFilter.value = 'enabled'
+  clearSearch()
+  fetchList('已导入台账，暂时无法刷新列表')
+}
+
 function handleResize() {
   viewportWidth.value = window.innerWidth
 }
@@ -364,6 +375,7 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
   <div class="consumables">
     <PageHeader title="耗材档案" :breadcrumb="['日常管理', '耗材档案']">
       <template #actions>
+        <el-button @click="ledgerImportVisible = true">导入台账</el-button>
         <el-button type="primary" @click="openCreate">新增耗材</el-button>
       </template>
     </PageHeader>
@@ -426,6 +438,11 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
             <template #default="{ row }">
               <div class="cell-main">{{ row.name }}</div>
               <div class="cell-sub">{{ row.spec }}</div>
+            </template>
+          </el-table-column>
+          <el-table-column prop="code" label="编码" width="128">
+            <template #default="{ row }">
+              <span class="cell-code">{{ row.code || '—' }}</span>
             </template>
           </el-table-column>
           <el-table-column prop="unit" label="单位" width="80" />
@@ -579,6 +596,10 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
         scroll-to-error
         class="consumables__form"
       >
+        <el-form-item v-if="editingId" label="耗材编码">
+          <span class="consumables__readonly">{{ form.code || '—' }}</span>
+          <p class="consumables__form-hint">编码为稳定标识，建档后不可修改</p>
+        </el-form-item>
         <el-form-item label="名称" prop="name">
           <el-input v-model="form.name" maxlength="128" placeholder="如：焊丝" />
         </el-form-item>
@@ -627,6 +648,11 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
       v-model="receive.visible"
       :consumable="receive.row"
       @completed="handleReceived"
+    />
+
+    <LedgerImportDialog
+      v-model="ledgerImportVisible"
+      @completed="handleLedgerImported"
     />
   </div>
 </template>
@@ -728,6 +754,12 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
 .cell-main {
   color: var(--text);
   font-weight: 500;
+}
+
+.cell-code {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Consolas, monospace);
+  font-size: 12px;
+  color: var(--text-muted);
 }
 
 .cell-sub {

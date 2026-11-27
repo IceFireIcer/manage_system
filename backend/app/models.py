@@ -35,8 +35,15 @@ class User(Base):
 
 class Consumable(Base):
     __tablename__ = "consumables"
+    __table_args__ = (
+        UniqueConstraint(
+            "class_id", "name", "spec", name="uq_consumables_class_name_spec"
+        ),
+        UniqueConstraint("class_id", "code", name="uq_consumables_class_code"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    code: Mapped[str | None] = mapped_column(String(32), nullable=True)
     name: Mapped[str] = mapped_column(String(128), nullable=False)
     spec: Mapped[str] = mapped_column(String(128), nullable=False, default="")
     unit: Mapped[str] = mapped_column(String(16), nullable=False, default="")
@@ -47,6 +54,32 @@ class Consumable(Base):
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="enabled")
     created_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
     updated_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
+
+
+class ConsumableImportBatch(Base):
+    __tablename__ = "consumable_import_batches"
+    __table_args__ = (
+        UniqueConstraint(
+            "request_id", name="uq_consumable_import_batches_request_id"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    request_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    signature: Mapped[str] = mapped_column(String(64), nullable=False)
+    source: Mapped[str] = mapped_column(String(128), nullable=False)
+    counted_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False)
+    operator_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    operator_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    operator_role: Mapped[str] = mapped_column(String(16), nullable=False)
+    class_id: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    total_rows: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_kinds: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    skipped_existing: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    opening_total: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    by_unit_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    receipt_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
 
 
 class Requisition(Base):
