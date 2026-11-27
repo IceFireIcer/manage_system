@@ -167,7 +167,7 @@ async function fetchLogs() {
 async function fetchUserOptions() {
   optionsError.value = false
   try {
-    const { data } = await api.get('/users/options')
+    const { data } = await api.get('/users/history-options')
     userOptions.value = Array.isArray(data) ? data : []
   } catch {
     optionsError.value = true
@@ -373,7 +373,7 @@ function summaryText(row) {
 }
 
 function userOptionLabel(option) {
-  return `${option.name}（${ROLE_NAMES[option.role] ?? option.role}）`
+  return `${option.name}（${ROLE_NAMES[option.role] ?? option.role}·${option.account}）`
 }
 
 function openDetail(row) {

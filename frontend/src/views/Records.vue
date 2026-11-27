@@ -410,7 +410,7 @@ async function fetchUserOptions() {
   if (!isStaff.value) return
   userLoadError.value = ''
   try {
-    const { data } = await api.get('/users/options')
+    const { data } = await api.get('/users/history-options')
     userOptions.value = data
   } catch {
     userLoadError.value = '领用人筛选选项加载失败'
@@ -698,7 +698,7 @@ onMounted(async () => {
             <el-option
               v-for="option in userOptions"
               :key="option.id"
-              :label="`${option.name}（${option.role === 'teacher' ? '教师' : option.role === 'admin' ? '班委' : '学生'}）`"
+              :label="`${option.name}（${option.role === 'teacher' ? '教师' : option.role === 'admin' ? '班委' : '学生'}·${option.account}）`"
               :value="option.id"
             />
           </el-select>

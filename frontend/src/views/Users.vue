@@ -47,8 +47,46 @@ const form = reactive({
   password: '',
 })
 
+const editVisible = ref(false)
+const editSaving = ref(false)
+const editError = ref('')
+const editForm = reactive({ id: null, account: '', name: '' })
+
+const resetVisible = ref(false)
+const resetResult = ref(null)
+
+const importVisible = ref(false)
+const importFileName = ref('')
+const importSource = ref('')
+const importRows = ref([])
+const importPreview = ref(null)
+const importOnExisting = ref('skip')
+const importRequestId = ref('')
+const importError = ref('')
+const importParsing = ref(false)
+const importSubmitting = ref(false)
+const importReceipt = ref(null)
+
+const IMPORT_STATUS_NAMES = {
+  ready: '可创建',
+  existing: '已存在',
+  update: '已存在·更正',
+  error: '错误',
+}
+
+const IMPORT_ACTION_NAMES = {
+  created: '已创建',
+  updated: '已更正',
+  unchanged: '无变化',
+  skipped: '已跳过',
+}
+
 const dialogWidth = computed(() =>
   viewportWidth.value < 552 ? `${viewportWidth.value - 32}px` : '520px',
+)
+
+const importDialogWidth = computed(() =>
+  viewportWidth.value < 860 ? `${viewportWidth.value - 32}px` : '820px',
 )
 
 const lastLoadedLabel = computed(() => {
@@ -324,6 +362,193 @@ function handleEnable(row) {
   changeStatus(row, 'enabled')
 }
 
+function openEditDialog(row) {
+  editForm.id = row.id
+  editForm.account = row.account
+  editForm.name = row.name
+  editError.value = ''
+  editVisible.value = true
+}
+
+async function handleEdit() {
+  if (editSaving.value) return
+  editSaving.value = true
+  editError.value = ''
+  try {
+    await api.patch(`/users/${editForm.id}`, {
+      account: editForm.account.trim(),
+      name: editForm.name.trim(),
+    })
+    ElMessage.success('人员信息已更正，历史记录仍归属同一人员')
+    editVisible.value = false
+    await fetchUsers('人员信息已更正，暂时无法刷新列表')
+  } catch (error) {
+    editError.value = errorMessage(
+      error,
+      '更正失败，请稍后重试',
+      '暂未确认更正结果，请刷新名单核对后再决定是否重试',
+    )
+  } finally {
+    editSaving.value = false
+  }
+}
+
+async function handleResetPassword(row) {
+  try {
+    await ElMessageBox.confirm(
+      h('div', { class: 'confirm-body' }, [
+        h('p', { class: 'confirm-body__title' }, `${row.name}（${row.account}）`),
+        h('p', null, '重置后旧密码与旧登录会话立即失效，需将一次性临时密码交给该学生。'),
+      ]),
+      '重置学生密码',
+      {
+        type: 'warning',
+        confirmButtonText: '确认重置',
+        cancelButtonText: '取消',
+      },
+    )
+  } catch {
+    return
+  }
+  try {
+    const { data } = await api.post(`/users/${row.id}/reset-password`)
+    resetResult.value = data
+    resetVisible.value = true
+  } catch (error) {
+    ElMessage.error(errorMessage(error, '重置失败，请稍后重试'))
+  }
+}
+
+function closeResetResult() {
+  resetVisible.value = false
+  resetResult.value = null
+}
+
+function parseRosterCsv(text) {
+  const rows = []
+  const lines = String(text ?? '')
+    .replace(/^\ufeff/, '')
+    .split(/\r?\n/)
+  lines.forEach((raw, index) => {
+    if (!raw.trim()) return
+    const cells = raw.split(',').map((cell) => cell.trim())
+    if (index === 0 && (cells[0]?.includes('学号') || cells[1]?.includes('姓名'))) return
+    rows.push({ line_no: index + 1, account: cells[0] ?? '', name: cells[1] ?? '' })
+  })
+  return rows
+}
+
+function newRequestId() {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID()
+  return `roster-${Date.now()}-${Math.random().toString(16).slice(2)}`
+}
+
+function openImportDialog() {
+  importFileName.value = ''
+  importSource.value = ''
+  importRows.value = []
+  importPreview.value = null
+  importOnExisting.value = 'skip'
+  importRequestId.value = ''
+  importError.value = ''
+  importParsing.value = false
+  importSubmitting.value = false
+  importReceipt.value = null
+  importVisible.value = true
+}
+
+function closeImportDialog() {
+  if (importSubmitting.value) return
+  importVisible.value = false
+}
+
+async function handleTemplateDownload() {
+  try {
+    const response = await api.get('/users/import/template', { responseType: 'blob' })
+    const url = URL.createObjectURL(response.data)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = 'student_roster_template.csv'
+    anchor.click()
+    URL.revokeObjectURL(url)
+  } catch {
+    ElMessage.error('模板下载失败，请稍后重试')
+  }
+}
+
+async function runPreview() {
+  importError.value = ''
+  importPreview.value = null
+  if (!importRows.value.length) {
+    importError.value = '名单为空，请检查文件是否为「学号,姓名」两列 CSV'
+    return
+  }
+  importParsing.value = true
+  try {
+    const { data } = await api.post('/users/import/preview', {
+      source: importSource.value || '花名册导入',
+      rows: importRows.value,
+      on_existing: importOnExisting.value,
+    })
+    importPreview.value = data
+  } catch (error) {
+    importError.value = errorMessage(
+      error,
+      '预检失败，请稍后重试',
+      '暂未确认预检结果，请重试',
+    )
+  } finally {
+    importParsing.value = false
+  }
+}
+
+async function handleRosterFile(uploadFile) {
+  const file = uploadFile?.raw
+  if (!file || importSubmitting.value) return
+  importFileName.value = file.name
+  importSource.value = file.name.replace(/\.csv$/i, '') || '花名册导入'
+  importReceipt.value = null
+  importRequestId.value = newRequestId()
+  importError.value = ''
+  try {
+    importRows.value = parseRosterCsv(await file.text())
+  } catch {
+    importRows.value = []
+    importError.value = '名单读取失败，请确认文件为 CSV 编码'
+    return
+  }
+  await runPreview()
+}
+
+function handleOnExistingChange() {
+  if (importRows.value.length) runPreview()
+}
+
+async function handleImport() {
+  if (!importPreview.value?.valid || importSubmitting.value) return
+  importSubmitting.value = true
+  importError.value = ''
+  try {
+    const { data } = await api.post('/users/import', {
+      source: importSource.value || '花名册导入',
+      rows: importRows.value,
+      on_existing: importOnExisting.value,
+      request_id: importRequestId.value,
+    })
+    importReceipt.value = data
+    ElMessage.success('花名册已导入，请立即转交一次性临时密码')
+    await fetchUsers('花名册已导入，暂时无法刷新列表')
+  } catch (error) {
+    importError.value = errorMessage(
+      error,
+      '导入失败，请稍后重试',
+      '暂未确认导入结果，请先查询批次回执再决定是否重试',
+    )
+  } finally {
+    importSubmitting.value = false
+  }
+}
+
 function handleResize() {
   viewportWidth.value = window.innerWidth
 }
@@ -341,6 +566,7 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
   <div class="users">
     <PageHeader title="用户管理" :breadcrumb="['日常管理', '用户管理']">
       <template #actions>
+        <el-button @click="openImportDialog">导入花名册</el-button>
         <el-button type="primary" @click="openCreateDialog">新增学生账号</el-button>
       </template>
     </PageHeader>
@@ -421,30 +647,50 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
           <el-table-column label="创建时间" min-width="150">
             <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
           </el-table-column>
-          <el-table-column label="操作" width="110" fixed="right">
+          <el-table-column label="操作" width="210" fixed="right">
             <template #default="{ row }">
               <span v-if="row.id === userStore.user?.id" class="users__readonly">当前账号</span>
               <span v-else-if="row.role !== 'student'" class="users__readonly">只读</span>
-              <el-button
-                v-else-if="row.status === 'enabled'"
-                link
-                type="danger"
-                size="small"
-                :aria-label="`停用 ${row.name}`"
-                @click="handleDisable(row)"
-              >
-                停用
-              </el-button>
-              <el-button
-                v-else
-                link
-                type="primary"
-                size="small"
-                :aria-label="`启用 ${row.name}`"
-                @click="handleEnable(row)"
-              >
-                启用
-              </el-button>
+              <template v-else>
+                <el-button
+                  link
+                  type="primary"
+                  size="small"
+                  :aria-label="`更正 ${row.name}`"
+                  @click="openEditDialog(row)"
+                >
+                  更正
+                </el-button>
+                <el-button
+                  link
+                  type="primary"
+                  size="small"
+                  :aria-label="`重置 ${row.name} 的密码`"
+                  @click="handleResetPassword(row)"
+                >
+                  重置密码
+                </el-button>
+                <el-button
+                  v-if="row.status === 'enabled'"
+                  link
+                  type="danger"
+                  size="small"
+                  :aria-label="`停用 ${row.name}`"
+                  @click="handleDisable(row)"
+                >
+                  停用
+                </el-button>
+                <el-button
+                  v-else
+                  link
+                  type="primary"
+                  size="small"
+                  :aria-label="`启用 ${row.name}`"
+                  @click="handleEnable(row)"
+                >
+                  启用
+                </el-button>
+              </template>
             </template>
           </el-table-column>
 
@@ -512,6 +758,191 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
         <div class="users__dialog-footer">
           <el-button :disabled="creating" @click="createVisible = false">取消</el-button>
           <el-button type="primary" :loading="creating" @click="handleCreate">创建账号</el-button>
+        </div>
+      </template>
+    </el-dialog>
+
+    <el-dialog
+      v-model="editVisible"
+      title="更正人员信息"
+      :width="dialogWidth"
+      :close-on-click-modal="false"
+      :close-on-press-escape="!editSaving"
+      :show-close="!editSaving"
+      destroy-on-close
+      class="users__dialog"
+    >
+      <el-alert
+        v-if="editError"
+        type="error"
+        :closable="false"
+        show-icon
+        :title="editError"
+        class="users__form-error"
+      />
+      <el-form label-position="top">
+        <el-form-item label="姓名">
+          <el-input v-model="editForm.name" maxlength="64" placeholder="请输入姓名" />
+        </el-form-item>
+        <el-form-item label="学号">
+          <el-input
+            v-model="editForm.account"
+            maxlength="64"
+            placeholder="请输入学号"
+            autocomplete="off"
+          />
+        </el-form-item>
+      </el-form>
+      <p class="users__form-hint">
+        按稳定用户 ID 更正，历史领用与日志仍归属该人员；同名人员请以学号区分。
+      </p>
+      <template #footer>
+        <div class="users__dialog-footer">
+          <el-button :disabled="editSaving" @click="editVisible = false">取消</el-button>
+          <el-button type="primary" :loading="editSaving" @click="handleEdit">保存更正</el-button>
+        </div>
+      </template>
+    </el-dialog>
+
+    <el-dialog
+      v-model="resetVisible"
+      title="一次性临时密码"
+      :width="dialogWidth"
+      :close-on-click-modal="false"
+      @closed="closeResetResult"
+      class="users__dialog"
+    >
+      <template v-if="resetResult">
+        <p class="users__reset-title">
+          已重置 {{ resetResult.user.name }}（{{ resetResult.user.account }}）的密码。
+        </p>
+        <div class="users__temp-password">{{ resetResult.temporary_password }}</div>
+        <p class="users__form-hint">
+          临时密码仅本次显示，关闭后无法再次查看；该学生下次登录须立即修改密码，旧密码与旧会话已失效。
+        </p>
+      </template>
+      <template #footer>
+        <el-button type="primary" @click="closeResetResult">我已记录</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog
+      v-model="importVisible"
+      title="导入花名册"
+      :width="importDialogWidth"
+      :close-on-click-modal="false"
+      :close-on-press-escape="!importSubmitting"
+      :show-close="!importSubmitting"
+      @closed="closeImportDialog"
+      class="users__dialog"
+    >
+      <template v-if="!importReceipt">
+        <div class="users__import-actions">
+          <el-button @click="handleTemplateDownload">下载模板</el-button>
+          <el-upload
+            :auto-upload="false"
+            :show-file-list="false"
+            accept=".csv,text/csv"
+            :on-change="handleRosterFile"
+          >
+            <el-button type="primary" :loading="importParsing">选择名单 CSV</el-button>
+          </el-upload>
+          <span v-if="importFileName" class="users__import-file">{{ importFileName }}</span>
+        </div>
+        <el-alert
+          v-if="importError"
+          type="error"
+          :closable="false"
+          show-icon
+          :title="importError"
+          class="users__form-error"
+        />
+        <div v-if="importRows.length" class="users__import-mode">
+          <span>已存在学号：</span>
+          <el-radio-group v-model="importOnExisting" @change="handleOnExistingChange">
+            <el-radio-button value="skip">跳过</el-radio-button>
+            <el-radio-button value="update">按学号更正姓名</el-radio-button>
+          </el-radio-group>
+        </div>
+        <template v-if="importPreview">
+          <p class="users__import-summary">
+            共 {{ importPreview.summary.total_rows }} 行：可创建
+            {{ importPreview.summary.ready_rows }}，已存在
+            {{ importPreview.summary.existing_rows }}，更正
+            {{ importPreview.summary.update_rows }}，错误
+            {{ importPreview.summary.error_rows }}
+          </p>
+          <el-table
+            :data="importPreview.rows"
+            row-key="line_no"
+            max-height="360"
+            class="table-dense"
+          >
+            <el-table-column prop="line_no" label="行" width="60" />
+            <el-table-column prop="account" label="学号" min-width="130" />
+            <el-table-column prop="name" label="姓名" min-width="100" />
+            <el-table-column label="预检" width="120">
+              <template #default="{ row }">
+                <el-tag
+                  size="small"
+                  :type="row.status === 'ready' ? 'success' : row.status === 'error' ? 'danger' : 'info'"
+                >
+                  {{ IMPORT_STATUS_NAMES[row.status] ?? row.status }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="说明" min-width="260">
+              <template #default="{ row }">
+                <span v-if="row.errors.length" class="users__import-error">
+                  {{ row.errors.map((item) => `${item.field}：${item.reason}`).join('；') }}
+                </span>
+                <span v-else>{{ row.message || '—' }}</span>
+              </template>
+            </el-table-column>
+          </el-table>
+        </template>
+      </template>
+      <template v-else>
+        <p class="users__import-receipt">
+          批次 #{{ importReceipt.batch_id }} 已处理：创建
+          {{ importReceipt.summary.ready_rows }} 人，更正
+          {{ importReceipt.summary.update_rows }} 人，跳过
+          {{ importReceipt.summary.existing_rows }} 人。
+        </p>
+        <el-table :data="importReceipt.rows" row-key="line_no" max-height="360" class="table-dense">
+          <el-table-column prop="line_no" label="行" width="60" />
+          <el-table-column prop="account" label="学号" min-width="130" />
+          <el-table-column prop="name" label="姓名" min-width="100" />
+          <el-table-column label="结果" width="100">
+            <template #default="{ row }">
+              {{ IMPORT_ACTION_NAMES[row.action] ?? row.action }}
+            </template>
+          </el-table-column>
+          <el-table-column label="临时密码" min-width="180">
+            <template #default="{ row }">
+              <span class="users__receipt-password">{{ row.temporary_password || '—' }}</span>
+            </template>
+          </el-table-column>
+        </el-table>
+        <p class="users__form-hint">
+          临时密码仅本次显示，关闭后无法再次查看；批次 #{{ importReceipt.batch_id }}
+          的回执可再次查询，但不包含临时密码。学生首次登录须立即修改密码。
+        </p>
+      </template>
+      <template #footer>
+        <div class="users__dialog-footer">
+          <el-button :disabled="importSubmitting" @click="closeImportDialog">
+            {{ importReceipt ? '完成' : '取消' }}
+          </el-button>
+          <el-button
+            v-if="!importReceipt"
+            type="primary"
+            :loading="importSubmitting"
+            :disabled="!importPreview?.valid"
+            @click="handleImport"
+          >
+            确认导入
+          </el-button>
         </div>
       </template>
     </el-dialog>
@@ -631,5 +1062,71 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+}
+
+.users__import-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.users__import-file {
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--text-muted);
+  word-break: break-all;
+}
+
+.users__import-mode {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.users__import-summary {
+  margin: 12px 0 8px;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--text-muted);
+}
+
+.users__import-error {
+  color: var(--danger, #f56c6c);
+}
+
+.users__import-receipt {
+  margin: 0 0 8px;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--text-muted);
+}
+
+.users__receipt-password {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  word-break: break-all;
+}
+
+.users__reset-title {
+  margin: 0;
+  font-size: 14px;
+  line-height: 22px;
+}
+
+.users__temp-password {
+  padding: 12px 16px;
+  margin: 12px 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 18px;
+  line-height: 26px;
+  letter-spacing: 0.04em;
+  background: var(--surface-muted);
+  border-radius: var(--radius-panel);
+  word-break: break-all;
 }
 </style>
