@@ -15,17 +15,97 @@ const routes = [
     component: Layout,
     children: [
       { path: '', redirect: '/overview' },
-      { path: 'overview', name: 'overview', component: () => import('../views/Overview.vue'), meta: { title: '库存总览' } },
-      { path: 'requisition', name: 'requisition', component: () => import('../views/Requisition.vue'), meta: { title: '领用登记' } },
-      { path: 'records', name: 'records', component: () => import('../views/Records.vue'), meta: { title: '记录查询' } },
-      { path: 'consumables', name: 'consumables', component: () => import('../views/Consumables.vue'), meta: { title: '耗材档案', roles: ['admin'] } },
-      { path: 'users', name: 'users', component: () => import('../views/Users.vue'), meta: { title: '用户管理', roles: ['admin'] } },
-      { path: 'restock', name: 'restock', component: () => import('../views/Restock.vue'), meta: { title: '补货建议', roles: ['teacher', 'admin'] } },
-      { path: 'consumption', name: 'consumption', component: () => import('../views/Consumption.vue'), meta: { title: '消耗汇总', roles: ['teacher', 'admin'] } },
-      { path: 'logs', name: 'logs', component: () => import('../views/Logs.vue'), meta: { title: '操作日志', roles: ['teacher', 'admin'] } },
+      {
+        path: 'overview',
+        name: 'overview',
+        component: () => import('../views/Overview.vue'),
+        meta: { title: '库存总览', nav: { group: 'inventory', icon: 'Box', order: 1 } },
+      },
+      {
+        path: 'requisition',
+        name: 'requisition',
+        component: () => import('../views/Requisition.vue'),
+        meta: { title: '领用登记', nav: { group: 'requisition', icon: 'Tickets', order: 1 } },
+      },
+      {
+        path: 'records',
+        name: 'records',
+        component: () => import('../views/Records.vue'),
+        meta: {
+          title: '记录查询',
+          nav: { group: 'requisition', icon: 'Tickets', order: 2, studentTitle: '我的记录' },
+        },
+      },
+      {
+        path: 'consumables',
+        name: 'consumables',
+        component: () => import('../views/Consumables.vue'),
+        meta: {
+          title: '耗材档案',
+          roles: ['admin'],
+          nav: { group: 'daily', icon: 'Setting', order: 1 },
+        },
+      },
+      {
+        path: 'users',
+        name: 'users',
+        component: () => import('../views/Users.vue'),
+        meta: {
+          title: '用户管理',
+          roles: ['admin'],
+          nav: { group: 'daily', icon: 'Setting', order: 2 },
+        },
+      },
+      {
+        path: 'restock',
+        name: 'restock',
+        component: () => import('../views/Restock.vue'),
+        meta: {
+          title: '补货建议',
+          roles: ['teacher', 'admin'],
+          nav: { group: 'analysis', icon: 'TrendCharts', order: 1 },
+        },
+      },
+      {
+        path: 'consumption',
+        name: 'consumption',
+        component: () => import('../views/Consumption.vue'),
+        meta: {
+          title: '消耗汇总',
+          roles: ['teacher', 'admin'],
+          nav: { group: 'analysis', icon: 'TrendCharts', order: 2 },
+        },
+      },
+      {
+        path: 'logs',
+        name: 'logs',
+        component: () => import('../views/Logs.vue'),
+        meta: {
+          title: '操作日志',
+          roles: ['teacher', 'admin'],
+          nav: { group: 'daily', icon: 'Setting', order: 3 },
+        },
+      },
+      {
+        path: '403',
+        name: 'forbidden',
+        component: () => import('../views/Forbidden.vue'),
+        meta: { title: '无权访问此页面' },
+      },
     ],
   },
-  { path: '/:pathMatch(.*)*', redirect: '/overview' },
+  {
+    path: '/404',
+    name: 'not-found',
+    component: () => import('../views/NotFound.vue'),
+    meta: { public: true, title: '页面不存在' },
+  },
+  {
+    path: '/:pathMatch(.*)*',
+    name: 'not-found-fallback',
+    component: () => import('../views/NotFound.vue'),
+    meta: { public: true, title: '页面不存在' },
+  },
 ]
 
 const router = createRouter({
@@ -36,24 +116,31 @@ const router = createRouter({
 router.beforeEach(async (to) => {
   const userStore = useUserStore()
 
-  if (!userStore.fetched && !to.meta.public) {
-    await userStore.fetchMe()
-  }
-
   if (to.meta.public) {
-    if (userStore.isLoggedIn) {
-      return { path: '/' }
+    if (to.name === 'login' && userStore.isLoggedIn) {
+      return { path: '/overview' }
     }
     return true
   }
 
+  if (userStore.status !== 'ready') {
+    await userStore.init()
+  }
+
+  if (userStore.status === 'error') {
+    return true
+  }
+
   if (!userStore.isLoggedIn) {
-    return { path: '/login' }
+    return {
+      path: '/login',
+      query: to.fullPath !== '/' ? { redirect: to.fullPath } : {},
+    }
   }
 
   const allowedRoles = to.meta.roles
   if (allowedRoles && !allowedRoles.includes(userStore.user.role)) {
-    return { path: '/overview' }
+    return { path: '/403', query: { from: to.fullPath } }
   }
 
   return true

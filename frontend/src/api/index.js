@@ -9,19 +9,35 @@ const api = axios.create({
   withCredentials: true,
 })
 
+let lastForbiddenAt = 0
+
 api.interceptors.response.use(
   (response) => response,
   (error) => {
     const status = error.response?.status
-    if (status === 401) {
+
+    if (status === 401 && !error.config?.skipAuthRedirect) {
       const userStore = useUserStore()
-      userStore.clearUser()
-      if (router.currentRoute.value.path !== '/login') {
-        router.push('/login')
+      const current = router.currentRoute.value
+      if (!userStore.sessionExpired) {
+        userStore.sessionExpired = true
+        userStore.rememberRedirect(current.fullPath)
+        userStore.clearUser()
+        if (current.path !== '/login') {
+          ElMessage.warning('登录已失效，请重新登录')
+        }
+      }
+      if (current.path !== '/login') {
+        router.replace('/login')
       }
     } else if (status === 403) {
-      ElMessage.error('无权限访问')
+      const now = Date.now()
+      if (now - lastForbiddenAt > 800) {
+        lastForbiddenAt = now
+        ElMessage.error('你没有权限执行此操作')
+      }
     }
+
     return Promise.reject(error)
   },
 )
