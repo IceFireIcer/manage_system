@@ -1,3 +1,4 @@
+import time
 from datetime import datetime
 from typing import Any
 
@@ -24,6 +25,17 @@ class _StubGenerator:
         if self.error is not None:
             raise self.error
         return self.text
+
+
+class _SlowStubGenerator:
+    def __init__(self, delay: float) -> None:
+        self.delay = delay
+        self.calls = 0
+
+    def generate(self, context) -> str:
+        self.calls += 1
+        time.sleep(self.delay)
+        return "并发润色后的判断依据"
 
 
 @pytest.fixture(autouse=True)
@@ -244,6 +256,66 @@ def test_cache_reused_until_refresh(
     refreshed = admin_client.post(REFRESH_URL).json()
     assert stub.calls == 4
     assert refreshed["items"] == first["items"]
+
+
+def test_suggestions_generate_rationales_concurrently(
+    admin_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stub = _SlowStubGenerator(delay=0.6)
+    monkeypatch.setattr(llm, "get_generator", lambda: stub)
+    for index in range(5):
+        _create_consumable(
+            admin_client, name=f"待补耗材{index}", safety_stock=10, current_stock=0
+        )
+
+    started = time.perf_counter()
+    items = admin_client.get(SUGGESTIONS_URL).json()["items"]
+    elapsed = time.perf_counter() - started
+
+    assert len(items) == 5
+    assert stub.calls == 5
+    assert all(item["rationale"] == "并发润色后的判断依据" for item in items)
+    assert elapsed < 3.0
+
+
+def test_cache_cleared_after_stock_mutations(admin_client: TestClient) -> None:
+    consumable = _create_consumable(
+        admin_client, name="焊丝", safety_stock=5, current_stock=3
+    )
+    assert admin_client.get(SUGGESTIONS_URL).status_code == 200
+    assert service._cache
+
+    updated = admin_client.put(
+        f"{CONSUMABLES_URL}/{consumable['id']}", json={"safety_stock": 6}
+    )
+    assert updated.status_code == 200
+    assert service._cache == {}
+
+    admin_client.get(SUGGESTIONS_URL)
+    assert service._cache
+    created = admin_client.post(
+        "/api/v1/requisitions",
+        json={"items": [{"consumable_id": consumable["id"], "quantity": 1}]},
+    )
+    assert created.status_code == 201, created.text
+    assert service._cache == {}
+
+    admin_client.get(SUGGESTIONS_URL)
+    assert service._cache
+    record_id = admin_client.get("/api/v1/requisitions").json()["items"][0]["id"]
+    reversed_response = admin_client.post(
+        f"/api/v1/requisitions/{record_id}/reversal", json={"reason": "登记错误"}
+    )
+    assert reversed_response.status_code == 200, reversed_response.text
+    assert service._cache == {}
+
+    admin_client.get(SUGGESTIONS_URL)
+    assert service._cache
+    disabled = admin_client.patch(
+        f"{CONSUMABLES_URL}/{consumable['id']}/status", json={"status": "disabled"}
+    )
+    assert disabled.status_code == 200
+    assert service._cache == {}
 
 
 def test_restock_success_updates_stock_logs_and_cache(

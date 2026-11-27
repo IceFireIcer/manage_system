@@ -35,7 +35,7 @@ services:
       DATABASE_URL: mysql+pymysql://root:${MYSQL_ROOT_PASSWORD:-ManageSystem2026}@db:3306/manage_system?charset=utf8mb4
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-manage-system-default-jwt-secret-change-in-prod-0123456789abcdef}
       JWT_ALGORITHM: HS256
-      JWT_EXPIRE_MINUTES: "120"
+      JWT_EXPIRE_MINUTES: "480"
       ADMIN_INIT_ACCOUNT: ${ADMIN_INIT_ACCOUNT:-}
       ADMIN_INIT_PASSWORD: ${ADMIN_INIT_PASSWORD:-}
       ADMIN_INIT_NAME: ${ADMIN_INIT_NAME:-}

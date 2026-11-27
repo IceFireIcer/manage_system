@@ -50,6 +50,21 @@ finally {
     Pop-Location
 }
 
+Write-Info '初始化管理员账号（幂等；随机密码仅在首次创建时打印）...'
+Push-Location $Backend
+try {
+    & $VenvPy scripts/bootstrap_admin.py
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning '管理员初始化失败（不影响服务启动），可稍后手动执行 backend\scripts\bootstrap_admin.py'
+    }
+}
+catch {
+    Write-Warning '管理员初始化失败（不影响服务启动），可稍后手动执行 backend\scripts\bootstrap_admin.py'
+}
+finally {
+    Pop-Location
+}
+
 if (Test-Path $PidFile) {
     $oldPid = Get-Content $PidFile -ErrorAction SilentlyContinue
     if ($oldPid -and (Get-Process -Id $oldPid -ErrorAction SilentlyContinue)) {

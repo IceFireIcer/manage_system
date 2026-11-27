@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
+from app.agent import service
 from app.database import get_db
 from app.deps import CurrentUser, require_role
 from app.models import Consumable, OperationLog, Requisition, User
@@ -251,6 +252,12 @@ def export_requisitions_csv(
     )
 
 
+def _backfill_earliest(now: datetime) -> datetime:
+    return (now - timedelta(days=MAX_BACKFILL_DAYS)).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+
+
 def _validate_created_at(value: datetime) -> datetime:
     now = datetime.now()
     if value > now:
@@ -258,7 +265,7 @@ def _validate_created_at(value: datetime) -> datetime:
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="领用时间不能晚于当前时间",
         )
-    if value < now - timedelta(days=MAX_BACKFILL_DAYS):
+    if value < _backfill_earliest(now):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"领用时间不能早于 {MAX_BACKFILL_DAYS} 天前，不支持补录更早的记录",
@@ -299,6 +306,7 @@ def create_requisition(
         owner_id = owner.id
 
     results: list[RequisitionItemOut] = []
+    created: list[Requisition] = []
     total_quantity = 0
     try:
         for row_number, item in enumerate(payload.items, start=1):
@@ -334,27 +342,28 @@ def create_requisition(
                 )
             )
             total_quantity += item.quantity
-            db.add(
-                Requisition(
-                    consumable_id=item.consumable_id,
-                    user_id=owner_id,
-                    quantity=item.quantity,
-                    stock_after=consumable.current_stock,
-                    type="normal",
-                    status="active",
-                    class_id=consumable.class_id,
-                    created_at=created_at,
-                    remark=payload.remark,
-                )
+            requisition = Requisition(
+                consumable_id=item.consumable_id,
+                user_id=owner_id,
+                quantity=item.quantity,
+                stock_after=consumable.current_stock,
+                type="normal",
+                status="active",
+                class_id=consumable.class_id,
+                created_at=created_at,
+                remark=payload.remark,
             )
+            db.add(requisition)
+            created.append(requisition)
 
+        db.flush()
         db.add(
             OperationLog(
                 operator_id=current_user.id,
                 role=current_user.role,
                 action="requisition_create",
                 target_type="requisition",
-                target_id=None,
+                target_id=created[0].id if created else None,
                 before_value=None,
                 after_value=json.dumps(
                     {
@@ -373,6 +382,7 @@ def create_requisition(
         db.rollback()
         raise
 
+    service.clear_cache()
     return RequisitionCreateOut(count=len(results), items=results)
 
 
@@ -515,6 +525,7 @@ def reverse_requisition(
         db.rollback()
         raise
 
+    service.clear_cache()
     db.refresh(reversal)
     db.refresh(consumable)
     return _record_out(reversal, consumable, db.get(User, reversal.user_id))

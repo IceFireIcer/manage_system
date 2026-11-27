@@ -1,3 +1,4 @@
+import concurrent.futures
 import logging
 from datetime import datetime, timedelta, timezone
 
@@ -16,6 +17,8 @@ logger = logging.getLogger(__name__)
 SHANGHAI_TZ = timezone(timedelta(hours=8))
 CACHE_TTL = timedelta(minutes=10)
 TIER_ORDER = {"urgent": 0, "moderate": 1, "observe": 2}
+LLM_BUDGET_SECONDS = 5.0
+MAX_LLM_WORKERS = 8
 
 _cache: dict[int, tuple[datetime, SuggestionOut]] = {}
 _last_inspection_at: datetime | None = None
@@ -49,14 +52,35 @@ def _cached(consumable_id: int, now: datetime) -> SuggestionOut | None:
     return suggestion
 
 
-def _build_suggestion(consumable: Consumable, evaluation: Evaluation) -> SuggestionOut:
-    rationale = llm.generate_rationale(
-        llm.RationaleContext(
-            name=consumable.name,
-            unit=consumable.unit,
-            evaluation=evaluation,
-        )
+def _generate_rationales(contexts: list[llm.RationaleContext]) -> list[str]:
+    if not contexts:
+        return []
+    if len(contexts) == 1:
+        return [llm.generate_rationale(contexts[0])]
+
+    executor = concurrent.futures.ThreadPoolExecutor(
+        max_workers=min(len(contexts), MAX_LLM_WORKERS)
     )
+    try:
+        futures = [executor.submit(llm.generate_rationale, context) for context in contexts]
+        done, _ = concurrent.futures.wait(futures, timeout=LLM_BUDGET_SECONDS)
+        rationales: list[str] = []
+        for future, context in zip(futures, contexts, strict=True):
+            if future in done:
+                try:
+                    rationales.append(future.result())
+                except Exception:
+                    rationales.append(llm.format_template(context))
+            else:
+                rationales.append(llm.format_template(context))
+        return rationales
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
+
+
+def _build_suggestion(
+    consumable: Consumable, evaluation: Evaluation, rationale: str
+) -> SuggestionOut:
     return SuggestionOut(
         consumable_id=consumable.id,
         name=consumable.name,
@@ -87,22 +111,37 @@ def inspect(db: Session, now: datetime | None = None) -> SuggestionListOut:
     ).all()
 
     items: list[SuggestionOut] = []
-    computed = False
+    pending: list[tuple[Consumable, Evaluation]] = []
     for consumable in consumables:
         suggestion = _cached(consumable.id, now_local)
-        if suggestion is None:
-            evaluation = evaluate(
-                current_stock=consumable.current_stock,
-                safety_stock=consumable.safety_stock,
-                q7=window_net(db, consumable.id, q7_start, window_end),
-                prev_q7=window_net(db, consumable.id, prev_start, q7_start),
+        if suggestion is not None:
+            items.append(suggestion)
+            continue
+        evaluation = evaluate(
+            current_stock=consumable.current_stock,
+            safety_stock=consumable.safety_stock,
+            q7=window_net(db, consumable.id, q7_start, window_end),
+            prev_q7=window_net(db, consumable.id, prev_start, q7_start),
+        )
+        if evaluation is None:
+            continue
+        pending.append((consumable, evaluation))
+
+    computed = bool(pending)
+    if pending:
+        contexts = [
+            llm.RationaleContext(
+                name=consumable.name,
+                unit=consumable.unit,
+                evaluation=evaluation,
             )
-            if evaluation is None:
-                continue
-            suggestion = _build_suggestion(consumable, evaluation)
+            for consumable, evaluation in pending
+        ]
+        rationales = _generate_rationales(contexts)
+        for (consumable, evaluation), rationale in zip(pending, rationales, strict=True):
+            suggestion = _build_suggestion(consumable, evaluation, rationale)
             _cache[consumable.id] = (now_local, suggestion)
-            computed = True
-        items.append(suggestion)
+            items.append(suggestion)
 
     if computed or _last_inspection_at is None:
         _last_inspection_at = now_local

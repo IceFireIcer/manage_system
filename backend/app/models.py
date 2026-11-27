@@ -60,7 +60,7 @@ class OperationLog(Base):
     role: Mapped[str | None] = mapped_column(String(16), nullable=True)
     action: Mapped[str] = mapped_column(String(64), nullable=False)
     target_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    target_id: Mapped[str | None] = mapped_column(Integer, nullable=True)
+    target_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     before_value: Mapped[str | None] = mapped_column(Text, nullable=True)
     after_value: Mapped[str | None] = mapped_column(Text, nullable=True)
     remark: Mapped[str | None] = mapped_column(String(255), nullable=True)

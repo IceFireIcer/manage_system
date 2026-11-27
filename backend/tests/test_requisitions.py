@@ -431,6 +431,10 @@ def test_requisition_written_to_logs(admin_client: TestClient, db_session) -> No
     assert "2" in log.after_value
     assert consumable["name"] in log.after_value
 
+    created = db_session.scalars(select(Requisition).order_by(Requisition.id)).first()
+    assert created is not None
+    assert log.target_id == created.id
+
 
 def test_user_options_forbidden_for_student(student_client: TestClient) -> None:
     response = student_client.get(OPTIONS_URL)

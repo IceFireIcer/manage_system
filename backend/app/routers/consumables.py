@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.agent import service
 from app.database import get_db
 from app.deps import CurrentUser, require_role
 from app.models import Consumable, OperationLog, User
@@ -127,6 +128,7 @@ def create_consumable(
     db.flush()
     _log(db, admin, "consumable_create", consumable, None)
     db.commit()
+    service.clear_cache()
     db.refresh(consumable)
     return _serialize(consumable)
 
@@ -155,6 +157,7 @@ def update_consumable(
     consumable.updated_at = datetime.now()
     _log(db, admin, "consumable_update", consumable, before)
     db.commit()
+    service.clear_cache()
     db.refresh(consumable)
     return _serialize(consumable)
 
@@ -176,5 +179,6 @@ def toggle_consumable_status(
     action = "consumable_disable" if payload.status == "disabled" else "consumable_enable"
     _log(db, admin, action, consumable, before)
     db.commit()
+    service.clear_cache()
     db.refresh(consumable)
     return _serialize(consumable)

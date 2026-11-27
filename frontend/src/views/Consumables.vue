@@ -72,7 +72,9 @@ async function fetchList() {
       params: { status: statusFilter.value },
     })
     items.value = data
-  } catch {
+  } catch (error) {
+    const detail = error.response?.data?.detail
+    ElMessage.error(detail ? String(detail) : '耗材列表加载失败，请稍后重试')
   } finally {
     loading.value = false
   }

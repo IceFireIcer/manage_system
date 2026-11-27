@@ -51,6 +51,11 @@ fi
 info "执行数据库迁移（alembic upgrade head）..."
 (cd "$BACKEND" && "$VENV_PY" -m alembic upgrade head)
 
+info "初始化管理员账号（幂等；随机密码仅在首次创建时打印）..."
+if ! (cd "$BACKEND" && "$VENV_PY" scripts/bootstrap_admin.py); then
+  printf '[dev-start] 警告：管理员初始化失败（不影响服务启动），可稍后手动执行 backend/scripts/bootstrap_admin.py\n' >&2
+fi
+
 if [ -f "$PID_FILE" ]; then
   OLD_PID="$(cat "$PID_FILE")"
   if kill -0 "$OLD_PID" 2>/dev/null; then

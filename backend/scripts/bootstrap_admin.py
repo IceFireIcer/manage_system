@@ -34,10 +34,15 @@ def bootstrap_admin() -> int:
 
         account_exists = db.scalar(select(User.id).where(User.account == account).limit(1))
         if account_exists is not None:
-            print(f"[bootstrap] 账号 {account} 已被非管理员用户占用，跳过创建")
+            print(
+                f"[bootstrap] 警告：账号 {account} 已被非管理员用户占用，"
+                "未创建管理员，请人工核对该账号归属后处理"
+            )
             return 0
 
-        password = os.getenv("ADMIN_INIT_PASSWORD") or secrets.token_urlsafe(12)
+        env_password = os.getenv("ADMIN_INIT_PASSWORD")
+        generated = not env_password
+        password = env_password or secrets.token_urlsafe(12)
         db.add(
             User(
                 account=account,
@@ -49,10 +54,16 @@ def bootstrap_admin() -> int:
         )
         db.commit()
 
-    print(
-        f"[bootstrap] 已创建管理员账号: {account}；初始密码: {password}"
-        "（请首次登录后立即修改并妥善保存）"
-    )
+    if generated:
+        print(
+            f"[bootstrap] 已创建管理员账号: {account}；初始密码: {password}"
+            "（请首次登录后立即修改并妥善保存）"
+        )
+    else:
+        print(
+            f"[bootstrap] 已按环境变量创建管理员账号: {account}"
+            "（密码不显示，请使用 ADMIN_INIT_PASSWORD 的值登录）"
+        )
     return 0
 
 
@@ -61,7 +72,7 @@ def main() -> int:
         return bootstrap_admin()
     except Exception as exc:
         print(
-            f"[bootstrap] 警告：管理员初始化失败（{exc}），"
+            f"[bootstrap] 警告：管理员初始化失败（{exc}），不影响服务启动；"
             "请确认数据库已就绪后手动执行本脚本",
             file=sys.stderr,
         )

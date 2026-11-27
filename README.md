@@ -126,7 +126,7 @@ powershell -ExecutionPolicy Bypass -File scripts/dev-start.ps1
 bash scripts/dev-start.sh
 ```
 
-脚本自动完成：创建 `backend/venv` → 安装依赖 → 无 `backend/.env` 时写入 SQLite 兜底配置 → `alembic upgrade head` → 后台启动 uvicorn → 安装前端依赖 → 启动 Vite。按 `Ctrl+C` 同时停止前后端，后端日志在 `.dev-run/backend.log`。
+脚本自动完成：创建 `backend/venv` → 安装依赖 → 无 `backend/.env` 时写入 SQLite 兜底配置 → `alembic upgrade head` → 初始化管理员 → 后台启动 uvicorn → 安装前端依赖 → 启动 Vite。首次启动会在输出中打印 `[bootstrap] 已创建管理员账号: admin；初始密码: <随机密码>`，请记录该密码并在登录后立即修改；后续启动幂等跳过。按 `Ctrl+C` 同时停止前后端，后端日志在 `.dev-run/backend.log`。
 
 - 默认数据库为 `backend/dev.db`（SQLite）；改用本机 MySQL 8.0 时修改 `backend/.env` 的 `DATABASE_URL`
 - 访问 <http://127.0.0.1:5173>

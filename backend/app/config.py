@@ -19,8 +19,7 @@ class Settings(BaseSettings):
 
     jwt_secret_key: str = "change-me-to-a-random-secret"
     jwt_algorithm: str = "HS256"
-    jwt_expire_minutes: int = 120
-    jwt_expire_hours: int = 8
+    jwt_expire_minutes: int = 480
 
     llm_api_key: str = ""
     llm_base_url: str = "https://api.deepseek.com/v1"
