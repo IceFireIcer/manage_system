@@ -48,6 +48,36 @@ npm run dev
 
 启动后访问 <http://localhost:5173> 查看首页。
 
+## 本地零 Docker 一键启动（推荐）
+
+云端故障时的兜底路径，不启动任何容器：
+
+```bash
+# Windows PowerShell
+powershell -ExecutionPolicy Bypass -File scripts/dev-start.ps1
+
+# Windows Git Bash / Linux / macOS
+bash scripts/dev-start.sh
+```
+
+脚本自动完成：创建 `backend/venv` → 安装依赖 → 无 `backend/.env` 时写入 SQLite 兜底配置 → `alembic upgrade head` → 后台启动 uvicorn → 安装前端依赖 → 启动 Vite。按 `Ctrl+C` 会同时停止前后端，后端日志在 `.dev-run/backend.log`。
+
+- 默认数据库为 `backend/dev.db`（SQLite）；改用本机 MySQL 8.0 时修改 `backend/.env` 的 `DATABASE_URL`
+- 访问 <http://127.0.0.1:5173>
+
+## 云端部署（Docker Compose）
+
+单台 Ubuntu 云服务器 + Docker Compose 部署（nginx 托管前端并反代 `/api`、uvicorn 运行后端、MySQL 8.0）：
+
+```bash
+cp .env.example .env    # 填 MYSQL_ROOT_PASSWORD、JWT_SECRET_KEY 等
+docker compose config   # 静态校验
+docker compose up -d --build
+curl -fsS http://127.0.0.1/api/v1/health
+```
+
+后端容器启动时自动执行 `alembic upgrade head`（建表 + 演示数据）。完整步骤（安装 Docker、防火墙、迁移、验证、日志、升级、镜像回滚、备份与排错）见 **[docs/deploy.md](docs/deploy.md)**；CodeArts 流水线三阶段配置见该文档第 13 节（可选）。
+
 ## 测试与 Lint
 
 ```bash
