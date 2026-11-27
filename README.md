@@ -216,7 +216,7 @@ cd frontend && npm run build
 
 ## 系统行为说明
 
-- 认证采用 JWT 写入 httpOnly Cookie（SameSite=Lax），有效期由 `JWT_EXPIRE_MINUTES` 控制（Compose 默认 120 分钟）
+- 认证采用 JWT 写入 httpOnly Cookie（SameSite=Lax），有效期由 `JWT_EXPIRE_MINUTES` 控制（Compose 默认 480 分钟，即 8 小时）
 - 被停用账号登录统一返回 401「账号或密码错误」，不单独提示账号状态；停用仅影响登录，历史流水与操作日志保留可查
 - 配置由 `pydantic-settings` 从环境变量 / `backend/.env` 读取；仓库不包含任何真实密钥
 
