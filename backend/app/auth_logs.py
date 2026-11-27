@@ -6,8 +6,9 @@ from sqlalchemy.orm import Session
 from app import business_time
 from app.config import Settings, get_settings
 from app.models import OperationLog
+from app.operation_log import AUDIT_ACTIONS, SESSION_ACTIONS
 
-AUTH_LOG_ACTIONS = ("login", "logout")
+AUTH_LOG_ACTIONS = SESSION_ACTIONS
 
 
 def trim_auth_logs(db: Session, settings: Settings | None = None) -> int:
@@ -44,3 +45,17 @@ def trim_auth_logs(db: Session, settings: Settings | None = None) -> int:
                 deleted += result.rowcount or 0
 
     return deleted
+
+
+def trim_audit_logs(db: Session, settings: Settings | None = None) -> int:
+    current = settings or get_settings()
+    if current.audit_log_retention_days <= 0:
+        return 0
+    cutoff = business_time.now() - timedelta(days=current.audit_log_retention_days)
+    result = db.execute(
+        delete(OperationLog).where(
+            OperationLog.action.in_(AUDIT_ACTIONS),
+            OperationLog.created_at < cutoff,
+        )
+    )
+    return result.rowcount or 0

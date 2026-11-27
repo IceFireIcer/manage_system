@@ -16,12 +16,31 @@ const TARGET_NAMES = {
   user: '用户',
   consumable: '耗材',
   requisition: '领用流水',
+  requisition_order: '领用单',
   requisition_correction: '纠错申请',
+  operation_log: '操作日志',
 }
+
+const RESULTS = [
+  { value: 'success', label: '成功', tagClass: 'status-tag--success' },
+  { value: 'failure', label: '失败', tagClass: 'status-tag--danger' },
+  { value: 'rejected', label: '已拒绝', tagClass: 'status-tag--danger' },
+]
+
+const RESULT_MAP = Object.fromEntries(RESULTS.map((item) => [item.value, item]))
+
+const TARGET_TYPE_OPTIONS = Object.entries(TARGET_NAMES).map(([value, label]) => ({
+  value,
+  label,
+}))
 
 const ACTIONS = [
   { value: 'login', label: '登录', tagClass: 'status-tag--neutral' },
   { value: 'logout', label: '退出登录', tagClass: 'status-tag--neutral' },
+  { value: 'logout_all', label: '撤销全部会话', tagClass: 'status-tag--danger' },
+  { value: 'password_change', label: '修改密码', tagClass: 'status-tag--neutral' },
+  { value: 'user_password_reset', label: '重置密码', tagClass: 'status-tag--warning' },
+  { value: 'log_export', label: '导出操作日志', tagClass: 'status-tag--warning' },
   { value: 'requisition_create', label: '领用登记', tagClass: 'status-tag--info' },
   { value: 'requisition_reverse', label: '撤销领用', tagClass: 'status-tag--reversal' },
   { value: 'requisition_reentry', label: '关联重登', tagClass: 'status-tag--info' },
@@ -66,7 +85,23 @@ const ACTIONS = [
 
 const ACTION_MAP = Object.fromEntries(ACTIONS.map((item) => [item.value, item]))
 
-const SENSITIVE_ACTIONS = new Set(['login', 'logout'])
+const SENSITIVE_ACTIONS = new Set([
+  'login',
+  'logout',
+  'logout_all',
+  'password_change',
+  'user_password_reset',
+  'log_export',
+  'admin_bootstrap',
+  'admin_bootstrap_rejected',
+  'teacher_provision',
+  'teacher_provision_rejected',
+  'admin_handover',
+  'admin_handover_rejected',
+  'admin_handover_create',
+  'admin_recover',
+  'admin_recover_rejected',
+])
 
 const SUMMARY_FIELDS = {
   name: '名称',
@@ -95,8 +130,24 @@ const staleError = ref(false)
 const userOptions = ref([])
 const optionsError = ref(false)
 
-const draft = reactive({ action: null, operatorId: null, dateRange: null })
-const applied = reactive({ action: null, operatorId: null, dateRange: null })
+const draft = reactive({
+  action: null,
+  operatorId: null,
+  targetType: null,
+  targetId: null,
+  result: null,
+  keyword: '',
+  dateRange: null,
+})
+const applied = reactive({
+  action: null,
+  operatorId: null,
+  targetType: null,
+  targetId: null,
+  result: null,
+  keyword: '',
+  dateRange: null,
+})
 
 const page = reactive({ current: 1, size: 20, total: 0 })
 
@@ -104,17 +155,31 @@ const detail = reactive({ visible: false, log: null })
 
 const audit = reactive({ visible: false, consumableId: null, consumableName: '' })
 
+const exporting = ref(false)
+
 let requestSeq = 0
 let active = true
 
-const hasFilters = computed(
-  () => Boolean(applied.action || applied.operatorId || applied.dateRange),
+const hasFilters = computed(() =>
+  Boolean(
+    applied.action ||
+      applied.operatorId ||
+      applied.targetType ||
+      applied.targetId ||
+      applied.result ||
+      applied.keyword ||
+      applied.dateRange,
+  ),
 )
 
 function buildParams() {
   const params = {}
   if (applied.action) params.action = applied.action
   if (applied.operatorId) params.operator_id = applied.operatorId
+  if (applied.targetType) params.target_type = applied.targetType
+  if (applied.targetId) params.target_id = applied.targetId
+  if (applied.result) params.result = applied.result
+  if (applied.keyword) params.keyword = applied.keyword
   if (Array.isArray(applied.dateRange) && applied.dateRange.length === 2) {
     params.start_date = applied.dateRange[0]
     params.end_date = applied.dateRange[1]
@@ -125,12 +190,20 @@ function buildParams() {
 function applyFilters(source) {
   applied.action = source.action
   applied.operatorId = source.operatorId
+  applied.targetType = source.targetType
+  applied.targetId = source.targetId
+  applied.result = source.result
+  applied.keyword = source.keyword
   applied.dateRange = Array.isArray(source.dateRange) ? [...source.dateRange] : null
 }
 
 function resetFilters(target) {
   target.action = null
   target.operatorId = null
+  target.targetType = null
+  target.targetId = null
+  target.result = null
+  target.keyword = ''
   target.dateRange = null
 }
 
@@ -257,8 +330,10 @@ function nameFromSnapshot(row) {
 function targetLabel(row) {
   const typeName = TARGET_NAMES[row.target_type] ?? row.target_type ?? '—'
   if (!row.target_id) return typeName
-  const name = nameFromSnapshot(row)
-  return name ? `${typeName} #${row.target_id}（${name}）` : `${typeName} #${row.target_id}`
+  const name = row.target_label || nameFromSnapshot(row)
+  if (name) return `${typeName} #${row.target_id}（${name}）`
+  if (row.target_label) return `${typeName}（${row.target_label}）`
+  return `${typeName} #${row.target_id}`
 }
 
 function describeItems(items) {
@@ -360,9 +435,13 @@ function summaryText(row) {
     case 'consumable_disable':
     case 'user_enable':
     case 'user_disable':
-      return `状态 ${STATUS_NAMES[before?.status] ?? '—'} → ${STATUS_NAMES[after?.status] ?? '—'}`
+      return `状态 ${STATUS_NAMES[row.before_status] ?? '—'} → ${STATUS_NAMES[row.after_status] ?? '—'}`
     case 'user_create':
       return after ? `新增账号 ${after.account}（${after.name}）` : row.remark || '—'
+    case 'log_export': {
+      if (!after) return row.remark || '—'
+      return `导出 ${after.exported ?? 0} 条（匹配 ${after.matched ?? 0} 条）`
+    }
     case 'admin_handover':
       return after
         ? `交接 ${after.previous_account} → ${after.new_account}（执行人：${after.actor}）`
@@ -374,6 +453,40 @@ function summaryText(row) {
 
 function userOptionLabel(option) {
   return `${option.name}（${ROLE_NAMES[option.role] ?? option.role}·${option.account}）`
+}
+
+function resultMeta(result) {
+  return RESULT_MAP[result] ?? { label: result || '—', tagClass: 'status-tag--neutral' }
+}
+
+async function handleExport() {
+  if (exporting.value) return
+  exporting.value = true
+  try {
+    const response = await api.get('/logs/export', {
+      params: buildParams(),
+      responseType: 'blob',
+      timeout: 60000,
+    })
+    const disposition = response.headers?.['content-disposition'] || ''
+    const matched = /filename="?([^";]+)"?/.exec(disposition)
+    const filename = matched?.[1] || 'operation_logs.csv'
+    const url = window.URL.createObjectURL(
+      new Blob([response.data], { type: 'text/csv;charset=utf-8' }),
+    )
+    const link = document.createElement('a')
+    link.href = url
+    link.download = filename
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    window.URL.revokeObjectURL(url)
+    ElMessage.success('导出完成')
+  } catch {
+    ElMessage.error('导出失败，请稍后重试')
+  } finally {
+    exporting.value = false
+  }
 }
 
 function openDetail(row) {
@@ -462,6 +575,57 @@ onBeforeUnmount(() => {
           </el-select>
         </el-form-item>
 
+        <el-form-item label="对象类型">
+          <el-select
+            v-model="draft.targetType"
+            clearable
+            filterable
+            placeholder="全部对象类型"
+            class="logs__filter-target"
+          >
+            <el-option
+              v-for="option in TARGET_TYPE_OPTIONS"
+              :key="option.value"
+              :label="option.label"
+              :value="option.value"
+            />
+          </el-select>
+        </el-form-item>
+
+        <el-form-item label="对象编号">
+          <el-input
+            v-model="draft.targetId"
+            clearable
+            placeholder="对象 ID"
+            class="logs__filter-id"
+          />
+        </el-form-item>
+
+        <el-form-item label="结果">
+          <el-select
+            v-model="draft.result"
+            clearable
+            placeholder="全部结果"
+            class="logs__filter-result"
+          >
+            <el-option
+              v-for="option in RESULTS"
+              :key="option.value"
+              :label="option.label"
+              :value="option.value"
+            />
+          </el-select>
+        </el-form-item>
+
+        <el-form-item label="关键词">
+          <el-input
+            v-model="draft.keyword"
+            clearable
+            placeholder="单据号、对象或备注"
+            class="logs__filter-keyword"
+          />
+        </el-form-item>
+
         <el-form-item label="日期范围">
           <el-date-picker
             v-model="draft.dateRange"
@@ -476,6 +640,7 @@ onBeforeUnmount(() => {
         <el-form-item class="logs__filter-actions">
           <el-button type="primary" @click="handleSearch">查询</el-button>
           <el-button @click="handleReset">重置</el-button>
+          <el-button :loading="exporting" @click="handleExport">导出</el-button>
         </el-form-item>
       </el-form>
 
@@ -540,6 +705,13 @@ onBeforeUnmount(() => {
             <template #default="{ row }">
               <span class="status-tag" :class="actionMeta(row.action).tagClass">
                 {{ actionMeta(row.action).label }}
+              </span>
+            </template>
+          </el-table-column>
+          <el-table-column label="结果" width="90" align="center">
+            <template #default="{ row }">
+              <span class="status-tag" :class="resultMeta(row.result).tagClass">
+                {{ resultMeta(row.result).label }}
               </span>
             </template>
           </el-table-column>

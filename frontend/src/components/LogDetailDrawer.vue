@@ -17,12 +17,22 @@ const emit = defineEmits(['update:modelValue', 'view-requisition', 'view-consuma
 
 const ROLE_NAMES = { teacher: '教师', admin: '班委', student: '学生', operator: '校方授权人' }
 const STATUS_NAMES = { enabled: '启用', disabled: '停用' }
+const RESULT_NAMES = { success: '成功', failure: '失败', rejected: '已拒绝' }
 const TARGET_NAMES = {
   user: '用户',
   consumable: '耗材',
   requisition: '领用流水',
+  requisition_order: '领用单',
   requisition_correction: '纠错申请',
+  operation_log: '操作日志',
 }
+
+const STATUS_ACTIONS = new Set([
+  'user_enable',
+  'user_disable',
+  'consumable_enable',
+  'consumable_disable',
+])
 
 const ACTION_NAMES = {
   login: '登录',
@@ -160,8 +170,11 @@ const targetLabel = computed(() => {
   const log = props.log
   if (!log) return '—'
   const typeName = TARGET_NAMES[log.target_type] ?? log.target_type ?? '—'
-  if (!log.target_id) return typeName
+  if (!log.target_id) {
+    return log.target_label ? `${typeName}（${log.target_label}）` : typeName
+  }
   const name =
+    log.target_label ||
     afterSnapshot.value?.name ||
     beforeSnapshot.value?.name ||
     afterSnapshot.value?.account ||
@@ -182,13 +195,33 @@ const rows = computed(() => {
   const before = beforeSnapshot.value
   const after = afterSnapshot.value
   if (!before && !after) {
+    if (STATUS_ACTIONS.has(props.log?.action)) {
+      const beforeStatus = props.log?.before_status
+      const afterStatus = props.log?.after_status
+      if (beforeStatus || afterStatus) {
+        return [
+          {
+            key: 'status',
+            label: '状态',
+            before: STATUS_NAMES[beforeStatus] ?? beforeStatus ?? null,
+            after: STATUS_NAMES[afterStatus] ?? afterStatus ?? null,
+            changed: beforeStatus !== afterStatus,
+          },
+        ]
+      }
+    }
     if (!rawBefore.value && !rawAfter.value) return []
+    const withStatus = STATUS_ACTIONS.has(props.log?.action)
     return [
       {
-        key: 'content',
-        label: '记录内容',
-        before: rawBefore.value || null,
-        after: rawAfter.value || null,
+        key: withStatus ? 'status' : 'content',
+        label: withStatus ? '状态' : '记录内容',
+        before: withStatus
+          ? (STATUS_NAMES[rawBefore.value] ?? rawBefore.value) || null
+          : rawBefore.value || null,
+        after: withStatus
+          ? (STATUS_NAMES[rawAfter.value] ?? rawAfter.value) || null
+          : rawAfter.value || null,
         changed: rawBefore.value !== rawAfter.value,
       },
     ]
@@ -328,6 +361,10 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
         <div class="log-detail__meta-item">
           <span class="log-detail__meta-label">操作类型</span>
           <span class="log-detail__meta-value">{{ ACTION_NAMES[log.action] ?? log.action }}</span>
+        </div>
+        <div class="log-detail__meta-item">
+          <span class="log-detail__meta-label">结果</span>
+          <span class="log-detail__meta-value">{{ RESULT_NAMES[log.result] ?? log.result ?? '—' }}</span>
         </div>
         <div class="log-detail__meta-item">
           <span class="log-detail__meta-label">对象</span>

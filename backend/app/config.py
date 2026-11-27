@@ -53,6 +53,7 @@ class Settings(BaseSettings):
 
     auth_log_retention_days: int = 90
     auth_log_max_rows: int = 20000
+    audit_log_retention_days: int = 0
 
     llm_api_key: str = ""
     llm_base_url: str = "https://api.deepseek.com/v1"

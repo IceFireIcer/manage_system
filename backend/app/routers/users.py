@@ -14,7 +14,8 @@ from sqlalchemy.orm import Session
 from app import roster_import
 from app.database import get_db
 from app.deps import require_role
-from app.models import OperationLog, User
+from app.models import User
+from app.operation_log import record_operation, user_label
 from app.schemas_users import (
     ACCOUNT_MAX_LENGTH,
     NAME_MAX_LENGTH,
@@ -132,16 +133,15 @@ def _log_operation(
     before_value: str | None,
     after_value: str | None,
 ) -> None:
-    db.add(
-        OperationLog(
-            operator_id=operator.id,
-            role=operator.role,
-            action=action,
-            target_type="user",
-            target_id=target.id,
-            before_value=before_value,
-            after_value=after_value,
-        )
+    record_operation(
+        db,
+        action=action,
+        operator=operator,
+        target_type="user",
+        target_id=target.id,
+        target_label=user_label(target),
+        before_value=before_value,
+        after_value=after_value,
     )
 
 

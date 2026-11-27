@@ -9,7 +9,8 @@ from typing import Literal
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models import OperationLog, User
+from app.models import User
+from app.operation_log import record_operation
 from app.security import hash_password
 
 BootstrapState = Literal["ready", "needs_initialization", "needs_recovery"]
@@ -125,17 +126,15 @@ def _write_log(
     after_value: str,
     remark: str,
 ) -> None:
-    db.add(
-        OperationLog(
-            operator_id=None,
-            role=OPERATOR_ROLE,
-            action=action,
-            target_type="user",
-            target_id=target_id,
-            before_value=before_value,
-            after_value=after_value,
-            remark=remark[:255],
-        )
+    record_operation(
+        db,
+        action=action,
+        role=OPERATOR_ROLE,
+        target_type="user",
+        target_id=target_id,
+        before_value=before_value,
+        after_value=after_value,
+        remark=remark[:255],
     )
 
 

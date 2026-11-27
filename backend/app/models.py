@@ -5,12 +5,14 @@ from sqlalchemy import (
     Boolean,
     CheckConstraint,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
     UniqueConstraint,
+    event,
 )
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, object_session
 
 from app.business_time import now as business_now
 from app.database import Base
@@ -508,14 +510,42 @@ class InventoryCountLine(Base):
 
 class OperationLog(Base):
     __tablename__ = "operation_logs"
+    __table_args__ = (
+        Index("ix_operation_logs_target", "target_type", "target_id"),
+        Index("ix_operation_logs_action_created", "action", "created_at"),
+        Index("ix_operation_logs_result", "result"),
+        Index("ix_operation_logs_operator_created", "operator_id", "created_at"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     operator_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    operator_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    operator_account: Mapped[str | None] = mapped_column(String(64), nullable=True)
     role: Mapped[str | None] = mapped_column(String(16), nullable=True)
     action: Mapped[str] = mapped_column(String(64), nullable=False)
+    result: Mapped[str | None] = mapped_column(String(16), nullable=True)
     target_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
     target_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    target_label: Mapped[str | None] = mapped_column(String(160), nullable=True)
     before_value: Mapped[str | None] = mapped_column(Text, nullable=True)
     after_value: Mapped[str | None] = mapped_column(Text, nullable=True)
     remark: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
+
+
+@event.listens_for(OperationLog, "before_insert")
+def _fill_operation_log_snapshot(_mapper, _connection, log: OperationLog) -> None:
+    if log.result is None:
+        log.result = "rejected" if log.action.endswith("_rejected") else "success"
+    if log.operator_name is not None or log.operator_id is None:
+        return
+    session = object_session(log)
+    if session is None:
+        return
+    with session.no_autoflush:
+        operator = session.get(User, log.operator_id)
+    if operator is None:
+        return
+    log.operator_name = operator.name
+    if log.operator_account is None:
+        log.operator_account = operator.account
