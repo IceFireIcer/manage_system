@@ -36,6 +36,17 @@ const CORRECTION_META = {
   rejected: { label: '已驳回', className: 'status-tag--neutral' },
 }
 
+const BACKFILL_META = {
+  normal: '区间内补录',
+  controlled: '超期受控调整',
+  counted: '已盘点，关联调整',
+  opening: '已计入期初',
+}
+
+function backfillModeLabel(mode) {
+  return BACKFILL_META[mode] ?? mode
+}
+
 const userStore = useUserStore()
 const loading = ref(false)
 const error = ref('')
@@ -216,6 +227,10 @@ onBeforeUnmount(() => {
             <dd>{{ formatTime(detail.created_at) }}</dd>
           </div>
           <div class="record-drawer__field">
+            <dt>入账时间</dt>
+            <dd>{{ formatTime(detail.posted_at) }}</dd>
+          </div>
+          <div class="record-drawer__field">
             <dt>领用人</dt>
             <dd>{{ detail.user_name }}</dd>
           </div>
@@ -242,9 +257,32 @@ onBeforeUnmount(() => {
             <dt>单据编号</dt>
             <dd>{{ detail.order_no }}</dd>
           </div>
-          <div v-if="detail.handler_name" class="record-drawer__field">
+          <div v-if="detail.operator_name" class="record-drawer__field">
             <dt>经办人</dt>
+            <dd>{{ detail.operator_name }}</dd>
+          </div>
+          <div v-if="detail.handler_name" class="record-drawer__field">
+            <dt>处理人</dt>
             <dd>{{ detail.handler_name }}</dd>
+          </div>
+          <div v-if="detail.backfill_mode" class="record-drawer__field">
+            <dt>入账口径</dt>
+            <dd>{{ backfillModeLabel(detail.backfill_mode) }}</dd>
+          </div>
+          <div v-if="detail.linked_count_order_no" class="record-drawer__field">
+            <dt>关联盘点单</dt>
+            <dd>{{ detail.linked_count_order_no }}</dd>
+          </div>
+          <div
+            v-else-if="detail.linked_event_id && detail.backfill_mode === 'opening'"
+            class="record-drawer__field"
+          >
+            <dt>关联期初事件</dt>
+            <dd>#{{ detail.linked_event_id }}</dd>
+          </div>
+          <div v-if="detail.backfill_reason" class="record-drawer__field record-drawer__field--full">
+            <dt>补录原因</dt>
+            <dd>{{ detail.backfill_reason }}</dd>
           </div>
           <div v-if="detail.reversal_reason" class="record-drawer__field record-drawer__field--full">
             <dt>红冲原因</dt>

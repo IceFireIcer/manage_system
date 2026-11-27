@@ -57,10 +57,11 @@ const form = reactive({
   userId: null,
   timeMode: 'now',
   backfillAt: '',
+  backfillReason: '',
   remark: '',
 })
 
-const metaErrors = reactive({ user: '', time: '' })
+const metaErrors = reactive({ user: '', time: '', reason: '' })
 const rowErrors = reactive({})
 
 let rowSeq = 0
@@ -77,6 +78,7 @@ const rows = ref([createRow()])
 
 const userSelectRef = ref(null)
 const timePickerRef = ref(null)
+const reasonInputRef = ref(null)
 const addButtonRef = ref(null)
 
 
@@ -221,6 +223,7 @@ function handleUserChange() {
 
 function handleTimeModeChange() {
   metaErrors.time = ''
+  metaErrors.reason = ''
   clearUncertain()
   if (form.timeMode === 'backfill') {
     if (!form.backfillAt) form.backfillAt = businessNowInput()
@@ -235,25 +238,33 @@ function validateBackfillTime() {
   }
   if (form.backfillAt > businessNowInput()) return '领用时间不能晚于当前时间'
   if (form.backfillAt < `${businessDate(-MAX_BACKFILL_DAYS)}T00:00:00`) {
-    return `领用时间不能早于 ${MAX_BACKFILL_DAYS} 天前`
+    return `领用时间不能早于 ${MAX_BACKFILL_DAYS} 天前，超出普通补录区间；请由教师或班委通过受控调整登记`
   }
   return ''
 }
 
 function validateMeta() {
   metaErrors.user = ''
+  metaErrors.reason = ''
   if (isStudent.value) {
     if (!userStore.user?.id) metaErrors.user = '当前账号信息不可用，请重新登录'
   } else if (!form.userId) {
     metaErrors.user = '请选择领用人'
   }
   metaErrors.time = form.timeMode === 'backfill' ? validateBackfillTime() : ''
+  if (form.timeMode === 'backfill' && !form.backfillReason.trim()) {
+    metaErrors.reason = '请填写补录原因'
+  }
   if (metaErrors.user) {
     focusUser()
     return false
   }
   if (metaErrors.time) {
     focusTime()
+    return false
+  }
+  if (metaErrors.reason) {
+    reasonInputRef.value?.focus?.()
     return false
   }
   return true
@@ -294,6 +305,7 @@ function hasDraft() {
   return (
     rows.value.some((row) => row.consumableId !== null) ||
     form.remark.trim() !== '' ||
+    form.backfillReason.trim() !== '' ||
     form.timeMode === 'backfill' ||
     form.userId !== (userStore.user?.id ?? null)
   )
@@ -304,9 +316,11 @@ function resetFormState() {
   clearRowErrors()
   metaErrors.user = ''
   metaErrors.time = ''
+  metaErrors.reason = ''
   form.userId = userStore.user?.id ?? null
   form.timeMode = 'now'
   form.backfillAt = ''
+  form.backfillReason = ''
   form.remark = ''
   prefillMessage.value = ''
   submitError.value = ''
@@ -346,6 +360,7 @@ function saveDraft() {
       userId: form.userId,
       timeMode: form.timeMode,
       backfillAt: form.backfillAt,
+      backfillReason: form.backfillReason,
       remark: form.remark,
       rows: rows.value.map((row) => ({
         consumableId: row.consumableId,
@@ -401,6 +416,7 @@ function restoreDraft() {
       : ownerId
   form.timeMode = draft.timeMode === 'backfill' ? 'backfill' : 'now'
   form.backfillAt = typeof draft.backfillAt === 'string' ? draft.backfillAt : ''
+  form.backfillReason = typeof draft.backfillReason === 'string' ? draft.backfillReason : ''
   form.remark = typeof draft.remark === 'string' ? draft.remark : ''
   draftNotice.value = '已恢复上次未提交的领用草稿，提交前请重新核对库存与领用人。'
 }
@@ -590,6 +606,7 @@ function applyPendingDraft(pending) {
   if (payload.created_at) {
     form.timeMode = 'backfill'
     form.backfillAt = payload.created_at
+    form.backfillReason = payload.backfill_reason ?? ''
   }
 }
 
@@ -766,7 +783,10 @@ async function handleSubmit() {
       request_id: requestId,
     }
     if (!isStudent.value) payload.user_id = form.userId
-    if (form.timeMode === 'backfill') payload.created_at = form.backfillAt
+    if (form.timeMode === 'backfill') {
+      payload.created_at = form.backfillAt
+      payload.backfill_reason = form.backfillReason.trim()
+    }
     savePending(requestId, payload)
 
     const { data } = await api.post('/requisitions', payload)
@@ -882,6 +902,7 @@ watch(
     userId: form.userId,
     timeMode: form.timeMode,
     backfillAt: form.backfillAt,
+    backfillReason: form.backfillReason,
     remark: form.remark,
   }),
   scheduleDraftSave,
@@ -934,6 +955,9 @@ onBeforeUnmount(() => {
             领用人 {{ result.receipt.owner_name }} · 经办人 {{ result.receipt.operator_name }}
             （{{ ROLE_NAMES[result.receipt.operator_role] ?? result.receipt.operator_role }}）
           </p>
+          <p v-if="result.receipt?.backfill_reason" class="requisition__receipt-desc">
+            补录原因：{{ result.receipt.backfill_reason }}
+          </p>
         </div>
         <span class="status-tag status-tag--success">
           {{ STATUS_NAMES[requestStatus?.status] ?? '提交成功' }}
@@ -943,7 +967,7 @@ onBeforeUnmount(() => {
       <ul class="requisition__receipt-list">
         <li
           v-for="line in result.receipt?.lines ?? []"
-          :key="line.event_id"
+          :key="line.requisition_id"
           class="requisition__receipt-row"
         >
           <span class="requisition__receipt-name">
@@ -957,7 +981,15 @@ onBeforeUnmount(() => {
             {{ line.unit ? ` ${line.unit}` : '' }}
           </span>
           <span class="requisition__receipt-event">
-            流水 #{{ line.event_id }}（记录 #{{ line.requisition_id }}）
+            <template v-if="line.event_id">
+              流水 #{{ line.event_id }}（记录 #{{ line.requisition_id }}）
+            </template>
+            <template v-else-if="line.linked_count_order_no">
+              已盘点不重复扣减 · 盘点单 {{ line.linked_count_order_no }}（记录 #{{ line.requisition_id }}）
+            </template>
+            <template v-else>
+              已计入期初不重复扣减（记录 #{{ line.requisition_id }}）
+            </template>
           </span>
         </li>
       </ul>
@@ -1154,8 +1186,27 @@ onBeforeUnmount(() => {
                 />
               </div>
               <p class="requisition__hint">
-                {{ form.timeMode === 'now' ? '提交时使用服务端当前时间' : `可选最近 ${MAX_BACKFILL_DAYS} 天内，精确到分钟` }}
+                {{ form.timeMode === 'now' ? '提交时使用服务端当前时间' : `可选最近 ${MAX_BACKFILL_DAYS} 天内；超期由教师或班委走受控调整` }}
               </p>
+            </el-form-item>
+
+            <el-form-item
+              v-if="form.timeMode === 'backfill'"
+              label="补录原因"
+              class="requisition__meta-item"
+              :error="metaErrors.reason"
+            >
+              <el-input
+                ref="reasonInputRef"
+                v-model="form.backfillReason"
+                type="textarea"
+                :rows="2"
+                maxlength="500"
+                show-word-limit
+                :disabled="submitting"
+                placeholder="说明漏登原因，便于追溯"
+                class="requisition__backfill-reason"
+              />
             </el-form-item>
           </div>
 

@@ -16,9 +16,10 @@ class RequisitionCreate(BaseModel):
     user_id: int | None = Field(default=None, gt=0)
     created_at: datetime | None = None
     remark: str | None = Field(default=None, max_length=255)
+    backfill_reason: str | None = Field(default=None, max_length=500)
     request_id: str | None = Field(default=None, max_length=64)
 
-    @field_validator("remark", mode="after")
+    @field_validator("remark", "backfill_reason", mode="after")
     @classmethod
     def normalize_remark(cls, value: str | None) -> str | None:
         if value is None:
@@ -47,7 +48,7 @@ class RequisitionItemOut(BaseModel):
 
 class RequisitionReceiptLineOut(BaseModel):
     line_no: int
-    event_id: int
+    event_id: int | None = None
     requisition_id: int
     consumable_id: int
     consumable_name: str
@@ -57,6 +58,8 @@ class RequisitionReceiptLineOut(BaseModel):
     stock_after: int
     business_at: datetime
     posted_at: datetime
+    backfill_mode: str | None = None
+    linked_count_order_no: str | None = None
 
 
 class RequisitionReceiptOut(BaseModel):
@@ -71,6 +74,7 @@ class RequisitionReceiptOut(BaseModel):
     business_at: datetime
     posted_at: datetime | None
     remark: str | None
+    backfill_reason: str | None = None
     lines: list[RequisitionReceiptLineOut]
 
 
@@ -99,6 +103,43 @@ class RequisitionCreateOut(BaseModel):
     business_at: datetime | None = None
     posted_at: datetime | None = None
     receipt: RequisitionReceiptOut | None = None
+
+
+class ControlledBackfillCreate(BaseModel):
+    items: list[RequisitionItemIn] = Field(min_length=1, max_length=MAX_ITEMS)
+    user_id: int | None = Field(default=None, gt=0)
+    business_at: datetime
+    reason: str = Field(min_length=1, max_length=500)
+    remark: str | None = Field(default=None, max_length=255)
+    request_id: str | None = Field(default=None, max_length=64)
+
+    @field_validator("reason", mode="after")
+    @classmethod
+    def normalize_reason(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("受控调整原因不能为空")
+        return stripped
+
+    @field_validator("remark", mode="after")
+    @classmethod
+    def normalize_remark(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        stripped = value.strip()
+        return stripped or None
+
+    @field_validator("request_id", mode="after")
+    @classmethod
+    def normalize_request_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        stripped = value.strip()
+        if not stripped:
+            return None
+        if any(ch not in "-_.:" and not ch.isalnum() for ch in stripped):
+            raise ValueError("请求标识仅支持字母、数字与 - _ . : 字符")
+        return stripped
 
 
 class ReentryIn(BaseModel):
@@ -324,10 +365,19 @@ class RequisitionRecordOut(BaseModel):
     reversal_of: int | None
     reversal_reason: str | None
     created_at: datetime
+    posted_at: datetime | None = None
     remark: str | None
     order_no: str | None = None
     handler_name: str | None = None
     reentry_of: int | None = None
+    backfill_reason: str | None = None
+    backfill_mode: str | None = None
+    linked_event_id: int | None = None
+    linked_count_id: int | None = None
+    linked_count_order_no: str | None = None
+    operator_id: int | None = None
+    operator_name: str | None = None
+    operator_role: str | None = None
     correction: CorrectionOut | None = None
 
 
@@ -345,6 +395,7 @@ class RequisitionRelatedOut(BaseModel):
 class RequisitionListItemOut(BaseModel):
     id: int
     created_at: datetime
+    posted_at: datetime | None = None
     consumable_name: str
     consumable_spec: str
     unit: str = ""
@@ -361,6 +412,14 @@ class RequisitionListItemOut(BaseModel):
     order_no: str | None = None
     reentry_of: int | None = None
     correction_status: str | None = None
+    backfill_reason: str | None = None
+    backfill_mode: str | None = None
+    linked_event_id: int | None = None
+    linked_count_id: int | None = None
+    linked_count_order_no: str | None = None
+    operator_id: int | None = None
+    operator_name: str | None = None
+    operator_role: str | None = None
 
 
 

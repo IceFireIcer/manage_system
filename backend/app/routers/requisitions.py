@@ -2,6 +2,7 @@ import csv
 import io
 import json
 import uuid
+from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Annotated
 
@@ -17,6 +18,9 @@ from app.database import get_db
 from app.deps import CurrentUser, require_role
 from app.models import (
     Consumable,
+    InventoryCount,
+    InventoryCountLine,
+    InventoryEvent,
     OperationLog,
     Requisition,
     RequisitionCorrection,
@@ -28,6 +32,7 @@ from app.models import (
 from app.schemas_consumables import STATUS_ENABLED
 from app.schemas_requisitions import (
     MAX_BACKFILL_DAYS,
+    ControlledBackfillCreate,
     CorrectionCreate,
     CorrectionHandle,
     CorrectionOut,
@@ -135,6 +140,7 @@ def _receipt_from_order(order: RequisitionOrder) -> RequisitionReceiptOut | None
         business_at=order.business_at,
         posted_at=order.posted_at,
         remark=order.remark,
+        backfill_reason=order.backfill_reason,
         lines=[RequisitionReceiptLineOut(**row) for row in rows],
     )
 
@@ -207,6 +213,7 @@ def _resolve_repeat(
         order.owner_id != owner.id
         or order.items_signature != signature
         or order.remark != payload.remark
+        or (order.backfill_reason or None) != (payload.backfill_reason or None)
         or not time_matches
     ):
         raise HTTPException(
@@ -312,15 +319,22 @@ def _returnable_quantity(requisition: Requisition, returned: int, scrapped: int)
 
 
 def _serialize_row(
+    db: Session,
     requisition: Requisition,
     consumable: Consumable,
     user: User,
     related: RequisitionRelatedOut | None = None,
     correction: RequisitionCorrection | None = None,
 ) -> RequisitionListItemOut:
+    linked_count = (
+        db.get(InventoryCount, requisition.linked_count_id)
+        if requisition.linked_count_id is not None
+        else None
+    )
     return RequisitionListItemOut(
         id=requisition.id,
         created_at=requisition.created_at,
+        posted_at=requisition.posted_at,
         consumable_name=requisition.name_snapshot or consumable.name,
         consumable_spec=requisition.spec_snapshot or consumable.spec,
         unit=requisition.unit_snapshot,
@@ -337,6 +351,14 @@ def _serialize_row(
         order_no=requisition.order_no,
         reentry_of=requisition.reentry_of,
         correction_status=correction.status if correction is not None else None,
+        backfill_reason=requisition.backfill_reason,
+        backfill_mode=requisition.backfill_mode,
+        linked_event_id=requisition.linked_event_id,
+        linked_count_id=requisition.linked_count_id,
+        linked_count_order_no=linked_count.order_no if linked_count else None,
+        operator_id=requisition.operator_id,
+        operator_name=requisition.operator_name,
+        operator_role=requisition.operator_role,
     )
 
 
@@ -500,6 +522,7 @@ def list_requisitions(
     corrections = _latest_corrections(db, [record.id for record in records])
     items = [
         _serialize_row(
+            db,
             record,
             consumable,
             user,
@@ -622,26 +645,78 @@ def get_order_receipt(
     return receipt
 
 
-def _validate_created_at(value: datetime) -> datetime:
+@dataclass(frozen=True)
+class _BackfillLink:
+    mode: str
+    event_id: int | None
+    count_id: int | None
+    count_order_no: str | None
+
+
+def _find_backfill_link(
+    db: Session, consumable: Consumable, business_at: datetime
+) -> _BackfillLink | None:
+    counted = db.execute(
+        select(InventoryCount, InventoryCountLine)
+        .join(InventoryCountLine, InventoryCountLine.count_id == InventoryCount.id)
+        .where(
+            InventoryCount.class_id == consumable.class_id,
+            InventoryCount.status == "posted",
+            InventoryCount.count_at >= business_at,
+            InventoryCountLine.consumable_id == consumable.id,
+        )
+        .order_by(InventoryCount.count_at.desc(), InventoryCount.id.desc())
+    ).first()
+    if counted is not None:
+        count, line = counted
+        return _BackfillLink("counted", line.event_id, count.id, count.order_no)
+
+    opening = db.scalars(
+        select(InventoryEvent)
+        .where(
+            InventoryEvent.consumable_id == consumable.id,
+            InventoryEvent.event_type == inventory_ledger.EVENT_OPENING,
+            InventoryEvent.source_type == inventory_ledger.SOURCE_LEDGER_IMPORT,
+        )
+        .order_by(InventoryEvent.exec_seq, InventoryEvent.id)
+    ).first()
+    if opening is not None and business_at < opening.business_at:
+        return _BackfillLink("opening", opening.id, None, None)
+    return None
+
+
+def _validate_created_at(
+    value: datetime, max_backfill_days: int | None
+) -> datetime:
     normalized = business_time.normalize(value)
     if normalized > business_time.now():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="领用时间不能晚于当前时间",
         )
-    if normalized < business_time.backfill_earliest(MAX_BACKFILL_DAYS):
+    if (
+        max_backfill_days is not None
+        and normalized < business_time.backfill_earliest(max_backfill_days)
+    ):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"领用时间不能早于 {MAX_BACKFILL_DAYS} 天前，不支持补录更早的记录",
+            detail=(
+                f"领用时间不能早于 {max_backfill_days} 天前，超出普通补录区间；"
+                "请由教师或班委通过受控调整登记"
+                "（POST /api/v1/requisitions/backfills/controlled）"
+            ),
+            headers={"X-Error-Code": "backfill_out_of_range"},
         )
     return normalized.replace(microsecond=0)
 
 
-@router.post("", status_code=status.HTTP_201_CREATED)
-def create_requisition(
+def _create_requisition_impl(
+    db: Session,
     payload: RequisitionCreate,
-    db: Annotated[Session, Depends(get_db)],
-    current_user: CurrentUser,
+    current_user: User,
+    *,
+    max_backfill_days: int | None,
+    controlled: bool,
 ) -> RequisitionCreateOut:
     request_id = payload.request_id or uuid.uuid4().hex
     owner = _resolve_owner(db, payload, current_user)
@@ -652,12 +727,18 @@ def create_requisition(
     if existing is not None:
         return _resolve_repeat(existing, payload, owner)
 
+    is_backfill = payload.created_at is not None
     submitted_at = business_time.now().replace(microsecond=0)
     business_at = (
-        _validate_created_at(payload.created_at)
-        if payload.created_at is not None
+        _validate_created_at(payload.created_at, max_backfill_days)
+        if is_backfill
         else submitted_at
     )
+    backfill_reason: str | None = None
+    if is_backfill:
+        backfill_reason = payload.backfill_reason or (
+            "受控调整" if controlled else "补录登记"
+        )
 
     order = RequisitionOrder(
         order_no=inventory_ledger.order_no_for(request_id, business_at),
@@ -671,6 +752,7 @@ def create_requisition(
         class_id=owner.class_id,
         business_at=business_at,
         remark=payload.remark,
+        backfill_reason=backfill_reason,
         items_signature=json.dumps(_submit_signature(payload.items)),
     )
     db.add(order)
@@ -708,33 +790,50 @@ def create_requisition(
                     reason=f"耗材「{consumable.name}」已停用，不可领用",
                 )
 
-            stock_before = consumable.current_stock
-            matched = db.execute(
-                update(Consumable)
-                .where(
-                    Consumable.id == item.consumable_id,
-                    Consumable.current_stock >= item.quantity,
-                    Consumable.status == STATUS_ENABLED,
-                )
-                .values(current_stock=Consumable.current_stock - item.quantity)
+            line_posted_at = business_time.now().replace(microsecond=0)
+            link = (
+                _find_backfill_link(db, consumable, business_at)
+                if is_backfill
+                else None
             )
-            if matched.rowcount == 0:
+            line_mode: str | None = None
+            linked_count_order_no: str | None = None
+            event: InventoryEvent | None = None
+
+            if link is None:
+                stock_before = consumable.current_stock
+                matched = db.execute(
+                    update(Consumable)
+                    .where(
+                        Consumable.id == item.consumable_id,
+                        Consumable.current_stock >= item.quantity,
+                        Consumable.status == STATUS_ENABLED,
+                    )
+                    .values(current_stock=Consumable.current_stock - item.quantity)
+                )
+                if matched.rowcount == 0:
+                    db.flush()
+                    db.refresh(consumable)
+                    raise RowError(
+                        line_no=row_number,
+                        field=f"{field_path}.quantity",
+                        code="insufficient_stock",
+                        reason=(
+                            f"{consumable.name}库存不足，仅剩 {consumable.current_stock}"
+                            f"{consumable.unit or '件'}"
+                        ),
+                    )
+
                 db.flush()
                 db.refresh(consumable)
-                raise RowError(
-                    line_no=row_number,
-                    field=f"{field_path}.quantity",
-                    code="insufficient_stock",
-                    reason=(
-                        f"{consumable.name}库存不足，仅剩 {consumable.current_stock}"
-                        f"{consumable.unit or '件'}"
-                    ),
-                )
-
-            db.flush()
-            db.refresh(consumable)
-            stock_after = consumable.current_stock
-            line_posted_at = business_time.now().replace(microsecond=0)
+                stock_after = consumable.current_stock
+                if is_backfill:
+                    line_mode = "controlled" if controlled else "normal"
+            else:
+                stock_before = consumable.current_stock
+                stock_after = stock_before
+                line_mode = link.mode
+                linked_count_order_no = link.count_order_no
 
             requisition = Requisition(
                 consumable_id=item.consumable_id,
@@ -748,27 +847,36 @@ def create_requisition(
                 status="active",
                 class_id=consumable.class_id,
                 created_at=business_at,
+                posted_at=line_posted_at,
                 remark=payload.remark,
+                backfill_reason=backfill_reason,
+                backfill_mode=line_mode,
+                linked_event_id=link.event_id if link is not None else None,
+                linked_count_id=link.count_id if link is not None else None,
+                operator_id=current_user.id,
+                operator_name=current_user.name,
+                operator_role=current_user.role,
             )
             db.add(requisition)
             db.flush()
 
-            event = inventory_ledger.append_event(
-                db,
-                consumable=consumable,
-                event_type=inventory_ledger.EVENT_REQUISITION,
-                delta=-item.quantity,
-                stock_before=stock_before,
-                stock_after=stock_after,
-                business_at=business_at,
-                posted_at=line_posted_at,
-                source_type=inventory_ledger.SOURCE_REQUISITION_ORDER,
-                source_id=order_id,
-                requisition_id=requisition.id,
-                line_no=row_number,
-                operator=current_user,
-                unit_snapshot=consumable.unit,
-            )
+            if link is None:
+                event = inventory_ledger.append_event(
+                    db,
+                    consumable=consumable,
+                    event_type=inventory_ledger.EVENT_REQUISITION,
+                    delta=-item.quantity,
+                    stock_before=stock_before,
+                    stock_after=stock_after,
+                    business_at=business_at,
+                    posted_at=line_posted_at,
+                    source_type=inventory_ledger.SOURCE_REQUISITION_ORDER,
+                    source_id=order_id,
+                    requisition_id=requisition.id,
+                    line_no=row_number,
+                    operator=current_user,
+                    unit_snapshot=consumable.unit,
+                )
             results.append(
                 RequisitionItemOut(
                     consumable_name=consumable.name,
@@ -779,7 +887,7 @@ def create_requisition(
             receipt_lines.append(
                 RequisitionReceiptLineOut(
                     line_no=row_number,
-                    event_id=event.id,
+                    event_id=event.id if event is not None else None,
                     requisition_id=requisition.id,
                     consumable_id=consumable.id,
                     consumable_name=consumable.name,
@@ -789,6 +897,8 @@ def create_requisition(
                     stock_after=stock_after,
                     business_at=business_at,
                     posted_at=line_posted_at,
+                    backfill_mode=line_mode,
+                    linked_count_order_no=linked_count_order_no,
                 )
             )
             created.append(requisition)
@@ -819,6 +929,16 @@ def create_requisition(
                         "total_quantity": total_quantity,
                         "business_at": business_at.isoformat(),
                         "posted_at": posted_at.isoformat(),
+                        "backfill_reason": backfill_reason,
+                        "controlled": controlled,
+                        "backfill_modes": [
+                            line.backfill_mode for line in receipt_lines
+                        ],
+                        "linked_count_order_nos": [
+                            line.linked_count_order_no
+                            for line in receipt_lines
+                            if line.linked_count_order_no
+                        ],
                         "event_ids": [line.event_id for line in receipt_lines],
                         "items": [item.model_dump() for item in results],
                     },
@@ -855,12 +975,81 @@ def create_requisition(
     return _create_out_from_order(order)
 
 
+@router.post("", status_code=status.HTTP_201_CREATED)
+def create_requisition(
+    payload: RequisitionCreate,
+    db: Annotated[Session, Depends(get_db)],
+    current_user: CurrentUser,
+) -> RequisitionCreateOut:
+    return _create_requisition_impl(
+        db,
+        payload,
+        current_user,
+        max_backfill_days=MAX_BACKFILL_DAYS,
+        controlled=False,
+    )
+
+
+@router.post("/backfills/controlled", status_code=status.HTTP_201_CREATED)
+def create_controlled_backfill(
+    payload: ControlledBackfillCreate,
+    db: Annotated[Session, Depends(get_db)],
+    manager: ManagerUser,
+) -> RequisitionCreateOut:
+    create_payload = RequisitionCreate(
+        items=payload.items,
+        user_id=payload.user_id,
+        created_at=payload.business_at,
+        remark=payload.remark,
+        backfill_reason=payload.reason,
+        request_id=payload.request_id,
+    )
+    result = _create_requisition_impl(
+        db,
+        create_payload,
+        manager,
+        max_backfill_days=None,
+        controlled=True,
+    )
+    if isinstance(result, JSONResponse):
+        return result
+    db.add(
+        OperationLog(
+            operator_id=manager.id,
+            role=manager.role,
+            action="requisition_backfill_controlled",
+            target_type="requisition_order",
+            target_id=None,
+            before_value=None,
+            after_value=json.dumps(
+                {
+                    "reason": payload.reason,
+                    "order_no": result.order_no,
+                    "business_at": business_time.normalize(
+                        payload.business_at
+                    ).replace(microsecond=0).isoformat(),
+                },
+                ensure_ascii=False,
+            ),
+        )
+    )
+    db.commit()
+    service.clear_cache()
+    return result
+
+
 def _record_out(
+    db: Session,
     record: Requisition,
     consumable: Consumable | None,
     user: User | None,
     correction: CorrectionOut | None = None,
 ) -> RequisitionRecordOut:
+    linked_count = (
+        db.get(InventoryCount, record.linked_count_id)
+        if record.linked_count_id is not None
+        else None
+    )
     return RequisitionRecordOut(
         id=record.id,
         consumable_id=record.consumable_id,
@@ -878,10 +1067,19 @@ def _record_out(
         reversal_of=record.reversal_of,
         reversal_reason=record.reversal_reason,
         created_at=record.created_at,
+        posted_at=record.posted_at,
         remark=record.remark,
         order_no=record.order_no,
         handler_name=record.handler_name,
         reentry_of=record.reentry_of,
+        backfill_reason=record.backfill_reason,
+        backfill_mode=record.backfill_mode,
+        linked_event_id=record.linked_event_id,
+        linked_count_id=record.linked_count_id,
+        linked_count_order_no=linked_count.order_no if linked_count else None,
+        operator_id=record.operator_id,
+        operator_name=record.operator_name,
+        operator_role=record.operator_role,
         correction=correction,
     )
 
@@ -974,6 +1172,7 @@ def _detail_out(db: Session, requisition: Requisition) -> RequisitionDetailOut:
     correction = _latest_correction_for(db, correction_target_id)
     detail = RequisitionDetailOut(
         **_record_out(
+            db,
             requisition,
             db.get(Consumable, requisition.consumable_id),
             db.get(User, requisition.user_id),
