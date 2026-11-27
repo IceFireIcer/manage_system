@@ -29,6 +29,8 @@
 
 ## 快速开始（服务器部署）
 
+服务器部署**只拉取镜像，不本地构建**。构建由 GitHub Actions 在仓库端完成并推送 GHCR，服务器只做 `pull` 与 `up`。
+
 ```bash
 # 1. 安装 Docker（Ubuntu，已安装可跳过）
 curl -fsSL https://get.docker.com | sh -s -- --mirror Aliyun
@@ -43,7 +45,7 @@ cp .env.example .env
 chmod 600 .env
 # 编辑 .env：MYSQL_ROOT_PASSWORD、JWT_SECRET_KEY 必须替换为随机值
 
-# 4. 拉取 GHCR 镜像并启动（镜像由 GitHub Actions 构建；私有包需先 docker login ghcr.io）
+# 4. 拉取 GHCR 镜像并启动（私有包需先 docker login ghcr.io）
 docker compose pull
 docker compose up -d
 docker compose ps
@@ -54,9 +56,10 @@ docker compose logs backend | grep bootstrap
 
 浏览器访问 `http://<服务器IP>:4900/`（或 `http://<服务器IP>:<WEB_PORT>/`），使用上一步打印的管理员账号登录。
 
-- 首次部署也可源码构建：`docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build`（不依赖 GHCR，构建约 3-8 分钟）
+- **本地开发调试可构建，服务器部署不要构建**：`docker-compose.build.yml` 仅用于本地开发与调试；服务器正式部署一律 `pull`
+- 仓库地址必须是 `https://github.com/IceFireIcer/manage_system.git`；镜像名必须是 `ghcr.io/icefireicer/labstock-api` / `ghcr.io/icefireicer/labstock-web`。若误用 `IceFirerer` 或其他仓库名，会出现 clone 404 或镜像名不匹配、pull 失败
 - GHCR 包默认私有：可在 GitHub Packages 将 `labstock-api` / `labstock-web` 设为 public；或服务器用带 `read:packages` 权限的 PAT 执行 `docker login ghcr.io -u <GitHub 用户名>` 后拉取
-- 镜像名：`ghcr.io/icefireicer/labstock-api`、`ghcr.io/icefireicer/labstock-web`，版本由 `IMAGE_TAG` 指定（默认 `latest`）
+- 镜像版本由 `IMAGE_TAG` 指定（默认 `latest`）
 - 拉取慢或 `docker: unknown command: docker compose`：见 [docs/deploy.md](docs/deploy.md) 第 3.1 节「国内网络优化」与第 12 节「常见问题排查」
 
 - 健康检查：`curl -fsS http://127.0.0.1:4900/api/v1/health` 应返回 `{"status":"ok"}`
@@ -188,7 +191,7 @@ manage_system/
 ├─ scripts/                # 本地零 Docker 启动脚本、CI 三阶段脚本
 ├─ .github/workflows/      # GitHub Actions：ci.yml、docker-publish.yml
 ├─ docker-compose.yml
-├─ docker-compose.build.yml
+├─ docker-compose.build.yml   # 仅本地开发构建用，服务器部署不使用
 ├─ .env.example
 └─ README.md
 ```
@@ -222,7 +225,7 @@ cd frontend && npm run build
 - **管理员密码**：首次启动后立即修改随机初始密码；丢弃该密码后按上文容器内脚本重置
 - **网络**：仅暴露 `WEB_PORT`（默认 4900），不对外开放 3306 / 8000；HTTPS 建议在前置 nginx/Caddy 或云负载均衡终止
 - **备份**：定期 `mysqldump` 或对数据卷做快照，升级前必须先备份
-- **升级/回滚**：升级用 `docker compose pull && docker compose up -d`；回滚切换历史 `IMAGE_TAG`（`sha-<short>` 或版本标签）后 `docker compose pull` 再启动；本地自行构建改用 `docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build`。数据库迁移通常单向，回滚前确认表结构兼容
+- **升级/回滚**：升级用 `docker compose pull && docker compose up -d`；回滚切换历史 `IMAGE_TAG`（`sha-<short>` 或版本标签）后 `docker compose pull` 再启动；本地开发调试如需构建可用 `docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build`（**仅本地开发，服务器部署不要构建**）。数据库迁移通常单向，回滚前确认表结构兼容
 - **日志**：`docker compose logs -f backend` 查看运行与 `[bootstrap]` 记录；定期巡检并清理旧镜像
 
 ## 系统行为说明

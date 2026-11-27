@@ -67,7 +67,7 @@ ruff check .
 | 全量自动测试与 Lint | `cd backend && pytest`、`cd backend && ruff check .` | 240 passed；ruff 通过 | 通过 |
 | 前端生产构建 | `cd frontend && npm run build` | 构建成功 | 通过 |
 | 本地零 Docker 启动 | — | `scripts/dev-start.ps1` / `dev-start.sh`；见 README | 通过 |
-| Compose 拉取/构建双路径 | `docker compose config --quiet`；`docker compose -f docker-compose.yml -f docker-compose.build.yml config --quiet` | 主文件无 `build` 段；合并后 backend/web 含 `build` 且保留 `image`；命令见 [deploy.md](deploy.md) 第 0 节 | 通过 |
+| Compose 主路径为拉取镜像 | `docker compose config --quiet` | 主文件无 `build` 段；服务器部署仅 `pull` + `up -d`。可选本地开发构建 `docker compose -f docker-compose.yml -f docker-compose.build.yml config --quiet`（合并后 backend/web 含 `build` 且保留 `image`），**仅本地开发，不用于服务器**；命令见 [deploy.md](deploy.md) 第 0 节 | 通过 |
 | 云端部署与 GitHub Actions + GHCR 镜像 | `docs/deploy.md` 第 13 节 | 由用户在自有服务器执行 | 待用户执行 |
 
 ## 6. 遗留事项（不属于代码验收）

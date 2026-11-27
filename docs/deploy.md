@@ -5,28 +5,35 @@
 - 本地零 Docker 开发：见 [README](../README.md#本地开发) 与 `scripts/dev-start.sh`、`scripts/dev-start.ps1`
 - GitHub Actions 与 GHCR 镜像发布：见本文 [第 13 节](#13-github-actions-与-ghcr-镜像发布)
 
-## 0. 快速部署（推荐）
+## 0. 快速部署（唯一主路径：拉取镜像）
 
-Compose 内置 `mysql:8.0`、nginx 与 uvicorn，服务器只需安装 Docker；应用镜像由 GitHub Actions 构建并发布到 GHCR，服务器直接拉取；首次启动自动建表并创建管理员账号。
+Compose 内置 `mysql:8.0`、nginx 与 uvicorn，服务器只需安装 Docker；应用镜像由 GitHub Actions 在仓库端构建并发布到 GHCR，**服务器只拉取、不本地构建**。首次启动自动建表并创建管理员账号。
 
 仓库将「拉取」与「源码构建」拆为两个 compose 文件：
 
 - `docker-compose.yml`：默认文件，只有 `image`，不含 `build`，`up` 不会触发源码构建
-- `docker-compose.build.yml`：可选覆盖文件，仅在需要本机构建时用 `-f` 叠加
+- `docker-compose.build.yml`：可选覆盖文件，**仅本地开发/调试使用**，服务器正式部署不使用
+
+### 0.1 部署（唯一主路径）
+
+**第 1 步：安装 Docker Engine 与 Compose 插件（Ubuntu）**
 
 ```bash
-# 服务器只需安装 Docker（Ubuntu）
 curl -fsSL https://get.docker.com | sh -s -- --mirror Aliyun
 systemctl enable --now docker
 ```
 
-安装后先确认 Compose 插件可用（缺失会报 `docker: unknown command: docker compose`）：
+安装后确认 Compose 插件可用（缺失会报 `docker: unknown command: docker compose`）：
 
 ```bash
 docker compose version
 # 报 unknown command 时安装插件：
 sudo apt-get update && sudo apt-get install -y docker-compose-plugin
 ```
+
+**第 2 步：克隆仓库并配置生产密钥**
+
+仓库地址必须是 `https://github.com/IceFireIcer/manage_system.git`：
 
 ```bash
 git clone https://github.com/IceFireIcer/manage_system.git
@@ -38,7 +45,7 @@ chmod 600 .env
 # 编辑 .env：MYSQL_ROOT_PASSWORD、JWT_SECRET_KEY 填随机值
 ```
 
-### 0.1 A. 拉取 GHCR 镜像（默认）
+**第 3 步：拉取 GHCR 镜像并启动（不要构建）**
 
 ```bash
 # 私有包需先登录 GHCR（公开包可跳过）
@@ -50,7 +57,36 @@ docker compose up -d
 docker compose ps
 ```
 
-### 0.2 B. 服务器源码构建（GHCR 拉取慢或失败时推荐）
+镜像名必须是 `ghcr.io/icefireicer/labstock-api` 与 `ghcr.io/icefireicer/labstock-web`。若 `pull` 报 404 或镜像名不匹配，先核对 `docker compose config | grep "image: ghcr.io"`，并确认仓库地址不是 `IceFirerer` 等拼写错误。
+
+首次启动约 1-3 分钟：
+
+1. `db` 容器初始化 `manage_system` 库（utf8mb4），健康检查通过后才启动 `backend`
+2. `backend` 执行 `alembic upgrade head` 建四张核心表，再执行 `scripts/bootstrap_admin.py` 创建管理员（幂等）
+3. `web`（nginx）等待 `backend` 健康后启动并监听 `WEB_PORT`（默认 4900）
+
+**第 4 步：获取管理员初始密码**
+
+首次启动在日志中打印管理员账号与初始密码：
+
+```bash
+docker compose logs backend | grep bootstrap
+# [bootstrap] 已创建管理员账号: admin；初始密码: <随机密码>（请首次登录后立即修改并妥善保存）
+```
+
+- 如需指定账号/密码，先在 `.env` 设置 `ADMIN_INIT_ACCOUNT` / `ADMIN_INIT_PASSWORD`（及可选 `ADMIN_INIT_NAME`）再启动
+- 已存在启用的管理员时日志为 `[bootstrap] 管理员账号已存在，跳过`；`ADMIN_INIT_PASSWORD` 不会重置已有账号密码
+- 修改初始密码的方法见 [README「管理员初始化」](../README.md#管理员初始化)
+
+访问 `http://<服务器IP>:4900/` 登录；新建耗材档案与用户后即可开始日常使用。
+
+> GHCR 包默认私有：可在 GitHub Packages 将 `labstock-api` / `labstock-web` 设为 public；或服务器使用带 `read:packages` 权限的 PAT 执行 `docker login ghcr.io -u <GitHub 用户名>`。拉取慢时优先按第 3.1 节加速或重试；仍失败时再把镜像转存自有仓库。**本地构建不是服务器部署路径**，仅作无法访问 GHCR 时的临时手段（见 0.2）。
+
+> **安全提示**：Compose 内置的默认 `MYSQL_ROOT_PASSWORD` 与 `JWT_SECRET_KEY` 仅用于首次开箱启动，**不具备生产安全性**。生产部署必须通过 `.env` 覆盖。第 `1`~`14` 节为完整部署与运维说明：安装与首次启动已包含在本节，可跳过第 `3`~`6` 节；后续运维、升级、备份与排错仍按下文执行。
+
+### 0.2 可选：本地开发构建（服务器正式部署不使用）
+
+**仅用于本地开发/调试，或服务器完全无法访问 GHCR 时的临时手段；服务器正式部署一律使用 0.1 的 `pull` 主路径，不执行本节命令。**
 
 不依赖 GHCR，直接从源码构建：
 
@@ -69,30 +105,7 @@ docker compose -f docker-compose.yml -f docker-compose.build.yml build \
 docker compose up -d
 ```
 
-首次启动约 1-3 分钟（拉取路径）或 3-8 分钟（构建路径）：
-
-1. `db` 容器初始化 `manage_system` 库（utf8mb4），健康检查通过后才启动 `backend`
-2. `backend` 执行 `alembic upgrade head` 建四张核心表，再执行 `scripts/bootstrap_admin.py` 创建管理员（幂等）
-3. `web`（nginx）等待 `backend` 健康后启动并监听 `WEB_PORT`（默认 4900）
-
-### 0.3 获取管理员初始密码
-
-首次启动在日志中打印管理员账号与初始密码：
-
-```bash
-docker compose logs backend | grep bootstrap
-# [bootstrap] 已创建管理员账号: admin；初始密码: <随机密码>（请首次登录后立即修改并妥善保存）
-```
-
-- 如需指定账号/密码，先在 `.env` 设置 `ADMIN_INIT_ACCOUNT` / `ADMIN_INIT_PASSWORD`（及可选 `ADMIN_INIT_NAME`）再启动
-- 已存在启用的管理员时日志为 `[bootstrap] 管理员账号已存在，跳过`；`ADMIN_INIT_PASSWORD` 不会重置已有账号密码
-- 修改初始密码的方法见 [README「管理员初始化」](../README.md#管理员初始化)
-
-访问 `http://<服务器IP>:4900/` 登录；新建耗材档案与用户后即可开始日常使用。
-
-> GHCR 包默认私有：可在 GitHub Packages 将 `labstock-api` / `labstock-web` 设为 public；或服务器使用带 `read:packages` 权限的 PAT 执行 `docker login ghcr.io -u <GitHub 用户名>`。拉取慢或失败时改用源码构建：`docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build`（不依赖 GHCR，约 3-8 分钟）。
-
-> **安全提示**：Compose 内置的默认 `MYSQL_ROOT_PASSWORD` 与 `JWT_SECRET_KEY` 仅用于首次开箱启动，**不具备生产安全性**。生产部署必须通过 `.env` 覆盖。第 `1`~`14` 节为完整部署与运维说明：安装与首次启动已包含在本节，可跳过第 `3`~`6` 节；后续运维、升级、备份与排错仍按下文执行。
+构建首次启动约 3-8 分钟，启动后同样按 0.1 第 4 步获取管理员初始密码。
 
 ## 1. 部署拓扑
 
@@ -166,10 +179,11 @@ sudo systemctl restart docker
 
 **GHCR 拉取慢**（`ghcr.io` 无通用公共加速器）：
 
-- 首选源码构建路径（第 0.2 节），并覆盖基础镜像源（示例见下）
+- **首选仍是 `docker compose pull`**：先确认 `docker login ghcr.io` 已完成，再用 `docker compose pull` 重试（可多次重试或错峰拉取）
 - 可选：把镜像转存到阿里云 ACR / 华为云 SWR 后改 `image:` 指向自有仓库；或 `docker save` / `docker load` 离线导入
+- 仅作最后手段：本地源码构建（0.2 节，**非服务器正式部署路径**）
 
-**构建时覆盖基础镜像源**（默认值与 CI 一致，不改变原有构建行为）：
+**构建时覆盖基础镜像源**（仅 0.2 可选构建路径使用，默认值与 CI 一致）：
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.build.yml build \
@@ -258,9 +272,9 @@ docker compose up -d           # 后台启动
 docker compose ps              # 三个服务应为 running / healthy
 ```
 
-### 6.1 本地自行构建（可选）
+### 6.1 本地开发构建（可选备选，服务器不使用）
 
-不依赖 GHCR、直接从源码构建时使用：
+**仅用于本地开发/调试或服务器无法访问 GHCR 时的临时手段，服务器正式部署请使用上面的 `pull` 主路径。** 不依赖 GHCR、直接从源码构建时使用：
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build   # 首次构建 + 后台启动，约 3-8 分钟（视网络）
@@ -273,7 +287,7 @@ docker compose ps
 2. `backend` 启动脚本先执行 `alembic upgrade head`（建四张核心表），再执行 `scripts/bootstrap_admin.py` 创建管理员（幂等），最后启动 uvicorn
 3. `web` 等待 backend 健康后启动 nginx
 
-随后按第 0.3 节从日志获取管理员初始密码。
+随后按第 0.1 节第 4 步从日志获取管理员初始密码。
 
 ## 7. 数据库迁移与管理员初始化
 
@@ -295,7 +309,7 @@ docker compose exec backend alembic history
 docker compose exec backend python scripts/bootstrap_admin.py
 ```
 
-> 系统不预置任何业务数据或账号。首次登录使用 bootstrap 创建的管理员；初始密码获取与修改见第 0.3 节与 [README](../README.md#管理员初始化)。
+> 系统不预置任何业务数据或账号。首次登录使用 bootstrap 创建的管理员；初始密码获取与修改见第 0.1 节第 4 步与 [README](../README.md#管理员初始化)。
 
 ## 8. 访问验证
 
@@ -388,13 +402,13 @@ cd /opt/manage_system
 # 查看可用标签：GitHub Packages 页面，或本地 git tag
 # 使用历史 sha-<short> 或 v* 版本标签回滚
 IMAGE_TAG=sha-abc1234 docker compose pull
-IMAGE_TAG=sha-abc1234 docker compose up -d --no-build
+IMAGE_TAG=sha-abc1234 docker compose up -d
 
 # 确认回滚成功
 docker compose ps
 ```
 
-使用源码构建路径（`-f docker-compose.build.yml`）时，回滚前先用 `docker tag` 给当前镜像打本地备份标签，再以 `IMAGE_TAG=<标签> docker compose up -d --no-build` 启动。
+仅在本地开发构建过镜像时，回滚前先用 `docker tag` 给当前镜像打本地备份标签，再以 `IMAGE_TAG=<标签> docker compose up -d` 启动（服务器部署不使用本地构建，无需此步骤）。
 
 > 数据库迁移通常是单向的：回滚镜像前请先确认旧版本代码兼容当前表结构；不确定时优先「修复新版本」或「恢复备份」。
 
@@ -404,7 +418,7 @@ docker compose ps
 git log --oneline -10
 git checkout <上一个稳定 commit 或 tag>
 docker compose pull
-docker compose up -d --no-build
+docker compose up -d
 ```
 
 ### 11.3 备份与恢复
@@ -440,7 +454,8 @@ docker compose start backend
 | 补货建议只有模板文案 | `LLM_API_KEY` 为空或不可用，属预期降级；填好 key 后 `docker compose up -d` 生效 |
 | 镜像拉取 / 构建超慢 | 见第 3.1 节「国内网络优化」：配置 `registry-mirrors`；前端 Dockerfile 支持 `--build-arg NPM_REGISTRY=...`，后端支持 `--build-arg PIP_INDEX_URL=...`，另有 `BASE_IMAGE` / `NODE_IMAGE` / `NGINX_IMAGE` 可覆盖 |
 | `docker: unknown command: docker compose` | 服务器缺少 Compose 插件（旧版 `docker-compose` v1 不能替代）：`sudo apt-get update && sudo apt-get install -y docker-compose-plugin`，或按第 3 节用官方源安装；验证 `docker compose version` |
-| `docker compose pull` 长时间卡住（如 `Pulling` 数十分钟无进展） | GHCR 在中国大陆访问慢：改用第 0.2 节源码构建路径（`-f docker-compose.yml -f docker-compose.build.yml up -d --build`），或按 3.1 节把镜像转存 ACR/SWR；确认 `docker login ghcr.io` 已完成 |
+| `docker compose pull` 长时间卡住（如 `Pulling` 数十分钟无进展） | GHCR 在中国大陆访问慢：先确认 `docker login ghcr.io` 已完成，再按 3.1 节配置加速/重试，或把镜像转存 ACR/SWR；**首选仍是 `pull`，源码构建（0.2 节）仅作最后手段** |
+| clone 报 404 / `pull` 报 404 或镜像名不匹配 | 仓库地址必须为 `https://github.com/IceFireIcer/manage_system.git`；若误用 `IceFirerer` 等拼写会 clone 失败。compose 中的应用镜像必须为 `ghcr.io/icefireicer/labstock-api` / `ghcr.io/icefireicer/labstock-web`，用 `docker compose config \| grep "image: ghcr.io"` 核对 |
 | `WARNING: Some service image(s) must be built from source` | 使用了含 `build:` 的旧版 compose 文件或在无镜像时直接 `up`：`git pull` 获取拆分后的 `docker-compose.yml`（先 `pull` 再 `up -d`）；需要构建时显式叠加 `-f docker-compose.build.yml` |
 | 拉取镜像报 `denied` / `unauthorized` | GHCR 包为私有：`docker login ghcr.io -u <GitHub 用户名>`（PAT 需 `read:packages`），或在 GitHub Packages 将 `labstock-api` / `labstock-web` 设为 public |
 | 磁盘占满 | `docker system df`；`docker image prune -af`；检查 `mysql_data` 增长与备份文件 |
@@ -496,7 +511,7 @@ docker compose up -d
 
 ```bash
 IMAGE_TAG=sha-abc1234 docker compose pull
-IMAGE_TAG=sha-abc1234 docker compose up -d --no-build
+IMAGE_TAG=sha-abc1234 docker compose up -d
 ```
 
 - 工作流在 GitHub 端执行，服务器只负责拉取与运行；构建失败时不会产生新标签，服务器继续运行上一个可用 `IMAGE_TAG`
