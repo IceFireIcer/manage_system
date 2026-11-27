@@ -7,7 +7,7 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app import business_time, inventory_ledger
+from app import business_time, inventory_ledger, stock_alerts
 from app.models import (
     Consumable,
     InventoryCount,
@@ -348,6 +348,9 @@ def post_count(
         row.period_delta = period_delta
         row.updated_at = posted_at
         db.add(row)
+        stock_alerts.sync_consumable(
+            db, consumable, source="inventory_count", at=posted_at
+        )
 
         if expected_stock != consumable.current_stock - diff:
             warnings.append(

@@ -7,7 +7,7 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app import business_time, inventory_ledger
+from app import business_time, inventory_ledger, stock_alerts
 from app.agent import rules
 from app.consumption import local_day_start, window_flow
 from app.models import (
@@ -423,6 +423,13 @@ def create_restock_order(
                 order=order,
                 has_suggestion=has_suggestion,
             )
+            stock_alerts.sync_consumable(
+                db,
+                consumable,
+                order_no=order.order_no,
+                source="restock",
+                at=line_posted_at,
+            )
             receipt_lines.append(
                 RestockLineOut(
                     line_no=row_number,
@@ -697,6 +704,13 @@ def correct_restock_order(
     )
     _touch_disposition_after_correction(
         db, consumable=consumable, operator=operator, order=order
+    )
+    stock_alerts.sync_consumable(
+        db,
+        consumable,
+        order_no=order.order_no,
+        source="restock_correction",
+        at=posted_at,
     )
     db.commit()
     db.refresh(correction)

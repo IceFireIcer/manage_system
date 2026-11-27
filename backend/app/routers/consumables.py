@@ -8,7 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app import business_time, consumable_import, inventory_ledger
+from app import business_time, consumable_import, inventory_ledger, stock_alerts
 from app.agent import service
 from app.database import get_db
 from app.deps import CurrentUser, require_role
@@ -411,6 +411,7 @@ def create_consumable(
             ),
         ) from error
     inventory_ledger.record_opening(db, consumable, admin)
+    stock_alerts.sync_consumable(db, consumable, source="consumable")
     _log(db, admin, "consumable_create", consumable, None)
     db.commit()
     service.clear_cache()
@@ -469,6 +470,7 @@ def update_consumable(
 
     consumable.updated_at = business_time.now()
     consumable.version += 1
+    stock_alerts.sync_consumable(db, consumable, source="consumable")
     _log(db, admin, "consumable_update", consumable, before)
     try:
         db.commit()
@@ -536,6 +538,7 @@ def toggle_consumable_status(
     consumable.status = payload.status
     consumable.version += 1
     consumable.updated_at = business_time.now()
+    stock_alerts.sync_consumable(db, consumable, source="consumable")
     action = (
         "consumable_disable"
         if payload.status == STATUS_DISABLED

@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
-from app import business_time, inventory_ledger
+from app import business_time, inventory_ledger, stock_alerts
 from app.agent import service
 from app.database import get_db
 from app.deps import CurrentUser, require_role
@@ -901,6 +901,9 @@ def _create_requisition_impl(
                     linked_count_order_no=linked_count_order_no,
                 )
             )
+            stock_alerts.sync_consumable(
+                db, consumable, source="requisition", at=line_posted_at
+            )
             created.append(requisition)
             total_quantity += item.quantity
 
@@ -1636,6 +1639,9 @@ def reverse_requisition(
             )
             reentry_event_id = reentry_event.id
 
+        stock_alerts.sync_consumable(
+            db, consumable, source="reversal", at=posted_at
+        )
         if correction is not None:
             correction.status = "accepted"
             correction.handler_id = manager.id
@@ -1896,6 +1902,7 @@ def create_return(
             ),
         )
     )
+    stock_alerts.sync_consumable(db, consumable, source="return", at=posted_at)
     db.commit()
     service.clear_cache(consumable.id)
     return JSONResponse(
@@ -2015,6 +2022,7 @@ def create_scrap(
             ),
         )
     )
+    stock_alerts.sync_consumable(db, consumable, source="scrap", at=posted_at)
     db.commit()
     service.clear_cache(consumable.id)
     return JSONResponse(
