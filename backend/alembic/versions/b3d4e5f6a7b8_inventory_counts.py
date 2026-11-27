@@ -1,7 +1,7 @@
 """inventory counts and adjustment posting
 
 Revision ID: b3d4e5f6a7b8
-Revises: f1a2b3c4d5e6
+Revises: g2b3c4d5e6f7
 Create Date: 2026-11-28 20:00:00.000000
 
 """
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "b3d4e5f6a7b8"
-down_revision: str | None = "f1a2b3c4d5e6"
+down_revision: str | None = "g2b3c4d5e6f7"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
