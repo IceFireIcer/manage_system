@@ -1,7 +1,9 @@
 from collections.abc import Iterator
 
 import pytest
+from app.config import get_settings
 from app.database import Base, get_db
+from app.login_throttle import login_throttle
 from app.main import app
 from app.models import User
 from app.security import hash_password
@@ -16,6 +18,15 @@ SEED_USERS = [
     ("student01", "Student@123", "张同学", "student", "enabled"),
     ("disabled01", "Disabled@123", "赵停用", "student", "disabled"),
 ]
+
+
+@pytest.fixture(autouse=True)
+def _reset_login_state():
+    login_throttle.reset()
+    get_settings.cache_clear()
+    yield
+    login_throttle.reset()
+    get_settings.cache_clear()
 
 
 @pytest.fixture()

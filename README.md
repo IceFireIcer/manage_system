@@ -43,7 +43,7 @@ cd manage_system
 # 3. 配置生产密钥（生产环境必做，见「配置」一节）
 cp .env.example .env
 chmod 600 .env
-# 编辑 .env：MYSQL_ROOT_PASSWORD、JWT_SECRET_KEY 必须替换为随机值
+# 编辑 .env：MYSQL_ROOT_PASSWORD、MYSQL_APP_PASSWORD、MYSQL_MIGRATE_PASSWORD、MYSQL_BACKUP_PASSWORD、JWT_SECRET_KEY 必须替换为随机值
 
 # 4. 拉取 GHCR 镜像并启动（私有包需先 docker login ghcr.io）
 docker compose pull
@@ -103,7 +103,8 @@ docker compose exec backend python scripts/manage_accounts.py recover-admin --ac
 
 | 变量 | 必填 | 说明 |
 | --- | --- | --- |
-| `MYSQL_ROOT_PASSWORD` | 生产必填 | MySQL root 密码，会拼进 `DATABASE_URL`，建议只用字母数字；未设置时 Compose 使用内置默认值 |
+| `MYSQL_ROOT_PASSWORD` | 生产必填 | MySQL root 密码，仅用于首次初始化与应急运维；应用连接改用最小权限账号（见 `docs/deploy.md` 5.3） |
+| `MYSQL_APP_PASSWORD` / `MYSQL_MIGRATE_PASSWORD` / `MYSQL_BACKUP_PASSWORD` | 生产必填 | 应用（只读写入、无 DDL）、迁移（DDL）、备份（只读）账号密码；建议 `openssl rand -hex 16` |
 | `JWT_SECRET_KEY` | 生产必填 | JWT 签名密钥，至少 32 位随机字符；变更后旧登录态失效 |
 | `ADMIN_INIT_ACCOUNT` | 否 | 首次创建的管理员账号，默认 `admin` |
 | `ADMIN_INIT_PASSWORD` | 否 | 首次创建的管理员密码，留空则随机生成并打印到日志 |
@@ -214,7 +215,7 @@ cd frontend && npm run build
 
 ## 安全与运维要点
 
-- **密钥**：生产必须覆盖 `MYSQL_ROOT_PASSWORD` 与 `JWT_SECRET_KEY`；`.env` 权限设为 600 且不提交
+- **密钥**：生产必须覆盖 `MYSQL_ROOT_PASSWORD`、三个数据库账号密码与 `JWT_SECRET_KEY`；`.env` 权限设为 600 且不提交；数据库最小权限、换密与登录节流见 [deploy.md 5.3](docs/deploy.md#53-数据库最小权限凭据轮换与登录节流)
 - **管理员密码**：首次启动后立即修改随机初始密码；丢弃该密码后按上文容器内脚本重置
 - **网络**：仅暴露 `WEB_PORT`（默认 4900），不对外开放 3306 / 8000；正式环境按 [deploy.md 5.1](docs/deploy.md#51-启用-https-与安全头正式必做) 叠加 `docker-compose.https.yml` 启用 HTTPS，`APP_ENV=prod` 下缺有效密钥或使用 HTTP 会拒绝启动/访问；密钥轮换见 5.2
 - **备份**：定期 `mysqldump` 或对数据卷做快照，升级前必须先备份

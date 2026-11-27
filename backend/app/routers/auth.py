@@ -6,9 +6,11 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.auth_logs import trim_auth_logs
 from app.config import get_settings
 from app.database import get_db
 from app.deps import CurrentUser
+from app.login_throttle import login_throttle
 from app.models import OperationLog, User
 from app.schemas import ChangePasswordRequest, LoginRequest, SessionOut, UserOut
 from app.security import (
@@ -16,10 +18,12 @@ from app.security import (
     create_access_token,
     decode_access_token,
     hash_password,
+    resolve_client_source,
     verify_password,
 )
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
+LOGIN_THROTTLED_DETAIL = "登录尝试过于频繁，请稍后重试"
 
 
 def _log_login(db: Session, user: User | None, account: str, remark: str | None) -> None:
@@ -64,21 +68,50 @@ def _session_expires_at(request: Request) -> datetime | None:
 def login(
     payload: LoginRequest,
     response: Response,
+    request: Request,
     db: Annotated[Session, Depends(get_db)],
 ) -> UserOut:
+    settings = get_settings()
+    account = payload.account.strip()
+    account_key = account.lower()
+    source = resolve_client_source(
+        request.client.host if request.client else "",
+        request.headers.get("x-forwarded-for"),
+        settings.trusted_proxy_set,
+    )
+    retry_after, should_log_throttle = login_throttle.check(account_key, source)
+    if retry_after > 0:
+        if should_log_throttle:
+            _log_login(db, None, account, f"账号 {account} 登录被节流")
+            db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=LOGIN_THROTTLED_DETAIL,
+            headers={"Retry-After": str(retry_after)},
+        )
+
     error = HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="账号或密码错误")
-    user = db.scalars(select(User).where(User.account == payload.account)).first()
+    user = db.scalars(select(User).where(User.account == account)).first()
     if user is None or not verify_password(payload.password, user.password_hash):
-        _log_login(db, user, payload.account, f"账号 {payload.account} 密码错误")
+        newly_blocked = login_throttle.record_failure(account_key, source)
+        _log_login(db, user, account, f"账号 {account} 密码错误")
         db.commit()
+        if newly_blocked and trim_auth_logs(db, settings) > 0:
+            db.commit()
         raise error
     if user.status != "enabled":
-        _log_login(db, user, payload.account, f"账号 {payload.account} 已被停用")
+        newly_blocked = login_throttle.record_failure(account_key, source)
+        _log_login(db, user, account, f"账号 {account} 已被停用")
         db.commit()
+        if newly_blocked and trim_auth_logs(db, settings) > 0:
+            db.commit()
         raise error
 
-    _log_login(db, user, payload.account, None)
+    login_throttle.record_success(account_key, source)
+    _log_login(db, user, account, None)
     db.commit()
+    if trim_auth_logs(db, settings) > 0:
+        db.commit()
 
     token, expire_seconds = create_access_token(user.id, user.role, user.session_version)
     _set_session_cookie(response, token, expire_seconds)

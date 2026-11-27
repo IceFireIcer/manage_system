@@ -42,7 +42,7 @@ cd manage_system
 # 生产环境必须替换密钥（详见第 5 节）
 cp .env.example .env
 chmod 600 .env
-# 编辑 .env：MYSQL_ROOT_PASSWORD、JWT_SECRET_KEY 填随机值
+# 编辑 .env：MYSQL_ROOT_PASSWORD、MYSQL_APP_PASSWORD、MYSQL_MIGRATE_PASSWORD、MYSQL_BACKUP_PASSWORD、JWT_SECRET_KEY 填随机值
 ```
 
 **第 3 步：拉取 GHCR 镜像并启动（不要构建）**
@@ -236,6 +236,8 @@ sed -i "s/^JWT_SECRET_KEY=.*/JWT_SECRET_KEY=${JWT_SECRET}/" .env
 DB_PASS="$(openssl rand -hex 12)"
 sed -i "s/^MYSQL_ROOT_PASSWORD=.*/MYSQL_ROOT_PASSWORD=${DB_PASS}/" .env
 
+# 应用、迁移、备份使用独立最小权限账号，密码按 5.3 生成
+
 # 可选：指定首次创建的管理员账号/密码；不填则随机生成并打印到日志
 # ADMIN_INIT_ACCOUNT=admin
 # ADMIN_INIT_PASSWORD=<强密码>
@@ -250,7 +252,7 @@ vi .env
 
 | 变量 | 说明 |
 | --- | --- |
-| `MYSQL_ROOT_PASSWORD` | MySQL root 密码；会拼进 `DATABASE_URL`，**建议只用字母数字**；生产必填 |
+| `MYSQL_ROOT_PASSWORD` | MySQL root 密码，仅用于首次初始化与应急运维；应用连接改用 `MYSQL_APP_PASSWORD`（见 5.3）；生产必填 |
 | `JWT_SECRET_KEY` | JWT 签名密钥，至少 32 位随机字符；变更后旧登录态失效；生产必填 |
 | `ADMIN_INIT_ACCOUNT` / `ADMIN_INIT_PASSWORD` / `ADMIN_INIT_NAME` | 首次创建的管理员账号、密码、姓名；仅首次创建生效 |
 | `LLM_API_KEY` / `LLM_BASE_URL` / `LLM_MODEL` | OpenAI 兼容接口；留空则只用规则引擎 |
@@ -325,6 +327,92 @@ PY
 ```
 
 轮换核对清单：轮换后原登录态全部 401；用 `ADMIN_INIT_ACCOUNT` 或既有账号重新登录成功且 Cookie 带 `Secure`；账号、耗材、领用、入库与操作日志数据不受影响；`certs/`、`.env` 权限 600 且未入库。数据库凭据轮换按 FR-S7-03（P1-25）流程单独执行，本节不替代。
+
+### 5.3 数据库最小权限、凭据轮换与登录节流
+
+对应补充 PRD FR-S7-03 / P1-25。应用、迁移、备份使用三个独立账号；Compose 已把应用与迁移连接分别注入 `DATABASE_URL`、`MIGRATION_DATABASE_URL`，后端启动时迁移只使用迁移账号，备份脚本只使用备份账号，root 仅用于首次初始化和应急运维。
+
+#### 5.3.1 账号权限与首次初始化
+
+| 账号（默认） | `.env` 变量 | 权限范围 |
+| --- | --- | --- |
+| `appuser` | `MYSQL_APP_USER` / `MYSQL_APP_PASSWORD` | `SELECT, INSERT, UPDATE` on `manage_system.*`；无 DDL、无 DELETE |
+| `labstock_migrator` | `MYSQL_MIGRATE_USER` / `MYSQL_MIGRATE_PASSWORD` | 读写与 DDL（`CREATE/ALTER/DROP/INDEX/...`），仅供 `alembic upgrade head` |
+| `labstock_backup` | `MYSQL_BACKUP_USER` / `MYSQL_BACKUP_PASSWORD` | `SELECT, LOCK TABLES, SHOW VIEW, EVENT, TRIGGER` + 全局 `PROCESS`，仅供 `mysqldump` |
+
+初始化 SQL 位于 `scripts/db-init/01-least-privilege-accounts.sh`，Compose 将其挂载到 MySQL 的 `/docker-entrypoint-initdb.d`，空数据卷首次启动时自动执行；脚本可重复执行，只调整账号与授权，不删除或重建数据库。11.3 的 `scripts/db-backup.sh` 与 `db-rotate-credentials.sh` 分别使用备份账号与三个账号完成备份和轮换。
+
+首次部署时在 `.env` 为三个账号分别生成随机密码（十六进制可避免 URL 转义问题）：
+
+```bash
+cd /opt/manage_system
+cp .env.example .env
+chmod 600 .env
+for key in MYSQL_APP_PASSWORD MYSQL_MIGRATE_PASSWORD MYSQL_BACKUP_PASSWORD; do
+  value="$(openssl rand -hex 16)"
+  sed -i "s|^${key}=.*|${key}=${value}|" .env
+done
+docker compose up -d
+```
+
+#### 5.3.2 已有数据的实例启用最小权限
+
+已有数据卷不会重新执行初始化脚本，需要先备份，再补建账号并重启后端。全过程不执行 `down -v`，不删除数据卷：
+
+```bash
+cd /opt/manage_system
+
+# 1) 先备份（按 11.3 执行；此时备份账号尚未创建，可暂用 root 完成一次）
+mkdir -p ./backups
+docker compose exec -T db sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysqldump -uroot \
+  --single-transaction --routines --triggers --databases manage_system' > ./backups/pre-least-privilege.sql
+
+# 2) 在 .env 写入 MYSQL_APP_*、MYSQL_MIGRATE_*、MYSQL_BACKUP_* 六个变量
+#    可用上面的 openssl 循环生成密码
+vi .env
+
+# 3) 让 db 容器加载新增环境变量与初始化脚本挂载（数据卷保留）
+docker compose up -d db
+
+# 4) 幂等补建账号与授权（只执行 CREATE/ALTER USER 与 GRANT）
+docker compose exec -T db bash /docker-entrypoint-initdb.d/01-least-privilege-accounts.sh
+
+# 5) 重建后端，切换应用与迁移连接账号
+docker compose up -d backend
+```
+
+核对应用账号权限（应只有 `SELECT, INSERT, UPDATE`，且建表应被拒绝）：
+
+```bash
+docker compose exec -T db sh -c 'MYSQL_PWD="$MYSQL_APP_PASSWORD" mysql -u"$MYSQL_APP_USER" -N -B \
+  -e "SHOW GRANTS FOR CURRENT_USER()"'
+docker compose exec -T db sh -c 'MYSQL_PWD="$MYSQL_APP_PASSWORD" mysql -u"$MYSQL_APP_USER" manage_system \
+  -e "CREATE TABLE should_fail(id INT)"'   # 期望 Access denied
+```
+
+#### 5.3.3 保留已有数据的凭据轮换
+
+`scripts/db-rotate-credentials.sh` 只执行 `ALTER USER`、更新 `.env` 并重建后端，不导出/导入数据、不删数据卷、不重建数据库；轮换后立即用应用账号读取 `consumables`，确认台账仍可访问。
+
+```bash
+cd /opt/manage_system
+./scripts/db-rotate-credentials.sh --dry-run                 # 只打印计划
+./scripts/db-rotate-credentials.sh --target app              # 仅轮换应用账号
+./scripts/db-rotate-credentials.sh --target all              # 应用、迁移、备份一起轮换
+```
+
+核对清单：脚本自动备份 `.env` 为 `.env.bak.<时间戳>`；旧密码立即失效；后端重建后健康；`consumables` 行数可读且与轮换前一致；下次备份可用新的备份账号运行；应用连接池 `pool_pre_ping` 会丢弃失效连接，无需手工清池。轮换只改密码，不改数据库名、主机与数据文件，因此已有台账无需迁移。
+
+#### 5.3.4 登录节流与认证日志容量
+
+登录按“账号”和“来源”两个维度在单进程内存中计数，超限返回 `429` 与 `Retry-After`：
+
+- 账号维度：`LOGIN_THROTTLE_ACCOUNT_MAX_ATTEMPTS=5` 次失败 / `LOGIN_THROTTLE_ACCOUNT_WINDOW_SECONDS=900` 秒，触发后阻塞 `LOGIN_THROTTLE_BLOCK_SECONDS=300` 秒；登录成功会清空该账号失败计数。
+- 来源维度：`LOGIN_THROTTLE_SOURCE_MAX_ATTEMPTS=100` 次失败 / `LOGIN_THROTTLE_SOURCE_WINDOW_SECONDS=300` 秒，用于识别同一出口 IP 的批量尝试；正常登录成功不计入失败次数，整班 40 人即使偶有输错也不会触发。
+- `X-Forwarded-For` 仅在直接来源属于 `TRUSTED_PROXIES` 时采信，并从右向左取第一个非可信代理地址，避免客户端伪造首段 IP。
+- 节流状态存于后端进程内存，适用于当前单副本部署；重启后计数清零。若扩展为多副本，需要改用共享存储（如 Redis），本版本不引入该运行时依赖。
+
+认证日志（`login` / `logout`）在每次登录成功后按容量修剪：超过 `AUTH_LOG_RETENTION_DAYS=90` 天的记录删除，超过 `AUTH_LOG_MAX_ROWS=20000` 行时删除最旧记录；被节流的请求每个阻塞窗口最多写一条审计，避免失败风暴放大日志表。日志仍通过 `GET /api/v1/logs` 按日期、操作人、动作查询，登录类敏感日志仅管理员可见。
 
 ## 6. 拉取镜像并启动（推荐）
 
