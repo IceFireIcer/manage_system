@@ -17,13 +17,22 @@ const emit = defineEmits(['update:modelValue', 'view-requisition', 'view-consuma
 
 const ROLE_NAMES = { teacher: '教师', admin: '班委', student: '学生', operator: '校方授权人' }
 const STATUS_NAMES = { enabled: '启用', disabled: '停用' }
-const TARGET_NAMES = { user: '用户', consumable: '耗材', requisition: '领用流水' }
+const TARGET_NAMES = {
+  user: '用户',
+  consumable: '耗材',
+  requisition: '领用流水',
+  requisition_correction: '纠错申请',
+}
 
 const ACTION_NAMES = {
   login: '登录',
   logout: '退出登录',
   requisition_create: '领用登记',
   requisition_reverse: '撤销领用',
+  requisition_reentry: '关联重登',
+  requisition_correction_submit: '纠错申请',
+  requisition_correction_accept: '纠错受理',
+  requisition_correction_handle: '纠错处理',
   restock: '补货入库',
   restock_correction: '入库纠错',
   consumable_create: '耗材建档',
@@ -64,6 +73,13 @@ const FIELD_LABELS = {
   consumable_id: '耗材 ID',
   requisition_id: '领用流水号',
   reversal_id: '红冲流水号',
+  reversal_order_no: '红冲单号',
+  reentry_id: '重登流水号',
+  reentry_order_no: '重登单号',
+  reentry_of: '来源红冲流水',
+  correction_id: '纠错申请号',
+  handling_note: '处理结果',
+  event_id: '库存事件号',
   created_at: '业务时间',
   items: '明细',
 }
@@ -88,6 +104,13 @@ const FIELD_ORDER = [
   'consumable_id',
   'requisition_id',
   'reversal_id',
+  'reversal_order_no',
+  'reentry_id',
+  'reentry_order_no',
+  'reentry_of',
+  'correction_id',
+  'handling_note',
+  'event_id',
   'created_at',
   'items',
 ]

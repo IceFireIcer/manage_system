@@ -8,6 +8,7 @@ import PageHeader from '../components/PageHeader.vue'
 import EmptyState from '../components/EmptyState.vue'
 import RecordDetailDrawer from '../components/RecordDetailDrawer.vue'
 import ReversalDialog from '../components/ReversalDialog.vue'
+import CorrectionDialog from '../components/CorrectionDialog.vue'
 import { validateDateRange } from '../utils/businessDate'
 
 const QUICK_OPTIONS = [
@@ -77,8 +78,11 @@ const exporting = ref(false)
 
 const detailVisible = ref(false)
 const detailId = ref(null)
+const detailRefresh = ref(0)
 const reversalVisible = ref(false)
 const reversalRecord = ref(null)
+const correctionVisible = ref(false)
+const correctionRecord = ref(null)
 const receipt = ref(null)
 
 const tableRegion = ref(null)
@@ -214,11 +218,26 @@ function typeMeta(row) {
   return { label: '领用', className: 'status-tag--info' }
 }
 
+const CORRECTION_STATUS_META = {
+  submitted: { label: '待处理', className: 'status-tag--warning' },
+  accepted: { label: '已处理', className: 'status-tag--success' },
+  rejected: { label: '已驳回', className: 'status-tag--neutral' },
+}
+
 function statusMeta(row) {
   if (row.status === 'reversed') {
     return { label: '已撤销', className: 'status-tag--neutral' }
   }
   return { label: '有效', className: 'status-tag--success' }
+}
+
+function correctionMeta(row) {
+  return (
+    CORRECTION_STATUS_META[row.correction_status] ?? {
+      label: row.correction_status ?? '',
+      className: 'status-tag--neutral',
+    }
+  )
 }
 
 function relatedLabel(row) {
@@ -445,6 +464,23 @@ function handleDetailClosed() {
   })
 }
 
+function handleDetailReverse(record) {
+  reversalRecord.value = { ...record }
+  reversalVisible.value = true
+}
+
+function handleDetailCorrect(record) {
+  correctionRecord.value = { ...record }
+  correctionVisible.value = true
+}
+
+function handleCorrectionSuccess() {
+  correctionRecord.value = null
+  detailRefresh.value += 1
+  fetchRecords()
+  ElMessage.success('纠错申请已提交，等待教师处理')
+}
+
 function openReversal(row, event) {
   lastTrigger.value = event?.currentTarget ?? null
   reversalRecord.value = { ...row, unit: rowUnit(row) }
@@ -455,12 +491,22 @@ function handleReversalSuccess(data) {
   const originId = reversalRecord.value?.id ?? data.reversal_of
   receipt.value = {
     id: data.id,
+    orderNo: data.order_no || '',
     quantity: data.quantity,
     unit: data.unit || '',
     stockAfter: data.stock_after,
     originId,
+    reentry: data.reentry
+      ? {
+          id: data.reentry.id,
+          orderNo: data.reentry.order_no || '',
+          quantity: data.reentry.quantity,
+        }
+      : null,
+    correctionAccepted: data.correction?.status === 'accepted',
   }
   reversalRecord.value = null
+  detailRefresh.value += 1
   fetchRecords()
 }
 
@@ -544,13 +590,24 @@ onMounted(async () => {
       @close="receipt = null"
     >
       <template #title>
-        已撤销，库存已回加 {{ receiptQuantityText }}
+        已红冲，库存已回加 {{ receiptQuantityText }}<template v-if="receipt.reentry">，并生成关联重登单</template>
       </template>
       <template #default>
         <p class="records__receipt-text">
-          原流水 #{{ receipt.originId }} 已标记为已撤销，并生成红冲流水 #{{ receipt.id }}，变动后库存 {{ receiptStockText }}。
+          原流水 #{{ receipt.originId }} 已标记为已撤销，生成红冲单 #{{ receipt.id }}<template v-if="receipt.orderNo">（{{ receipt.orderNo }}）</template>，变动后库存 {{ receiptStockText }}。
+          <template v-if="receipt.reentry">
+            关联重登 #{{ receipt.reentry.id }}<template v-if="receipt.reentry.orderNo">（{{ receipt.reentry.orderNo }}）</template>已按 {{ receipt.reentry.quantity }}{{ receipt.unit ? ` ${receipt.unit}` : '' }} 重新登记。
+          </template>
         </p>
         <el-button link type="primary" @click="openDetail(receipt.id, $event)">查看红冲流水</el-button>
+        <el-button
+          v-if="receipt.reentry"
+          link
+          type="primary"
+          @click="openDetail(receipt.reentry.id, $event)"
+        >
+          查看重登流水
+        </el-button>
       </template>
     </el-alert>
 
@@ -768,6 +825,18 @@ onMounted(async () => {
               </span>
             </template>
           </el-table-column>
+          <el-table-column label="纠错" width="100">
+            <template #default="{ row }">
+              <span
+                v-if="row.correction_status"
+                class="status-tag"
+                :class="correctionMeta(row).className"
+              >
+                {{ correctionMeta(row).label }}
+              </span>
+              <span v-else class="records__muted">—</span>
+            </template>
+          </el-table-column>
           <el-table-column label="关联" min-width="150">
             <template #default="{ row }">
               <el-button
@@ -790,7 +859,7 @@ onMounted(async () => {
                 type="danger"
                 @click="openReversal(row, $event)"
               >
-                撤销领用
+                红冲
               </el-button>
             </template>
           </el-table-column>
@@ -824,7 +893,10 @@ onMounted(async () => {
     <RecordDetailDrawer
       v-model="detailVisible"
       :record-id="detailId"
+      :refresh-token="detailRefresh"
       @closed="handleDetailClosed"
+      @reverse="handleDetailReverse"
+      @correct="handleDetailCorrect"
     />
 
     <ReversalDialog
@@ -832,6 +904,12 @@ onMounted(async () => {
       :record="reversalRecord"
       @success="handleReversalSuccess"
       @refresh="fetchRecords"
+    />
+
+    <CorrectionDialog
+      v-model="correctionVisible"
+      :record="correctionRecord"
+      @success="handleCorrectionSuccess"
     />
   </div>
 </template>

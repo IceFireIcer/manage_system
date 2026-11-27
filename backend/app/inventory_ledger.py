@@ -8,11 +8,14 @@ from app.models import Consumable, InventoryEvent, User
 
 EVENT_OPENING = "opening"
 EVENT_REQUISITION = "requisition"
+EVENT_REVERSAL = "reversal"
 EVENT_RESTOCK = "restock"
 EVENT_RESTOCK_CORRECTION = "restock_correction"
 
 SOURCE_OPENING = "opening"
 SOURCE_REQUISITION_ORDER = "requisition_order"
+SOURCE_REQUISITION_REVERSAL = "requisition_reversal"
+SOURCE_REQUISITION_REENTRY = "requisition_reentry"
 SOURCE_RESTOCK_ORDER = "restock_order"
 
 EVIDENCE_TRUSTED = "trusted"
@@ -107,3 +110,11 @@ def order_no_for(request_id: str, business_at: datetime, prefix: str = "REQ") ->
 
 def restock_order_no_for(request_id: str, business_at: datetime) -> str:
     return order_no_for(request_id, business_at, prefix="RSK")
+
+
+def reversal_order_no_for(requisition_id: int, business_at: datetime) -> str:
+    return f"RVL-{business_at.strftime('%Y%m%d')}-{requisition_id:06d}"
+
+
+def reentry_order_no_for(reversal_id: int, business_at: datetime) -> str:
+    return f"REN-{business_at.strftime('%Y%m%d')}-{reversal_id:06d}"

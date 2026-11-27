@@ -16,8 +16,13 @@ const props = defineProps({
 const emit = defineEmits(['update:modelValue', 'success', 'refresh'])
 
 const reason = ref('')
+const remark = ref('')
 const reasonError = ref('')
+const reentryError = ref('')
 const requestError = ref('')
+const reentryEnabled = ref(false)
+const reentryQuantity = ref(1)
+const reentryRemark = ref('')
 const reasonInputRef = ref(null)
 const submitting = ref(false)
 
@@ -29,6 +34,11 @@ const visible = computed({
 const quantityText = computed(() => {
   if (!props.record) return ''
   return `${props.record.quantity}${props.record.unit ? ` ${props.record.unit}` : ' 单位'}`
+})
+
+const reentryQuantityText = computed(() => {
+  if (!props.record) return ''
+  return `${reentryQuantity.value}${props.record.unit ? ` ${props.record.unit}` : ' 单位'}`
 })
 
 function formatTime(value) {
@@ -45,8 +55,13 @@ function consumableLabel(record) {
 
 function resetState() {
   reason.value = ''
+  remark.value = ''
   reasonError.value = ''
+  reentryError.value = ''
   requestError.value = ''
+  reentryEnabled.value = false
+  reentryQuantity.value = props.record?.quantity ?? 1
+  reentryRemark.value = ''
 }
 
 function handleReasonInput() {
@@ -72,33 +87,50 @@ async function handleConfirm() {
     return
   }
   reasonError.value = ''
+  reentryError.value = ''
   requestError.value = ''
+  const quantity = Number(reentryQuantity.value)
+  if (reentryEnabled.value) {
+    if (!Number.isInteger(quantity) || quantity <= 0) {
+      reentryError.value = '重登数量必须为正整数'
+      return
+    }
+    if (quantity > props.record.quantity) {
+      reentryError.value = `重登数量不能超过原领用数量 ${props.record.quantity}`
+      return
+    }
+  }
   submitting.value = true
   try {
-    const { data } = await api.post(`/requisitions/${props.record.id}/reversal`, {
-      reason: trimmed,
-    })
+    const payload = { reason: trimmed, remark: remark.value.trim() || undefined }
+    if (reentryEnabled.value) {
+      payload.reentry = {
+        quantity,
+        remark: reentryRemark.value.trim() || undefined,
+      }
+    }
+    const { data } = await api.post(`/requisitions/${props.record.id}/reversal`, payload)
     emit('success', data)
     emit('update:modelValue', false)
   } catch (error) {
     const status = error.response?.status
     const detail = error.response?.data?.detail
     if (!error.response) {
-      requestError.value = '暂未确认本次撤销结果，请到记录中核对原流水与红冲流水'
+      requestError.value = '暂未确认本次红冲结果，请到记录中核对原流水与红冲流水'
       emit('refresh')
     } else if (status === 400) {
-      requestError.value = typeof detail === 'string' ? detail : '该流水当前无法撤销，请刷新记录'
+      requestError.value = typeof detail === 'string' ? detail : '该流水当前无法红冲，请刷新记录'
       emit('refresh')
     } else if (status === 404) {
       requestError.value = '流水不存在或不可访问'
       emit('refresh')
     } else if (status === 403) {
-      requestError.value = '你没有权限撤销领用流水'
+      requestError.value = '你没有权限红冲领用流水'
     } else if (status >= 500) {
-      requestError.value = '暂未确认本次撤销结果，请到记录中核对原流水与红冲流水'
+      requestError.value = '暂未确认本次红冲结果，请到记录中核对原流水与红冲流水'
       emit('refresh')
     } else {
-      requestError.value = '撤销失败，请稍后重试'
+      requestError.value = '红冲失败，请稍后重试'
     }
   } finally {
     submitting.value = false
@@ -109,8 +141,8 @@ async function handleConfirm() {
 <template>
   <el-dialog
     v-model="visible"
-    title="撤销领用"
-    width="520px"
+    title="红冲领用"
+    width="560px"
     class="reversal-dialog"
     :close-on-click-modal="false"
     :close-on-press-escape="!submitting"
@@ -138,6 +170,12 @@ async function handleConfirm() {
         <span class="reversal__label">数量</span>
         <span class="reversal__value">{{ quantityText }}</span>
       </div>
+      <div v-if="record.correction" class="reversal__row">
+        <span class="reversal__label">纠错申请</span>
+        <span class="reversal__value">
+          #{{ record.correction.id }} · {{ record.correction.reason }}
+        </span>
+      </div>
     </div>
 
     <el-alert
@@ -146,7 +184,7 @@ async function handleConfirm() {
       :closable="false"
       show-icon
       class="reversal__impact"
-      :title="`将生成一条红冲流水，库存回加 ${quantityText}`"
+      :title="`将生成一条红冲单，库存回加 ${quantityText}${reentryEnabled ? `，再按重登数量扣减 ${reentryQuantityText}` : ''}`"
     />
 
     <el-alert
@@ -159,20 +197,62 @@ async function handleConfirm() {
     />
 
     <el-form label-position="top" class="reversal__form" @submit.prevent="handleConfirm">
-      <el-form-item label="撤销原因" required :error="reasonError">
+      <el-form-item label="红冲原因" required :error="reasonError">
         <el-input
           ref="reasonInputRef"
           v-model="reason"
           type="textarea"
-          :rows="3"
+          :rows="2"
           maxlength="255"
           show-word-limit
-          placeholder="如：登记有误，需要退回库存"
+          placeholder="如：数量登记有误，需要红冲后重新登记"
           :disabled="submitting"
-          aria-label="撤销原因"
+          aria-label="红冲原因"
           @input="handleReasonInput"
         />
       </el-form-item>
+      <el-form-item label="处理备注">
+        <el-input
+          v-model="remark"
+          type="textarea"
+          :rows="2"
+          maxlength="255"
+          show-word-limit
+          placeholder="选填，记录与原单的核对结果"
+          :disabled="submitting"
+          aria-label="处理备注"
+        />
+      </el-form-item>
+
+      <el-form-item>
+        <el-checkbox v-model="reentryEnabled" :disabled="submitting">
+          生成关联重登单
+        </el-checkbox>
+        <p class="reversal__reentry-hint">勾选后按更正后的数量重新登记，原流水与红冲单保留。</p>
+      </el-form-item>
+
+      <template v-if="reentryEnabled">
+        <el-form-item label="重登数量" required :error="reentryError">
+          <el-input-number
+            v-model="reentryQuantity"
+            :min="1"
+            :max="record?.quantity ?? 1"
+            :step="1"
+            :disabled="submitting"
+            aria-label="重登数量"
+          />
+        </el-form-item>
+        <el-form-item label="重登备注">
+          <el-input
+            v-model="reentryRemark"
+            maxlength="255"
+            show-word-limit
+            placeholder="选填，如：更正为 2 卷"
+            :disabled="submitting"
+            aria-label="重登备注"
+          />
+        </el-form-item>
+      </template>
     </el-form>
 
     <template #footer>
@@ -184,7 +264,7 @@ async function handleConfirm() {
           :disabled="submitting"
           @click="handleConfirm"
         >
-          确认撤销
+          确认红冲
         </el-button>
       </div>
     </template>
@@ -209,7 +289,7 @@ async function handleConfirm() {
 }
 
 .reversal__label {
-  flex: 0 0 64px;
+  flex: 0 0 72px;
   font-size: 13px;
   line-height: 20px;
   color: var(--text-muted);
@@ -224,16 +304,20 @@ async function handleConfirm() {
   font-variant-numeric: tabular-nums;
 }
 
-.reversal__impact {
-  margin-top: 16px;
-}
-
+.reversal__impact,
 .reversal__request-error {
   margin-top: 16px;
 }
 
 .reversal__form {
   margin-top: 16px;
+}
+
+.reversal__reentry-hint {
+  margin: 4px 0 0;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--text-muted);
 }
 
 .reversal__footer {

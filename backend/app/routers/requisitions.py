@@ -15,10 +15,20 @@ from app import business_time, inventory_ledger
 from app.agent import service
 from app.database import get_db
 from app.deps import CurrentUser, require_role
-from app.models import Consumable, OperationLog, Requisition, RequisitionOrder, User
+from app.models import (
+    Consumable,
+    OperationLog,
+    Requisition,
+    RequisitionCorrection,
+    RequisitionOrder,
+    User,
+)
 from app.schemas_consumables import STATUS_ENABLED
 from app.schemas_requisitions import (
     MAX_BACKFILL_DAYS,
+    CorrectionCreate,
+    CorrectionHandle,
+    CorrectionOut,
     RequisitionCreate,
     RequisitionCreateOut,
     RequisitionDetailOut,
@@ -274,6 +284,7 @@ def _serialize_row(
     consumable: Consumable,
     user: User,
     related: RequisitionRelatedOut | None = None,
+    correction: RequisitionCorrection | None = None,
 ) -> RequisitionListItemOut:
     return RequisitionListItemOut(
         id=requisition.id,
@@ -290,6 +301,9 @@ def _serialize_row(
         reversal_reason=requisition.reversal_reason,
         remark=requisition.remark,
         related=related,
+        order_no=requisition.order_no,
+        reentry_of=requisition.reentry_of,
+        correction_status=correction.status if correction is not None else None,
     )
 
 
@@ -338,6 +352,63 @@ def _list_related(
         reversal = reversals.get(record.id)
         return _related_out(reversal) if reversal is not None else None
     return None
+
+
+def _latest_corrections(
+    db: Session, requisition_ids: list[int]
+) -> dict[int, RequisitionCorrection]:
+    if not requisition_ids:
+        return {}
+    latest: dict[int, RequisitionCorrection] = {}
+    for correction in db.scalars(
+        select(RequisitionCorrection)
+        .where(RequisitionCorrection.requisition_id.in_(requisition_ids))
+        .order_by(RequisitionCorrection.created_at, RequisitionCorrection.id)
+    ):
+        latest[correction.requisition_id] = correction
+    return latest
+
+
+def _correction_out(
+    db: Session, correction: RequisitionCorrection
+) -> CorrectionOut:
+    reversal = (
+        db.get(Requisition, correction.reversal_id)
+        if correction.reversal_id is not None
+        else None
+    )
+    reentry = (
+        db.get(Requisition, correction.reentry_id)
+        if correction.reentry_id is not None
+        else None
+    )
+    return CorrectionOut(
+        id=correction.id,
+        requisition_id=correction.requisition_id,
+        request_id=correction.request_id,
+        status=correction.status,
+        reason=correction.reason,
+        remark=correction.remark,
+        applicant_id=correction.applicant_id,
+        applicant_name=correction.applicant_name,
+        applicant_role=correction.applicant_role,
+        handler_id=correction.handler_id,
+        handler_name=correction.handler_name,
+        handler_role=correction.handler_role,
+        handling_note=correction.handling_note,
+        reversal_id=correction.reversal_id,
+        reversal_order_no=reversal.order_no if reversal is not None else None,
+        reentry_id=correction.reentry_id,
+        reentry_order_no=reentry.order_no if reentry is not None else None,
+        created_at=correction.created_at,
+        handled_at=correction.handled_at,
+    )
+
+
+def _can_view_requisition(requisition: Requisition, current_user: User) -> bool:
+    if current_user.role == "student":
+        return requisition.user_id == current_user.id
+    return requisition.class_id == current_user.class_id
 
 
 def _consume_params(
@@ -393,12 +464,14 @@ def list_requisitions(
     ).all()
     records = [record for record, _consumable, _user in rows]
     origins, reversals = _related_records(db, records)
+    corrections = _latest_corrections(db, [record.id for record in records])
     items = [
         _serialize_row(
             record,
             consumable,
             user,
             related=_list_related(record, origins, reversals),
+            correction=corrections.get(record.id),
         )
         for record, consumable, user in rows
     ]
@@ -720,7 +793,10 @@ def create_requisition(
 
 
 def _record_out(
-    record: Requisition, consumable: Consumable | None, user: User | None
+    record: Requisition,
+    consumable: Consumable | None,
+    user: User | None,
+    correction: CorrectionOut | None = None,
 ) -> RequisitionRecordOut:
     return RequisitionRecordOut(
         id=record.id,
@@ -737,6 +813,10 @@ def _record_out(
         reversal_reason=record.reversal_reason,
         created_at=record.created_at,
         remark=record.remark,
+        order_no=record.order_no,
+        handler_name=record.handler_name,
+        reentry_of=record.reentry_of,
+        correction=correction,
     )
 
 
@@ -749,7 +829,257 @@ def _related_out(record: Requisition) -> RequisitionRelatedOut:
         stock_after=record.stock_after,
         created_at=record.created_at,
         reversal_reason=record.reversal_reason,
+        order_no=record.order_no,
     )
+
+
+def _latest_correction_for(
+    db: Session, requisition_id: int
+) -> RequisitionCorrection | None:
+    return db.scalars(
+        select(RequisitionCorrection)
+        .where(RequisitionCorrection.requisition_id == requisition_id)
+        .order_by(RequisitionCorrection.created_at.desc(), RequisitionCorrection.id.desc())
+    ).first()
+
+
+def _detail_out(db: Session, requisition: Requisition) -> RequisitionDetailOut:
+    correction_target_id = requisition.id
+    origin_reversal: Requisition | None = None
+    if requisition.type == "reversal" and requisition.reversal_of is not None:
+        correction_target_id = requisition.reversal_of
+    elif requisition.reentry_of is not None:
+        origin_reversal = db.get(Requisition, requisition.reentry_of)
+        if origin_reversal is not None:
+            correction_target_id = (
+                origin_reversal.reversal_of or origin_reversal.id
+            )
+
+    correction = _latest_correction_for(db, correction_target_id)
+    detail = RequisitionDetailOut(
+        **_record_out(
+            requisition,
+            db.get(Consumable, requisition.consumable_id),
+            db.get(User, requisition.user_id),
+            correction=_correction_out(db, correction) if correction else None,
+        ).model_dump()
+    )
+
+    if requisition.reversal_of is not None:
+        origin = db.get(Requisition, requisition.reversal_of)
+        if origin is not None:
+            detail.origin = _related_out(origin)
+
+    if requisition.type == "reversal":
+        reentry = db.scalars(
+            select(Requisition).where(Requisition.reentry_of == requisition.id)
+        ).first()
+        if reentry is not None:
+            detail.reentry = _related_out(reentry)
+    elif origin_reversal is not None:
+        detail.reversal = _related_out(origin_reversal)
+        if origin_reversal.reversal_of is not None:
+            origin = db.get(Requisition, origin_reversal.reversal_of)
+            if origin is not None:
+                detail.origin = _related_out(origin)
+    else:
+        reversal = db.scalars(
+            select(Requisition).where(Requisition.reversal_of == requisition.id)
+        ).first()
+        if reversal is not None:
+            detail.reversal = _related_out(reversal)
+            reentry = db.scalars(
+                select(Requisition).where(Requisition.reentry_of == reversal.id)
+            ).first()
+            if reentry is not None:
+                detail.reentry = _related_out(reentry)
+    return detail
+
+
+@router.post("/{requisition_id}/corrections", status_code=status.HTTP_201_CREATED)
+def create_correction(
+    requisition_id: int,
+    payload: CorrectionCreate,
+    db: Annotated[Session, Depends(get_db)],
+    current_user: CurrentUser,
+) -> JSONResponse:
+    requisition = db.get(Requisition, requisition_id)
+    if requisition is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="流水不存在"
+        )
+    if current_user.role == "student":
+        if requisition.user_id != current_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="学生只能申请本人记录的纠错",
+            )
+    elif requisition.class_id != current_user.class_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="无权限申请该流水的纠错"
+        )
+    if requisition.type != "normal" or requisition.status != "active":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="仅有效领用记录可以申请纠错",
+        )
+
+    request_id = payload.request_id or uuid.uuid4().hex
+    existing = db.scalars(
+        select(RequisitionCorrection).where(
+            RequisitionCorrection.request_id == request_id
+        )
+    ).first()
+    if existing is not None:
+        if (
+            existing.requisition_id != requisition.id
+            or existing.applicant_id != current_user.id
+            or existing.reason != payload.reason
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="请求标识已用于不同内容，请勿复用",
+            )
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content=jsonable_encoder(_correction_out(db, existing)),
+        )
+
+    pending = db.scalars(
+        select(RequisitionCorrection).where(
+            RequisitionCorrection.requisition_id == requisition.id,
+            RequisitionCorrection.applicant_id == current_user.id,
+            RequisitionCorrection.status == "submitted",
+        )
+    ).first()
+    if pending is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="该记录已有待处理的纠错申请",
+        )
+
+    created_at = business_time.now().replace(microsecond=0)
+    correction = RequisitionCorrection(
+        requisition_id=requisition.id,
+        request_id=request_id,
+        status="submitted",
+        reason=payload.reason,
+        remark=payload.remark,
+        applicant_id=current_user.id,
+        applicant_name=current_user.name,
+        applicant_role=current_user.role,
+        class_id=requisition.class_id,
+        created_at=created_at,
+    )
+    db.add(correction)
+    db.flush()
+    db.add(
+        OperationLog(
+            operator_id=current_user.id,
+            role=current_user.role,
+            action="requisition_correction_submit",
+            target_type="requisition",
+            target_id=requisition.id,
+            before_value=None,
+            after_value=json.dumps(
+                {
+                    "correction_id": correction.id,
+                    "request_id": request_id,
+                    "status": "submitted",
+                    "reason": correction.reason,
+                },
+                ensure_ascii=False,
+            ),
+        )
+    )
+    db.commit()
+    return JSONResponse(
+        status_code=status.HTTP_201_CREATED,
+        content=jsonable_encoder(_correction_out(db, correction)),
+    )
+
+
+@router.get("/{requisition_id}/corrections")
+def list_corrections(
+    requisition_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    current_user: CurrentUser,
+) -> list[CorrectionOut]:
+    requisition = db.get(Requisition, requisition_id)
+    if requisition is None or not _can_view_requisition(requisition, current_user):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="流水不存在"
+        )
+    corrections = db.scalars(
+        select(RequisitionCorrection)
+        .where(RequisitionCorrection.requisition_id == requisition.id)
+        .order_by(
+            RequisitionCorrection.created_at.desc(), RequisitionCorrection.id.desc()
+        )
+    ).all()
+    return [_correction_out(db, correction) for correction in corrections]
+
+
+@router.patch("/{requisition_id}/corrections/{correction_id}")
+def handle_correction(
+    requisition_id: int,
+    correction_id: int,
+    payload: CorrectionHandle,
+    db: Annotated[Session, Depends(get_db)],
+    manager: ManagerUser,
+) -> CorrectionOut:
+    requisition = db.get(Requisition, requisition_id)
+    if requisition is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="流水不存在"
+        )
+    if requisition.class_id != manager.class_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="无权限处理该流水"
+        )
+    correction = db.get(RequisitionCorrection, correction_id)
+    if (
+        correction is None
+        or correction.requisition_id != requisition.id
+        or correction.class_id != manager.class_id
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="纠错申请不存在"
+        )
+    if correction.status != "submitted":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="该纠错申请已处理",
+        )
+
+    handled_at = business_time.now().replace(microsecond=0)
+    correction.status = payload.status
+    correction.handler_id = manager.id
+    correction.handler_name = manager.name
+    correction.handler_role = manager.role
+    correction.handling_note = payload.handling_note
+    correction.handled_at = handled_at
+    db.add(
+        OperationLog(
+            operator_id=manager.id,
+            role=manager.role,
+            action="requisition_correction_handle",
+            target_type="requisition_correction",
+            target_id=correction.id,
+            before_value=json.dumps({"status": "submitted"}, ensure_ascii=False),
+            after_value=json.dumps(
+                {
+                    "status": correction.status,
+                    "requisition_id": requisition.id,
+                    "handling_note": correction.handling_note,
+                },
+                ensure_ascii=False,
+            ),
+        )
+    )
+    db.commit()
+    db.refresh(correction)
+    return _correction_out(db, correction)
 
 
 @router.post("/{requisition_id}/reversal")
@@ -758,7 +1088,7 @@ def reverse_requisition(
     payload: ReversalCreate,
     db: Annotated[Session, Depends(get_db)],
     manager: ManagerUser,
-) -> RequisitionRecordOut:
+) -> RequisitionDetailOut:
     requisition = db.get(Requisition, requisition_id)
     if requisition is None:
         raise HTTPException(
@@ -777,13 +1107,52 @@ def reverse_requisition(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="该流水已撤销，不可重复撤销",
         )
+    if (
+        payload.reentry is not None
+        and payload.reentry.quantity > requisition.quantity
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="重登数量不能超过原领用数量",
+        )
 
-    consumable = db.get(Consumable, requisition.consumable_id)
+    correction: RequisitionCorrection | None = None
+    if payload.correction_id is not None:
+        correction = db.get(RequisitionCorrection, payload.correction_id)
+        if (
+            correction is None
+            or correction.requisition_id != requisition.id
+            or correction.class_id != manager.class_id
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="纠错申请不存在"
+            )
+        if correction.status != "submitted":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="该纠错申请已处理",
+            )
+    else:
+        correction = db.scalars(
+            select(RequisitionCorrection)
+            .where(
+                RequisitionCorrection.requisition_id == requisition.id,
+                RequisitionCorrection.status == "submitted",
+            )
+            .order_by(
+                RequisitionCorrection.created_at.desc(),
+                RequisitionCorrection.id.desc(),
+            )
+        ).first()
+
+    consumable = db.get(Consumable, requisition.consumable_id, with_for_update=True)
     if consumable is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="流水不存在"
         )
-    stock_before = consumable.current_stock
+    origin_quantity = requisition.quantity
+    origin_user_id = requisition.user_id
+    origin_class_id = requisition.class_id
 
     try:
         claimed = db.execute(
@@ -802,10 +1171,14 @@ def reverse_requisition(
             )
         db.expire(requisition)
 
+        posted_at = business_time.now().replace(microsecond=0)
+        db.refresh(consumable)
+        stock_before = consumable.current_stock
+
         db.execute(
             update(Consumable)
             .where(Consumable.id == requisition.consumable_id)
-            .values(current_stock=Consumable.current_stock + requisition.quantity)
+            .values(current_stock=Consumable.current_stock + origin_quantity)
         )
         db.flush()
         db.refresh(consumable)
@@ -813,19 +1186,122 @@ def reverse_requisition(
 
         reversal = Requisition(
             consumable_id=requisition.consumable_id,
-            user_id=requisition.user_id,
-            quantity=requisition.quantity,
+            user_id=origin_user_id,
+            quantity=origin_quantity,
             stock_after=stock_after,
             type="reversal",
             status="active",
             reversal_of=requisition.id,
             reversal_reason=payload.reason,
-            class_id=requisition.class_id,
-            created_at=business_time.now().replace(microsecond=0),
+            order_no=inventory_ledger.reversal_order_no_for(
+                requisition.id, posted_at
+            ),
+            handler_id=manager.id,
+            handler_name=manager.name,
+            handler_role=manager.role,
+            class_id=origin_class_id,
+            created_at=posted_at,
             remark=payload.remark,
         )
         db.add(reversal)
         db.flush()
+
+        reversal_event = inventory_ledger.append_event(
+            db,
+            consumable=consumable,
+            event_type=inventory_ledger.EVENT_REVERSAL,
+            delta=origin_quantity,
+            stock_before=stock_before,
+            stock_after=stock_after,
+            business_at=posted_at,
+            posted_at=posted_at,
+            source_type=inventory_ledger.SOURCE_REQUISITION_REVERSAL,
+            source_id=requisition.id,
+            requisition_id=reversal.id,
+            operator=manager,
+            unit_snapshot=consumable.unit,
+        )
+
+        reentry: Requisition | None = None
+        reentry_event_id: int | None = None
+        if payload.reentry is not None:
+            if consumable.status != STATUS_ENABLED:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"耗材「{consumable.name}」已停用，无法生成重登单",
+                )
+            reentry_stock_before = consumable.current_stock
+            matched = db.execute(
+                update(Consumable)
+                .where(
+                    Consumable.id == consumable.id,
+                    Consumable.current_stock >= payload.reentry.quantity,
+                    Consumable.status == STATUS_ENABLED,
+                )
+                .values(
+                    current_stock=Consumable.current_stock
+                    - payload.reentry.quantity
+                )
+            )
+            if matched.rowcount == 0:
+                db.flush()
+                db.refresh(consumable)
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=(
+                        f"{consumable.name}库存不足，仅剩 "
+                        f"{consumable.current_stock}{consumable.unit or '件'}"
+                    ),
+                )
+            db.flush()
+            db.refresh(consumable)
+            reentry_stock_after = consumable.current_stock
+            reentry = Requisition(
+                consumable_id=consumable.id,
+                user_id=origin_user_id,
+                quantity=payload.reentry.quantity,
+                stock_after=reentry_stock_after,
+                type="normal",
+                status="active",
+                reentry_of=reversal.id,
+                order_no=inventory_ledger.reentry_order_no_for(
+                    reversal.id, posted_at
+                ),
+                handler_id=manager.id,
+                handler_name=manager.name,
+                handler_role=manager.role,
+                class_id=origin_class_id,
+                created_at=posted_at,
+                remark=payload.reentry.remark,
+            )
+            db.add(reentry)
+            db.flush()
+            reentry_event = inventory_ledger.append_event(
+                db,
+                consumable=consumable,
+                event_type=inventory_ledger.EVENT_REQUISITION,
+                delta=-payload.reentry.quantity,
+                stock_before=reentry_stock_before,
+                stock_after=reentry_stock_after,
+                business_at=posted_at,
+                posted_at=posted_at,
+                source_type=inventory_ledger.SOURCE_REQUISITION_REENTRY,
+                source_id=reentry.id,
+                requisition_id=reentry.id,
+                operator=manager,
+                unit_snapshot=consumable.unit,
+            )
+            reentry_event_id = reentry_event.id
+
+        if correction is not None:
+            correction.status = "accepted"
+            correction.handler_id = manager.id
+            correction.handler_name = manager.name
+            correction.handler_role = manager.role
+            correction.handling_note = payload.remark or payload.reason
+            correction.reversal_id = reversal.id
+            correction.reentry_id = reentry.id if reentry is not None else None
+            correction.handled_at = posted_at
 
         db.add(
             OperationLog(
@@ -846,17 +1322,68 @@ def reverse_requisition(
                     {
                         "requisition_id": requisition.id,
                         "reversal_id": reversal.id,
+                        "reversal_order_no": reversal.order_no,
                         "status": "reversed",
                         "stock_before": stock_before,
                         "stock_after": stock_after,
                         "consumable_id": requisition.consumable_id,
-                        "quantity": requisition.quantity,
+                        "quantity": origin_quantity,
                         "reason": payload.reason,
+                        "event_id": reversal_event.id,
+                        "correction_id": correction.id if correction else None,
+                        "reentry_id": reentry.id if reentry else None,
+                        "reentry_order_no": reentry.order_no if reentry else None,
                     },
                     ensure_ascii=False,
                 ),
             )
         )
+        if reentry is not None:
+            db.add(
+                OperationLog(
+                    operator_id=manager.id,
+                    role=manager.role,
+                    action="requisition_reentry",
+                    target_type="requisition",
+                    target_id=reentry.id,
+                    before_value=None,
+                    after_value=json.dumps(
+                        {
+                            "reentry_id": reentry.id,
+                            "reentry_order_no": reentry.order_no,
+                            "reversal_id": reversal.id,
+                            "origin_requisition_id": requisition.id,
+                            "quantity": reentry.quantity,
+                            "event_id": reentry_event_id,
+                        },
+                        ensure_ascii=False,
+                    ),
+                )
+            )
+        if correction is not None:
+            db.add(
+                OperationLog(
+                    operator_id=manager.id,
+                    role=manager.role,
+                    action="requisition_correction_accept",
+                    target_type="requisition_correction",
+                    target_id=correction.id,
+                    before_value=json.dumps(
+                        {"status": "submitted"}, ensure_ascii=False
+                    ),
+                    after_value=json.dumps(
+                        {
+                            "status": "accepted",
+                            "requisition_id": requisition.id,
+                            "reversal_id": reversal.id,
+                            "reversal_order_no": reversal.order_no,
+                            "reentry_id": reentry.id if reentry else None,
+                            "handling_note": correction.handling_note,
+                        },
+                        ensure_ascii=False,
+                    ),
+                )
+            )
         db.commit()
     except HTTPException:
         db.rollback()
@@ -864,8 +1391,7 @@ def reverse_requisition(
 
     service.clear_cache()
     db.refresh(reversal)
-    db.refresh(consumable)
-    return _record_out(reversal, consumable, db.get(User, reversal.user_id))
+    return _detail_out(db, reversal)
 
 
 @router.get("/{requisition_id}")
@@ -879,31 +1405,8 @@ def get_requisition(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="流水不存在"
         )
-    if current_user.role == "student":
-        if requisition.user_id != current_user.id:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="流水不存在"
-            )
-    elif requisition.class_id != current_user.class_id:
+    if not _can_view_requisition(requisition, current_user):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="流水不存在"
         )
-
-    detail = RequisitionDetailOut(
-        **_record_out(
-            requisition,
-            db.get(Consumable, requisition.consumable_id),
-            db.get(User, requisition.user_id),
-        ).model_dump()
-    )
-
-    if requisition.reversal_of is not None:
-        origin = db.get(Requisition, requisition.reversal_of)
-        if origin is not None:
-            detail.origin = _related_out(origin)
-    reversal = db.scalars(
-        select(Requisition).where(Requisition.reversal_of == requisition.id)
-    ).first()
-    if reversal is not None:
-        detail.reversal = _related_out(reversal)
-    return detail
+    return _detail_out(db, requisition)
