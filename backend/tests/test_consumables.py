@@ -188,13 +188,29 @@ def test_update_rejects_current_stock(admin_client: TestClient) -> None:
     assert "当前库存" in response.text
 
 
-def test_update_duplicate_name_rejected(admin_client: TestClient) -> None:
+def test_update_same_name_different_spec_allowed(admin_client: TestClient) -> None:
     _create_consumable(admin_client, name="焊丝", spec="φ1.2mm")
     other = _create_consumable(admin_client, name="砂纸", spec="240目")
 
     response = admin_client.put(f"{LIST_URL}/{other['id']}", json={"name": "焊丝"})
 
+    assert response.status_code == 200
+    assert response.json()["spec"] == "240目"
+    assert sorted(
+        item["spec"] for item in admin_client.get(LIST_URL).json()
+    ) == ["240目", "φ1.2mm"]
+
+
+def test_update_duplicate_name_and_spec_rejected(admin_client: TestClient) -> None:
+    _create_consumable(admin_client, name="焊丝", spec="φ1.2mm")
+    other = _create_consumable(admin_client, name="砂纸", spec="240目")
+
+    response = admin_client.put(
+        f"{LIST_URL}/{other['id']}", json={"name": "焊丝", "spec": "φ1.2mm"}
+    )
+
     assert response.status_code == 400
+    assert "同名同规格" in response.json()["detail"]
 
 
 def test_update_nonexistent_consumable(admin_client: TestClient) -> None:
