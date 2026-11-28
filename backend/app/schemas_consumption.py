@@ -34,6 +34,42 @@ class ConsumptionSummaryOut(BaseModel):
     provisioning_scope: str
 
 
+TeachingInsightState = Literal[
+    "training_growth",
+    "non_training_growth",
+    "decline",
+    "stable",
+    "no_calendar",
+]
+PositiveFeedbackReason = Literal[
+    "open_incidents",
+    "stock_diff_unavailable",
+    "stock_diff_mismatch",
+    "no_confirmed_handover",
+]
+
+
+class PositiveFeedbackOut(BaseModel):
+    eligible: bool
+    reason: PositiveFeedbackReason | None = None
+    message: str | None = None
+
+
+class TeachingInsightOut(BaseModel):
+    window: int
+    generated_at: datetime
+    class_id: int
+    state: TeachingInsightState
+    message: str
+    calendar_available: bool
+    training_session_count: int
+    current_net_quantity: int
+    previous_net_quantity: int
+    change_quantity: int
+    change_ratio: float | None
+    positive_feedback: PositiveFeedbackOut
+
+
 class AuditEventOut(BaseModel):
     time: datetime
     source: Literal["requisition", "reversal", "restock"]
