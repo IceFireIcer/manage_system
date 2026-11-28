@@ -345,6 +345,7 @@ def role_matrix(db: Session, class_id: int, role: str) -> list[dict]:
                 "effective_enabled": state.allowed and enabled,
                 "toggleable_by_teacher": state.toggleable_by_teacher,
                 "locked": state.locked,
+                "hard_locked": spec.locked,
                 "overridden": overridden,
             }
         )
@@ -444,6 +445,60 @@ def update_class_overrides(
         changed.append(key)
     db.flush()
     return changed
+
+
+def update_role_permission(
+    db: Session,
+    role: str,
+    key: str,
+    *,
+    allowed: bool,
+    default_enabled: bool,
+    toggleable_by_teacher: bool,
+    locked: bool,
+) -> RolePermissionState:
+    """超管编辑角色能力上限/默认开关/可调整项/锁定标志。
+
+    CATALOG 中声明为 locked 的项属于系统级锁定，永不允许解锁（锁定项不可破）。
+    """
+    if role not in MATRIX_ROLES:
+        raise PermissionUpdateError("只能编辑教师、班委、学生的角色矩阵", forbidden=True)
+    spec = PERMISSION_MAP.get(key)
+    if spec is None:
+        raise PermissionUpdateError(f"未知权限项：{key}")
+    if spec.locked and not locked:
+        raise PermissionUpdateError(f"权限项 {key} 为系统锁定项，不可解除锁定", forbidden=True)
+    if spec.locked:
+        locked = True
+    effective_allowed = bool(allowed)
+    effective_default = bool(default_enabled) and effective_allowed
+    effective_toggleable = (
+        bool(toggleable_by_teacher)
+        and effective_allowed
+        and spec.scope == SCOPE_CLASS
+        and not locked
+    )
+    row = db.scalars(
+        select(RolePermission).where(
+            RolePermission.role == role,
+            RolePermission.permission_key == key,
+        )
+    ).first()
+    if row is None:
+        row = RolePermission(role=role, permission_key=key)
+        db.add(row)
+    row.allowed = effective_allowed
+    row.default_enabled = effective_default
+    row.toggleable_by_teacher = effective_toggleable
+    row.locked = locked
+    row.updated_at = business_now()
+    db.flush()
+    return RolePermissionState(
+        allowed=effective_allowed,
+        default_enabled=effective_default,
+        toggleable_by_teacher=effective_toggleable,
+        locked=locked,
+    )
 
 
 def permission_rows_for_seed() -> list[dict]:

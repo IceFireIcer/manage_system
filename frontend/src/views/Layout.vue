@@ -6,15 +6,21 @@ import {
   ArrowDown,
   Bell,
   Box,
+  ChatDotRound,
+  Document,
   Expand,
   Fold,
+  Lock,
+  MagicStick,
   Odometer,
   QuestionFilled,
   Reading,
   School,
+  SetUp,
   Setting,
   Tickets,
   TrendCharts,
+  User,
 } from '@element-plus/icons-vue'
 import { useUserStore } from '../stores/user'
 import { useAlertsStore } from '../stores/alerts'
@@ -26,6 +32,7 @@ const GROUP_META = {
   teaching: { label: '教学计划', icon: Reading, order: 2.5 },
   analysis: { label: '库存分析', icon: TrendCharts, order: 3 },
   daily: { label: '日常管理', icon: Setting, order: 4 },
+  settings: { label: '设置', icon: Setting, order: 5 },
 }
 
 const ROLE_TAG_CLASS = {
@@ -113,6 +120,7 @@ const toggleLabel = computed(() => {
 
 const navGroups = computed(() => {
   const role = effectiveRole.value
+  const permissions = userStore.permissions ?? []
   const groups = new Map()
 
   for (const record of router.getRoutes()) {
@@ -120,9 +128,17 @@ const navGroups = computed(() => {
     if (!nav) continue
     if (nav.group === 'dashboard') continue
     const required = record.meta.permissions
+    const requiredPermission = record.meta.permission
     if (required && !userStore.hasAnyPermission(required)) continue
+    if (
+      requiredPermission &&
+      role !== 'super_admin' &&
+      !permissions.includes(requiredPermission)
+    ) {
+      continue
+    }
     const allowedRoles = record.meta.roles
-    if (!required && allowedRoles && role !== 'super_admin' && !allowedRoles.includes(role)) continue
+    if (!required && !requiredPermission && allowedRoles && role !== 'super_admin' && !allowedRoles.includes(role)) continue
     const groupMeta = GROUP_META[nav.group]
     if (!groupMeta) continue
 

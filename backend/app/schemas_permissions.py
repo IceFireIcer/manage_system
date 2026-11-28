@@ -29,6 +29,7 @@ class PermissionEntryOut(BaseModel):
     effective_enabled: bool
     toggleable_by_teacher: bool
     locked: bool
+    hard_locked: bool = False
     overridden: bool
 
 
@@ -54,3 +55,11 @@ class ClassOverrideUpdateOut(BaseModel):
     role: str
     updated: list[str] = Field(default_factory=list)
     matrix: RoleMatrixOut
+
+class RolePermissionUpdateIn(BaseModel):
+    role: str = Field(min_length=1, max_length=16)
+    permission_key: str = Field(min_length=1, max_length=64)
+    allowed: bool
+    default_enabled: bool
+    toggleable_by_teacher: bool
+    locked: bool
