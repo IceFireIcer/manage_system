@@ -26,7 +26,16 @@ OPERATOR_ROLE = "operator"
 DEFAULT_ACTOR = "校方授权人"
 DEFAULT_ADMIN_NAME = "系统管理员"
 DEFAULT_CLASS_ID = 1
-ROLE_NAMES = {"teacher": "教师", "admin": "班委", "student": "学生"}
+SUPER_ADMIN_ROLE = "super_admin"
+ADMIN_ROLES = ("admin", SUPER_ADMIN_ROLE)
+DEFAULT_SUPER_ADMIN_ACCOUNT = "admin"
+DEFAULT_SUPER_ADMIN_PASSWORD = "admin"
+ROLE_NAMES = {
+    "teacher": "教师",
+    "admin": "班委",
+    "student": "学生",
+    "super_admin": "超级管理员",
+}
 
 
 class ProvisioningError(Exception):
@@ -53,7 +62,9 @@ class HandoverResult:
 
 def bootstrap_state(db: Session) -> BootstrapState:
     enabled_admin = db.scalar(
-        select(User.id).where(User.role == "admin", User.status == "enabled").limit(1)
+        select(User.id)
+        .where(User.role.in_(ADMIN_ROLES), User.status == "enabled")
+        .limit(1)
     )
     if enabled_admin is not None:
         return "ready"
@@ -67,7 +78,7 @@ def enabled_admin_count(db: Session) -> int:
         db.scalar(
             select(func.count())
             .select_from(User)
-            .where(User.role == "admin", User.status == "enabled")
+            .where(User.role.in_(ADMIN_ROLES), User.status == "enabled")
         )
         or 0
     )
@@ -96,10 +107,12 @@ def _validate_name(name: str) -> str:
     return value
 
 
-def _password_for(password: str | None) -> tuple[str, bool]:
+def _password_for(
+    password: str | None, *, min_length: int = MIN_PASSWORD_LENGTH
+) -> tuple[str, bool]:
     if password:
-        if len(password) < MIN_PASSWORD_LENGTH:
-            raise ProvisioningError(f"初始密码至少 {MIN_PASSWORD_LENGTH} 位")
+        if len(password) < min_length:
+            raise ProvisioningError(f"初始密码至少 {min_length} 位")
         return password, False
     return secrets.token_urlsafe(12), True
 
@@ -172,6 +185,7 @@ def _create_account(
     action: str,
     reject_action: str,
     class_id: int = DEFAULT_CLASS_ID,
+    password_min_length: int = MIN_PASSWORD_LENGTH,
 ) -> AccountResult:
     if role not in ROLE_NAMES:
         raise ProvisioningError(f"不支持的账号角色：{role}")
@@ -189,7 +203,7 @@ def _create_account(
             ),
             target=existing,
         )
-    secret, generated = _password_for(password)
+    secret, generated = _password_for(password, min_length=password_min_length)
     user = User(
         account=account_value,
         password_hash=hash_password(secret),
@@ -245,12 +259,13 @@ def bootstrap_initial_admin(
         db,
         account=account,
         name=name,
-        role="admin",
+        role=SUPER_ADMIN_ROLE,
         password=password,
         actor=resolved_actor,
         action="admin_bootstrap",
         reject_action="admin_bootstrap_rejected",
         class_id=class_id,
+        password_min_length=1,
     )
 
 
@@ -424,7 +439,7 @@ def recover_admin(
             class_id=class_id,
         )
 
-    if existing.role != "admin":
+    if existing.role not in ADMIN_ROLES:
         _reject(
             db,
             action=reject_action,

@@ -884,3 +884,11 @@ def _fill_operation_log_snapshot(_mapper, _connection, log: OperationLog) -> Non
     log.operator_name = operator.name
     if log.operator_account is None:
         log.operator_account = operator.account
+
+class SystemSetting(Base):
+    __tablename__ = "system_settings"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)

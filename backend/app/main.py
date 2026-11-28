@@ -28,6 +28,7 @@ from app.routers import (
     logs,
     ops,
     requisitions,
+    setup,
     users,
 )
 from app.security import host_is_allowed, resolve_forwarded_scheme
@@ -141,6 +142,7 @@ def create_app() -> FastAPI:
 
     app.include_router(auth.router)
     app.include_router(bootstrap.router)
+    app.include_router(setup.router)
     app.include_router(users.router)
     app.include_router(consumables.router)
     app.include_router(courses.router)

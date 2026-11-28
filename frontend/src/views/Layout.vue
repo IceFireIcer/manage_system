@@ -31,12 +31,14 @@ const ROLE_TAG_CLASS = {
   teacher: 'role-tag--teacher',
   admin: 'role-tag--admin',
   student: 'role-tag--student',
+  super_admin: 'role-tag--admin',
 }
 
 const ROLE_LABEL = {
   teacher: '教师',
   admin: '班委',
   student: '学生',
+  super_admin: '超级管理员',
 }
 
 const userInitial = computed(() => {
@@ -69,7 +71,9 @@ const userTriggerRef = ref(null)
 const mainRef = ref(null)
 
 const isMobile = computed(() => viewportWidth.value < 768)
-const canSeeAlerts = computed(() => ['teacher', 'admin'].includes(userStore.user?.role))
+const canSeeAlerts = computed(() =>
+  ['teacher', 'admin', 'super_admin'].includes(userStore.user?.role),
+)
 
 const currentTitle = computed(() => {
   const nav = route.meta?.nav
@@ -102,7 +106,7 @@ const navGroups = computed(() => {
     if (!nav) continue
     if (nav.group === 'dashboard') continue
     const allowedRoles = record.meta.roles
-    if (allowedRoles && !allowedRoles.includes(role)) continue
+    if (allowedRoles && role !== 'super_admin' && !allowedRoles.includes(role)) continue
     const groupMeta = GROUP_META[nav.group]
     if (!groupMeta) continue
 
