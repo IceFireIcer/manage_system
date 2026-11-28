@@ -4,7 +4,13 @@ on:
   push:
     branches:
       - "**"
+    tags:
+      - "v*"
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -12,6 +18,7 @@ concurrency:
 
 env:
   TZ: Asia/Shanghai
+  REGISTRY: ghcr.io
 
 jobs:
   backend:
@@ -51,3 +58,160 @@ jobs:
         run: npm ci
       - name: Build
         run: npm run build
+
+  gate:
+    name: ci-gate
+    needs:
+      - backend
+      - frontend
+    if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Record this run's CI result
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh run view "$GITHUB_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json databaseId,headSha,event,createdAt,url,jobs \
+            > run.json
+          jq --arg sha "$GITHUB_SHA" '
+            ([.jobs[]
+              | select(.name == "backend pytest + ruff" or .name == "frontend build")
+              | .conclusion] as $conclusions
+             | [{
+                 databaseId: .databaseId,
+                 headSha: $sha,
+                 status: "completed",
+                 conclusion: (
+                   if ($conclusions | length) == 2 and ($conclusions | all(. == "success"))
+                   then "success"
+                   else "failure"
+                   end
+                 ),
+                 event: .event,
+                 url: .url,
+                 createdAt: .createdAt
+               }])
+          ' run.json > ci-runs.json
+          python3 scripts/ci/release_gate.py \
+            --ci-only \
+            --commit "$GITHUB_SHA" \
+            --ci-summary ci-runs.json \
+            --output ci-gate.json
+      - name: Upload CI gate record
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-gate
+          path: |
+            ci-runs.json
+            ci-gate.json
+
+  publish:
+    name: publish ${{ matrix.image }}
+    needs: gate
+    if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: labstock-api
+            context: ./backend
+          - image: labstock-web
+            context: ./frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Compute tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/icefireicer/${{ matrix.image }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,format=short
+            type=ref,event=tag
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+
+  release:
+    name: release-gate
+    needs: publish
+    if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: ci-gate
+      - uses: docker/setup-buildx-action@v3
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Collect image digests
+        run: |
+          set -euo pipefail
+          TAG="sha-${GITHUB_SHA::7}"
+          : > images.ndjson
+          for name in labstock-api labstock-web; do
+            image="${REGISTRY}/icefireicer/${name}:${TAG}"
+            digest="$(docker buildx imagetools inspect "$image" | awk '/^Digest:/{print $2; exit}')"
+            jq -n \
+              --arg name "$name" \
+              --arg tag "$TAG" \
+              --arg digest "$digest" \
+              --arg revision "$GITHUB_SHA" \
+              '{name:$name,tag:$tag,digest:$digest,revision:$revision}' \
+              >> images.ndjson
+          done
+          jq -s '.' images.ndjson > images.json
+          cat images.json
+      - name: Verify same-commit CI and both images
+        run: |
+          set -euo pipefail
+          TAG="sha-${GITHUB_SHA::7}"
+          python3 scripts/ci/release_gate.py \
+            --commit "$GITHUB_SHA" \
+            --tag "$TAG" \
+            --ci-summary ci-runs.json \
+            --images images.json \
+            --output release-manifest.json
+      - name: Upload release record
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-manifest-${{ github.sha }}
+          path: |
+            release-manifest.json
+            images.json
+            ci-runs.json
+          if-no-files-found: warn

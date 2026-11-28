@@ -16,6 +16,8 @@
 > 原 PRD（`prd-classroom-training-consumables-system.md`，v1.1）描述系统"要做什么"，本文件描述系统"距离真实班级可用还缺什么、按什么顺序补齐、补齐到什么程度算完成"。本文件不修改、不覆盖原 PRD；两份文档冲突时，涉及修复与补充范围的以本文件为准，其余仍以原 PRD 为准。
 >
 > 本文件中的 54 项需求均来自 2026-11-27 的代码与文档审评，逐条保留原审评编号（A01、C01 等）与可核对验收条件，便于回溯、排期与测试。
+>
+> **CI 流程更新（2026-11-28）**：原 PRD/SPEC 中的“双工作流”已合并为单一 `.github/workflows/ci.yml`，执行顺序为 `backend + frontend → ci-gate → publish → release-gate`；原 PRD/SPEC 文本保留不改，以本节与 `README.md`、`docs/deploy.md` 第 13 节为准。
 
 ---
 

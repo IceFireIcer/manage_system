@@ -7,6 +7,8 @@
 - **镜像构建与发布**：`.github/workflows/docker-publish.yml` 在 push 到 `main`、推送 `v*` 标签与手动触发时，用 Buildx 构建并推送 `ghcr.io/icefireicer/labstock-api` 与 `ghcr.io/icefireicer/labstock-web`，标签为 `latest`（仅默认分支）、`sha-<short>`，版本标签推送时附加版本号
 - **服务器部署**：`docker compose pull` 拉取 GHCR 镜像后启动；本地自行构建保留为 `--build` 备用路径
 
+> **2026-11-28 更新**：镜像发布已并入 `.github/workflows/ci.yml`，job 依赖为 `backend + frontend → ci-gate → publish → release-gate`；不再使用独立的 `docker-publish.yml`，也不再轮询 CI。镜像构建方式、标签策略与服务器拉取方式不变。
+
 **Considered Options**: 保留 CodeArts 流水线 + SWR（需在平台内维护流水线与凭据，托管平台已切换）；继续依赖 AtomGit Issue API 自动化（关闭接口不可用，字段与编码坑多）；自建 GitLab 与 Runner（运维成本与项目规模不匹配）；只跑 CI 不发布镜像（服务器仍需本地构建，部署时间与构建依赖无法收敛）；Docker Hub 托管镜像（GHCR 与仓库权限、`GITHUB_TOKEN` 原生集成，无需额外 secret）。
 
 **Consequences**: ADR-0004 中 CodeArts 流水线、SWR 镜像仓库与 AtomGit 托管的表述由本 ADR 取代，历史 ADR 保持原样；仓库默认分支须为 `main`，否则 `latest` 标签不会生成；GHCR 包默认私有，公开拉取需在 GitHub Packages 调整可见性，服务器拉取私有包需用带 `read:packages` 的 PAT 登录；`scripts/ci/stage3-image-publish.sh` 降级为手动或其他平台备用；本机访问 GitHub 需代理 `HTTPS_PROXY=http://127.0.0.1:7890`，仓库级 git 代理已配置。

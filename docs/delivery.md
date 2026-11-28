@@ -124,7 +124,7 @@ manage_system/
 │  ├─ adr/                 # 架构决策记录
 │  └─ agents/              # 仓库协作说明
 ├─ scripts/                # 本地零 Docker 启动脚本、CI 三阶段脚本
-├─ .github/workflows/      # GitHub Actions：ci.yml、docker-publish.yml
+├─ .github/workflows/      # GitHub Actions：ci.yml（CI → Docker → Release）
 ├─ docker-compose.yml
 ├─ docker-compose.build.yml  # 仅本地开发构建用，服务器部署不使用
 └─ README.md

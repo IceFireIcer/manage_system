@@ -16,7 +16,7 @@ usage() {
                   ghcr.io 需先 docker login ghcr.io（私有包用带 read:packages 的 GitHub PAT）
   IMAGE_TAG       必填，镜像版本标签，例如 v20261127-1（不要使用 latest 做回滚依据）
 
-说明：GitHub Actions（.github/workflows/docker-publish.yml）已在 main 与 v* 标签推送时原生构建并推送
+说明：GitHub Actions（.github/workflows/ci.yml 的 publish job）已在 main 与 v* 标签推送时原生构建并推送
       ghcr.io/icefireicer/labstock-api 与 ghcr.io/icefireicer/labstock-web；
       本脚本保留为手动发布或其他 CI 平台的备用路径。
 EOF

@@ -733,19 +733,31 @@ docker inspect --format '{{json .State.Health}}' "$(docker compose ps -q backend
 
 ## 13. GitHub Actions 与 GHCR 镜像发布
 
-仓库内置两条 GitHub Actions 工作流，推送到 GitHub 后自动运行，无需在服务器或平台侧搭建流水线。
+仓库内置一条 GitHub Actions 工作流（`.github/workflows/ci.yml`），按 job 依赖顺序执行，推送到 GitHub 后自动运行，无需在服务器或平台侧搭建流水线。
 
-### 13.1 CI（.github/workflows/ci.yml）
+```mermaid
+flowchart LR
+  B[backend pytest + ruff] --> G[ci-gate]
+  F[frontend build] --> G
+  G --> P1[publish labstock-api]
+  G --> P2[publish labstock-web]
+  P1 --> R[release-gate]
+  P2 --> R
+```
 
-- 触发：`push`（所有分支）与 `pull_request`
+### 13.1 代码检查（ci.yml 的 backend / frontend）
+
+- 触发：`push`（所有分支与 `v*` 标签）、`pull_request`、`workflow_dispatch`
 - `backend` job：Python 3.12，`pip install -r backend/requirements.txt` → `pytest -q` → `ruff check .`
 - `frontend` job：Node 22，`npm ci` → `npm run build`
+- 两个检查 job 并行执行；任一失败，后续 `ci-gate`、`publish`、`release` 都不会启动
 - 同一 ref 的新推送会取消旧运行（`concurrency.cancel-in-progress`）
 
-### 13.2 镜像发布（.github/workflows/docker-publish.yml）
+### 13.2 镜像发布（ci.yml 的 gate → publish → release）
 
-- 触发：push 到 `main`、推送 `v*` 标签、`workflow_dispatch`
-- 权限：`contents: read`、`packages: write`；用 `GITHUB_TOKEN` 登录 `ghcr.io`，无需额外 secret
+- 仅在 `ci-gate` 成功后串行执行；`ci-gate` 依赖 `backend` 与 `frontend` 同时成功，不与其他工作流并行
+- 触发：push 到 `main`、推送 `v*` 标签、在 `main` 或 `v*` 标签上手动 `workflow_dispatch`；其他分支与 PR 只跑代码检查
+- 权限：`publish` job 使用 `contents: read`、`packages: write`，用 `GITHUB_TOKEN` 登录 `ghcr.io`，无需额外 secret
 - 构建上下文：`backend/` → `ghcr.io/icefireicer/labstock-api`；`frontend/` → `ghcr.io/icefireicer/labstock-web`
 - 标签：`latest`（仅默认分支 `main`）、`sha-<short>`（每次提交）；推送 `v*` 时附加版本标签
 - 使用 Buildx + GitHub Actions 缓存，重复构建更快
@@ -817,11 +829,11 @@ docker compose -f docker-compose.yml -f docker-compose.demo.yml exec backend \
 
 ### 13.6 同提交 CI 与镜像门禁
 
-`docker-publish.yml` 在发布前等待同一提交的 `ci.yml` 成功，并在两份镜像推送后复核 digest：
+`ci.yml` 内的 job 依赖保证只有同一提交的代码检查成功后才构建镜像：
 
-1. `gate` job 轮询 `gh run list --workflow ci.yml --commit <SHA>`，只有该提交最新 CI 结论为 `success` 才进入构建
-2. `publish` job 推送 `labstock-api` 与 `labstock-web`，标签包含 `sha-<short>`
-3. `release` job 读取两份镜像 digest，调用 `scripts/ci/release_gate.py`；只有 CI 成功、两个镜像齐全且标签与提交一致时 `deployable` 才为 `true`
+1. `ci-gate` 依赖 `backend` 与 `frontend`；两者都成功后，读取当前 run 的 job 结论并生成 `ci-runs.json`
+2. `publish` 依赖 `ci-gate`，推送 `labstock-api` 与 `labstock-web`，标签包含 `sha-<short>`
+3. `release` 依赖 `publish`，下载 `ci-gate` artifact，读取两份镜像 digest 并调用 `scripts/ci/release_gate.py`；只有 CI 成功、两个镜像齐全且标签与提交一致时 `deployable` 才为 `true`
 4. `release-manifest.json` 作为 artifact 归档，记录提交、CI run、两份镜像 digest 与时间
 
 手工复核：
@@ -862,7 +874,7 @@ bash scripts/acceptance/run-mysql-concurrency.sh
 - [ ] 安全组仅放行 22 / 4900（或自定义端口），不暴露 3306 / 8000
 - [ ] 已按 11.3.1 配置每日备份与保留期，备份写入独立副本并完成一次隔离库恢复演练（11.3.3）
 - [ ] GHCR 包可见性已确认：公开拉取，或服务器已用带 `read:packages` 的 PAT 登录
-- [ ] GitHub Actions（`ci.yml`、`docker-publish.yml`）在 `main` 上通过，GHCR 存在可用 `sha-<short>` 或 `v*` 标签
+- [ ] GitHub Actions（`ci.yml`）在 `main` 上通过，GHCR 存在可用 `sha-<short>` 或 `v*` 标签
 - [ ] 同一提交的 CI 成功，两个镜像 digest 已记录，`release-manifest.json` 中 `deployable=true`
 - [ ] 演示数据只存在于隔离演示库，正式库无演示耗材与演示账号
 - [ ] 真实 MySQL 并发记录与三角色浏览器验收记录已归档（见 `docs/acceptance/`）

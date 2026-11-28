@@ -183,7 +183,7 @@ manage_system/
 │  ├─ adr/                 # 架构决策记录
 │  └─ agents/              # 仓库协作说明
 ├─ scripts/                # 本地零 Docker 启动脚本、CI 三阶段脚本
-├─ .github/workflows/      # GitHub Actions：ci.yml、docker-publish.yml
+├─ .github/workflows/      # GitHub Actions：ci.yml（CI → Docker → Release）
 ├─ docker-compose.yml
 ├─ docker-compose.build.yml   # 仅本地开发构建用，服务器部署不使用
 ├─ .env.example
@@ -208,9 +208,22 @@ cd frontend && npm run build
 ## 部署与流水线
 
 - 云端部署、迁移、健康检查、日常运维、备份恢复、升级回滚、故障排查：[docs/deploy.md](docs/deploy.md)
-- GitHub Actions 工作流位于 `.github/workflows/`：
-  - `ci.yml`：push 与 pull_request 触发，后端 `pytest -q` + `ruff check .`，前端 `npm ci` + `npm run build`
-  - `docker-publish.yml`：push 到 `main`、推送 `v*` 标签或手动触发时，构建并推送 `ghcr.io/icefireicer/labstock-api` 与 `ghcr.io/icefireicer/labstock-web`，标签为 `latest`、`sha-<short>`，版本标签推送时附加版本号
+- GitHub Actions 工作流位于 `.github/workflows/ci.yml`，按固定依赖顺序执行。
+
+```mermaid
+flowchart LR
+  B[backend pytest + ruff] --> G[ci-gate]
+  F[frontend build] --> G
+  G --> P1[publish labstock-api]
+  G --> P2[publish labstock-web]
+  P1 --> R[release-gate]
+  P2 --> R
+```
+
+- `backend` 与 `frontend` 并行执行代码检查；两者全部成功后才会进入镜像构建
+- `ci-gate`：固化同一 run 的 CI 结论，生成 `ci-runs.json`
+- `publish`：仅 push 到 `main`、推送 `v*` 标签或手动触发时执行，构建并推送 `ghcr.io/icefireicer/labstock-api` 与 `ghcr.io/icefireicer/labstock-web`，标签为 `latest`、`sha-<short>`，版本标签推送时附加版本号
+- `release-gate`：复核两份镜像 digest，输出 `release-manifest.json`
 - `scripts/ci/` 三阶段脚本保留为手动执行或其他 CI 平台（Jenkins / GitLab CI 等）的备用路径
 
 ## 安全与运维要点
