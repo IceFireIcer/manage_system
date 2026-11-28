@@ -224,6 +224,7 @@ flowchart LR
 - `ci-gate`：固化同一 run 的 CI 结论，生成 `ci-runs.json`
 - `publish`：仅 push 到 `main`、推送 `v*` 标签或手动触发时执行，构建并推送 `ghcr.io/icefireicer/labstock-api` 与 `ghcr.io/icefireicer/labstock-web`，标签为 `latest`、`sha-<short>`，版本标签推送时附加版本号
 - `release-gate`：复核两份镜像 digest，输出 `release-manifest.json`
+- 已通过检查后复跑发布链：`gh workflow run ci.yml --ref main -f skip_checks=true`，跳过前后端检查，仅执行 `ci-gate → publish → release`
 - `scripts/ci/` 三阶段脚本保留为手动执行或其他 CI 平台（Jenkins / GitLab CI 等）的备用路径
 
 ## 安全与运维要点

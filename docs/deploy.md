@@ -761,6 +761,7 @@ flowchart LR
 - 构建上下文：`backend/` → `ghcr.io/icefireicer/labstock-api`；`frontend/` → `ghcr.io/icefireicer/labstock-web`
 - 标签：`latest`（仅默认分支 `main`）、`sha-<short>`（每次提交）；推送 `v*` 时附加版本标签
 - 使用 Buildx + GitHub Actions 缓存，重复构建更快
+- 复跑发布链：`gh workflow run ci.yml --ref main -f skip_checks=true` 会跳过已通过的 `backend` / `frontend`，仅执行 `ci-gate → publish → release`；该输入只用于已通过检查后的调试或复跑，正常发布保持默认 `false`
 
 推送发布版本：
 
