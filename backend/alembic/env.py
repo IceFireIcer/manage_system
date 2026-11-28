@@ -6,6 +6,10 @@ from app.database import Base
 from app.models import (  # noqa: F401
     Consumable,
     ConsumableImportBatch,
+    Course,
+    CourseRecipeItem,
+    CourseRecipeSnapshot,
+    CourseSession,
     InventoryEvent,
     OperationLog,
     Requisition,

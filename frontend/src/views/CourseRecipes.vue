@@ -1,0 +1,1056 @@
+<script setup>
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { ElMessage } from 'element-plus'
+import api from '../api'
+import PageHeader from '../components/PageHeader.vue'
+import EmptyState from '../components/EmptyState.vue'
+
+const PAGE_SIZE = 9
+const SESSION_PAGE_SIZE = 10
+const MAX_RECIPE_ITEMS = 3
+
+const SESSION_STATUS = {
+  planned: { label: '待上课', tag: 'status-tag--info' },
+  completed: { label: '已完成', tag: 'status-tag--success' },
+  cancelled: { label: '已取消', tag: 'status-tag--neutral' },
+}
+
+const courses = ref([])
+const total = ref(0)
+const page = ref(1)
+const loading = ref(false)
+const hasLoaded = ref(false)
+const failed = ref(false)
+const statusFilter = ref('enabled')
+const keywordDraft = ref('')
+const keyword = ref('')
+
+const viewportWidth = ref(window.innerWidth)
+const drawerSize = computed(() =>
+  viewportWidth.value < 768 ? '100%' : '560px',
+)
+
+const courseDialogVisible = ref(false)
+const courseSaving = ref(false)
+const courseError = ref('')
+const courseFormRef = ref()
+const editingCourse = ref(null)
+const courseForm = reactive({
+  name: '',
+  class_label: '',
+  semester: '',
+  status: 'enabled',
+})
+
+const courseRules = {
+  name: [{ required: true, message: '请输入课程名称', trigger: 'blur' }],
+  class_label: [{ required: true, message: '请输入班级标签', trigger: 'blur' }],
+  semester: [{ required: true, message: '请输入学期', trigger: 'blur' }],
+}
+
+const activeCourse = ref(null)
+
+const sessionDrawerOpen = ref(false)
+const sessions = ref([])
+const sessionTotal = ref(0)
+const sessionPage = ref(1)
+const sessionsLoading = ref(false)
+const sessionError = ref('')
+const sessionDialogVisible = ref(false)
+const sessionSaving = ref(false)
+const sessionDialogError = ref('')
+const editingSession = ref(null)
+const sessionForm = reactive({
+  seq: 1,
+  session_date: '',
+  headcount: 30,
+  class_label: '',
+  status: 'planned',
+})
+
+const recipeDrawerOpen = ref(false)
+const recipeLoading = ref(false)
+const recipeSaving = ref(false)
+const recipeError = ref('')
+const recipeItems = ref([])
+const currentRecipe = ref(null)
+const consumables = ref([])
+const consumablesLoaded = ref(false)
+
+const consumableOptions = computed(() =>
+  consumables.value.map((item) => ({
+    ...item,
+    label: item.spec ? `${item.name} / ${item.spec}` : item.name,
+  })),
+)
+
+const isEmpty = computed(() => hasLoaded.value && !courses.value.length)
+
+function errorMessage(error, fallback) {
+  if (!error?.response) return '暂未确认提交结果，请刷新后核对'
+  const detail = error.response?.data?.detail
+  if (Array.isArray(detail)) {
+    const messages = detail.map((item) => item?.msg).filter(Boolean)
+    return messages.length ? messages.join('；') : fallback
+  }
+  if (detail && typeof detail === 'object') {
+    return detail.message || fallback
+  }
+  if (detail) return String(detail)
+  return fallback
+}
+
+async function fetchCourses() {
+  loading.value = true
+  try {
+    const { data } = await api.get('/courses', {
+      params: {
+        page: page.value,
+        page_size: PAGE_SIZE,
+        status: statusFilter.value,
+        keyword: keyword.value || undefined,
+      },
+    })
+    courses.value = data.items ?? []
+    total.value = data.total ?? 0
+    hasLoaded.value = true
+    failed.value = false
+  } catch {
+    failed.value = true
+  } finally {
+    loading.value = false
+  }
+}
+
+function applySearch() {
+  keyword.value = keywordDraft.value.trim()
+  page.value = 1
+  fetchCourses()
+}
+
+function clearFilters() {
+  keywordDraft.value = ''
+  keyword.value = ''
+  statusFilter.value = 'enabled'
+  page.value = 1
+  fetchCourses()
+}
+
+function handleStatusChange() {
+  page.value = 1
+  fetchCourses()
+}
+
+function handlePageChange(value) {
+  page.value = value
+  fetchCourses()
+}
+
+function resetCourseForm() {
+  Object.assign(courseForm, {
+    name: '',
+    class_label: '',
+    semester: '',
+    status: 'enabled',
+  })
+}
+
+function openCreateCourse() {
+  editingCourse.value = null
+  resetCourseForm()
+  courseError.value = ''
+  courseDialogVisible.value = true
+}
+
+function openEditCourse(course) {
+  editingCourse.value = course
+  Object.assign(courseForm, {
+    name: course.name,
+    class_label: course.class_label,
+    semester: course.semester,
+    status: course.status,
+  })
+  courseError.value = ''
+  courseDialogVisible.value = true
+}
+
+async function submitCourse() {
+  if (courseSaving.value) return
+  const valid = await courseFormRef.value?.validate().catch(() => false)
+  if (!valid) return
+  courseSaving.value = true
+  courseError.value = ''
+  const payload = {
+    name: courseForm.name.trim(),
+    class_label: courseForm.class_label.trim(),
+    semester: courseForm.semester.trim(),
+  }
+  try {
+    if (editingCourse.value) {
+      await api.put(`/courses/${editingCourse.value.id}`, {
+        ...payload,
+        status: courseForm.status,
+        expected_version: editingCourse.value.version,
+      })
+    } else {
+      await api.post('/courses', payload)
+    }
+    courseDialogVisible.value = false
+    ElMessage.success(editingCourse.value ? '课程已更新' : '课程已创建')
+    await fetchCourses()
+  } catch (error) {
+    courseError.value = errorMessage(error, '保存失败，请稍后重试')
+  } finally {
+    courseSaving.value = false
+  }
+}
+
+function todayValue() {
+  const now = new Date()
+  const pad = (value) => String(value).padStart(2, '0')
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`
+}
+
+function sessionStatusLabel(status) {
+  return SESSION_STATUS[status]?.label ?? status
+}
+
+function sessionStatusTag(status) {
+  return SESSION_STATUS[status]?.tag ?? 'status-tag--neutral'
+}
+
+async function fetchSessions() {
+  if (!activeCourse.value) return
+  sessionsLoading.value = true
+  sessionError.value = ''
+  try {
+    const { data } = await api.get(
+      `/courses/${activeCourse.value.id}/sessions`,
+      { params: { page: sessionPage.value, page_size: SESSION_PAGE_SIZE } },
+    )
+    sessions.value = data.items ?? []
+    sessionTotal.value = data.total ?? 0
+  } catch (error) {
+    sessionError.value = errorMessage(error, '课次读取失败，请稍后重试')
+  } finally {
+    sessionsLoading.value = false
+  }
+}
+
+function openSessions(course) {
+  activeCourse.value = course
+  sessionPage.value = 1
+  sessionDrawerOpen.value = true
+  fetchSessions()
+}
+
+function openCreateSession() {
+  editingSession.value = null
+  Object.assign(sessionForm, {
+    seq: sessionTotal.value + 1,
+    session_date: todayValue(),
+    headcount: 30,
+    class_label: activeCourse.value?.class_label ?? '',
+    status: 'planned',
+  })
+  sessionDialogError.value = ''
+  sessionDialogVisible.value = true
+}
+
+function openEditSession(session) {
+  editingSession.value = session
+  Object.assign(sessionForm, {
+    seq: session.seq,
+    session_date: session.session_date,
+    headcount: session.headcount,
+    class_label: session.class_label,
+    status: session.status,
+  })
+  sessionDialogError.value = ''
+  sessionDialogVisible.value = true
+}
+
+async function submitSession() {
+  if (sessionSaving.value) return
+  if (!sessionForm.session_date) {
+    sessionDialogError.value = '请选择上课日期'
+    return
+  }
+  sessionSaving.value = true
+  sessionDialogError.value = ''
+  const payload = {
+    seq: Number(sessionForm.seq),
+    session_date: sessionForm.session_date,
+    headcount: Number(sessionForm.headcount),
+    class_label: sessionForm.class_label.trim(),
+    status: sessionForm.status,
+  }
+  try {
+    if (editingSession.value) {
+      await api.put(
+        `/courses/${activeCourse.value.id}/sessions/${editingSession.value.id}`,
+        payload,
+      )
+    } else {
+      await api.post(`/courses/${activeCourse.value.id}/sessions`, payload)
+    }
+    sessionDialogVisible.value = false
+    ElMessage.success(editingSession.value ? '课次已更新' : '课次已创建')
+    await fetchSessions()
+    await fetchCourses()
+  } catch (error) {
+    sessionDialogError.value = errorMessage(error, '保存失败，请稍后重试')
+  } finally {
+    sessionSaving.value = false
+  }
+}
+
+function handleSessionPageChange(value) {
+  sessionPage.value = value
+  fetchSessions()
+}
+
+async function loadConsumables() {
+  if (consumablesLoaded.value) return
+  const { data } = await api.get('/consumables', {
+    params: { status: 'enabled' },
+  })
+  consumables.value = Array.isArray(data) ? data : []
+  consumablesLoaded.value = true
+}
+
+function emptyRecipeItem() {
+  return { consumable_id: null, quantity_per_person: 1 }
+}
+
+async function fetchRecipe() {
+  if (!activeCourse.value) return
+  recipeLoading.value = true
+  recipeError.value = ''
+  try {
+    const { data } = await api.get(
+      `/courses/${activeCourse.value.id}/recipes/current`,
+    )
+    currentRecipe.value = data.configured ? data.snapshot : null
+    recipeItems.value = data.configured
+      ? data.snapshot.items.map((item) => ({
+          consumable_id: item.consumable_id,
+          quantity_per_person: item.quantity_per_person,
+        }))
+      : [emptyRecipeItem()]
+  } catch (error) {
+    recipeError.value = errorMessage(error, '配方读取失败，请稍后重试')
+  } finally {
+    recipeLoading.value = false
+  }
+}
+
+async function openRecipe(course) {
+  activeCourse.value = course
+  recipeDrawerOpen.value = true
+  recipeItems.value = [emptyRecipeItem()]
+  currentRecipe.value = null
+  try {
+    await loadConsumables()
+  } catch {
+    recipeError.value = '耗材列表读取失败，请稍后重试'
+  }
+  await fetchRecipe()
+}
+
+function unitOf(consumableId) {
+  const found = consumables.value.find((item) => item.id === consumableId)
+  return found?.unit ?? ''
+}
+
+function addRecipeItem() {
+  if (recipeItems.value.length >= MAX_RECIPE_ITEMS) return
+  recipeItems.value.push(emptyRecipeItem())
+}
+
+function removeRecipeItem(index) {
+  recipeItems.value.splice(index, 1)
+  if (!recipeItems.value.length) recipeItems.value.push(emptyRecipeItem())
+}
+
+async function saveRecipe() {
+  if (recipeSaving.value) return
+  recipeError.value = ''
+  const filled = recipeItems.value.filter((item) => item.consumable_id)
+  if (!filled.length) {
+    recipeError.value = '请至少选择一种耗材'
+    return
+  }
+  const ids = filled.map((item) => item.consumable_id)
+  if (new Set(ids).size !== ids.length) {
+    recipeError.value = '配方中耗材不可重复'
+    return
+  }
+  recipeSaving.value = true
+  try {
+    await api.post(`/courses/${activeCourse.value.id}/recipes`, {
+      items: filled.map((item) => ({
+        consumable_id: item.consumable_id,
+        quantity_per_person: Number(item.quantity_per_person),
+        unit: unitOf(item.consumable_id),
+      })),
+    })
+    ElMessage.success('已保存配方快照')
+    await fetchRecipe()
+    await fetchCourses()
+  } catch (error) {
+    recipeError.value = errorMessage(error, '保存失败，请稍后重试')
+  } finally {
+    recipeSaving.value = false
+  }
+}
+
+function handleResize() {
+  viewportWidth.value = window.innerWidth
+}
+
+onMounted(() => {
+  window.addEventListener('resize', handleResize)
+  fetchCourses()
+})
+
+onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
+</script>
+
+<template>
+  <div class="courses">
+    <PageHeader title="课程配方" :breadcrumb="['教学计划', '课程配方']">
+      <template #actions>
+        <el-button type="primary" @click="openCreateCourse">新增课程</el-button>
+      </template>
+    </PageHeader>
+
+    <div class="courses__toolbar panel">
+      <el-radio-group
+        v-model="statusFilter"
+        class="courses__segment"
+        aria-label="课程状态"
+        @change="handleStatusChange"
+      >
+        <el-radio-button value="enabled">启用中</el-radio-button>
+        <el-radio-button value="disabled">已停用</el-radio-button>
+        <el-radio-button value="all">全部</el-radio-button>
+      </el-radio-group>
+      <div class="courses__search">
+        <el-input
+          v-model="keywordDraft"
+          class="courses__search-input"
+          placeholder="搜索课程、班级或学期"
+          maxlength="64"
+          clearable
+          aria-label="搜索课程"
+          @keyup.enter="applySearch"
+          @clear="applySearch"
+        />
+        <el-button @click="applySearch">查询</el-button>
+      </div>
+      <el-button text class="courses__refresh" :loading="loading" @click="fetchCourses">
+        刷新
+      </el-button>
+    </div>
+
+    <div v-if="!hasLoaded" class="courses__placeholder panel" :aria-busy="!failed">
+      <el-skeleton v-if="!failed" :rows="4" animated />
+      <div v-else class="courses__error" role="alert">
+        <p class="courses__error-title">课程读取失败</p>
+        <el-button @click="fetchCourses">重试</el-button>
+      </div>
+    </div>
+
+    <template v-else>
+      <EmptyState
+        v-if="isEmpty"
+        title="还没有课程"
+        description="先创建课程，再维护课次与配方。"
+      >
+        <template #action>
+          <el-button v-if="keyword || statusFilter !== 'enabled'" @click="clearFilters">
+            清除筛选
+          </el-button>
+          <el-button type="primary" @click="openCreateCourse">新增课程</el-button>
+        </template>
+      </EmptyState>
+
+      <div v-else class="courses__grid">
+        <article v-for="course in courses" :key="course.id" class="course-card panel">
+          <header class="course-card__head">
+            <div class="course-card__title">
+              <h2>{{ course.name }}</h2>
+              <p>{{ course.class_label || '未填班级' }} · {{ course.semester || '未填学期' }}</p>
+            </div>
+            <span
+              class="status-tag"
+              :class="course.status === 'enabled' ? 'status-tag--success' : 'status-tag--neutral'"
+            >
+              {{ course.status === 'enabled' ? '启用' : '停用' }}
+            </span>
+          </header>
+          <dl class="course-card__meta">
+            <div>
+              <dt>课次</dt>
+              <dd>{{ course.session_count }}</dd>
+            </div>
+            <div>
+              <dt>配方</dt>
+              <dd>{{ course.recipe_version ? `v${course.recipe_version}` : '未配置' }}</dd>
+            </div>
+            <div>
+              <dt>创建人</dt>
+              <dd>{{ course.created_by_name }}</dd>
+            </div>
+          </dl>
+          <footer class="course-card__actions">
+            <el-button size="small" @click="openSessions(course)">课次</el-button>
+            <el-button size="small" @click="openRecipe(course)">配方</el-button>
+            <el-button size="small" text type="primary" @click="openEditCourse(course)">
+              编辑
+            </el-button>
+          </footer>
+        </article>
+      </div>
+
+      <div v-if="total > PAGE_SIZE" class="courses__pagination">
+        <el-pagination
+          layout="prev, pager, next"
+          :total="total"
+          :page-size="PAGE_SIZE"
+          :current-page="page"
+          background
+          @current-change="handlePageChange"
+        />
+      </div>
+    </template>
+
+    <el-dialog
+      v-model="courseDialogVisible"
+      :title="editingCourse ? '编辑课程' : '新增课程'"
+      :width="viewportWidth < 560 ? `${viewportWidth - 32}px` : '480px'"
+      :close-on-click-modal="false"
+      destroy-on-close
+    >
+      <el-alert
+        v-if="courseError"
+        type="error"
+        :closable="false"
+        show-icon
+        :title="courseError"
+        class="courses__alert"
+      />
+      <el-form
+        ref="courseFormRef"
+        :model="courseForm"
+        :rules="courseRules"
+        label-position="top"
+        @submit.prevent="submitCourse"
+      >
+        <el-form-item label="课程名称" prop="name">
+          <el-input v-model="courseForm.name" maxlength="128" placeholder="如：焊接实训" />
+        </el-form-item>
+        <el-form-item label="班级标签" prop="class_label">
+          <el-input v-model="courseForm.class_label" maxlength="64" placeholder="如：计算机 2301" />
+        </el-form-item>
+        <el-form-item label="学期" prop="semester">
+          <el-input v-model="courseForm.semester" maxlength="32" placeholder="如：2026 秋" />
+        </el-form-item>
+        <el-form-item v-if="editingCourse" label="状态">
+          <el-radio-group v-model="courseForm.status">
+            <el-radio value="enabled">启用</el-radio>
+            <el-radio value="disabled">停用</el-radio>
+          </el-radio-group>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button :disabled="courseSaving" @click="courseDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="courseSaving" @click="submitCourse">
+          {{ editingCourse ? '保存修改' : '创建课程' }}
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <el-drawer
+      v-model="sessionDrawerOpen"
+      :size="drawerSize"
+      :title="activeCourse ? `${activeCourse.name} · 课次` : '课次'"
+      destroy-on-close
+    >
+      <div class="drawer-body">
+        <div class="drawer-head">
+          <p class="drawer-head__hint">新题次默认使用当前最新配方快照</p>
+          <el-button type="primary" size="small" @click="openCreateSession">新增课次</el-button>
+        </div>
+
+        <el-alert
+          v-if="sessionError"
+          type="error"
+          :closable="false"
+          show-icon
+          :title="sessionError"
+          class="courses__alert"
+        />
+
+        <el-skeleton v-if="sessionsLoading && !sessions.length" :rows="4" animated />
+        <EmptyState
+          v-else-if="!sessions.length"
+          title="暂无课次"
+          description="添加课次后可绑定配方快照。"
+        >
+          <template #action>
+            <el-button @click="openCreateSession">新增课次</el-button>
+          </template>
+        </EmptyState>
+        <el-table v-else :data="sessions" row-key="id" class="table-dense">
+          <el-table-column label="课次" width="72">
+            <template #default="{ row }">第 {{ row.seq }} 次</template>
+          </el-table-column>
+          <el-table-column prop="session_date" label="日期" width="110" />
+          <el-table-column label="人数" width="72" align="right">
+            <template #default="{ row }">{{ row.headcount }} 人</template>
+          </el-table-column>
+          <el-table-column label="配方" width="80">
+            <template #default="{ row }">
+              {{ row.recipe_version ? `v${row.recipe_version}` : '未配置' }}
+            </template>
+          </el-table-column>
+          <el-table-column label="状态" width="96">
+            <template #default="{ row }">
+              <span class="status-tag" :class="sessionStatusTag(row.status)">
+                {{ sessionStatusLabel(row.status) }}
+              </span>
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" width="72" fixed="right">
+            <template #default="{ row }">
+              <el-button link type="primary" size="small" @click="openEditSession(row)">
+                编辑
+              </el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+
+        <div v-if="sessionTotal > SESSION_PAGE_SIZE" class="drawer-pagination">
+          <el-pagination
+            layout="prev, pager, next"
+            :total="sessionTotal"
+            :page-size="SESSION_PAGE_SIZE"
+            :current-page="sessionPage"
+            small
+            background
+            @current-change="handleSessionPageChange"
+          />
+        </div>
+      </div>
+    </el-drawer>
+
+    <el-dialog
+      v-model="sessionDialogVisible"
+      :title="editingSession ? '编辑课次' : '新增课次'"
+      :width="viewportWidth < 560 ? `${viewportWidth - 32}px` : '440px'"
+      :close-on-click-modal="false"
+      destroy-on-close
+    >
+      <el-alert
+        v-if="sessionDialogError"
+        type="error"
+        :closable="false"
+        show-icon
+        :title="sessionDialogError"
+        class="courses__alert"
+      />
+      <el-form label-position="top" @submit.prevent="submitSession">
+        <el-form-item label="序号">
+          <el-input-number v-model="sessionForm.seq" :min="1" :step="1" step-strictly />
+        </el-form-item>
+        <el-form-item label="上课日期">
+          <el-date-picker
+            v-model="sessionForm.session_date"
+            type="date"
+            value-format="YYYY-MM-DD"
+            placeholder="选择日期"
+            class="courses__date"
+          />
+        </el-form-item>
+        <el-form-item label="人数">
+          <el-input-number v-model="sessionForm.headcount" :min="0" :step="1" step-strictly />
+        </el-form-item>
+        <el-form-item label="班级标签">
+          <el-input v-model="sessionForm.class_label" maxlength="64" />
+        </el-form-item>
+        <el-form-item label="状态">
+          <el-select v-model="sessionForm.status">
+            <el-option label="待上课" value="planned" />
+            <el-option label="已完成" value="completed" />
+            <el-option label="已取消" value="cancelled" />
+          </el-select>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button :disabled="sessionSaving" @click="sessionDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="sessionSaving" @click="submitSession">保存</el-button>
+      </template>
+    </el-dialog>
+
+    <el-drawer
+      v-model="recipeDrawerOpen"
+      :size="drawerSize"
+      :title="activeCourse ? `${activeCourse.name} · 配方` : '配方'"
+      destroy-on-close
+    >
+      <div class="drawer-body">
+        <div class="recipe-meta">
+          <span v-if="currentRecipe" class="status-tag status-tag--success">
+            当前 v{{ currentRecipe.version }}
+          </span>
+          <span v-else class="status-tag status-tag--neutral">未配置</span>
+          <span v-if="currentRecipe" class="recipe-meta__text">
+            {{ currentRecipe.created_by_name }} · {{ currentRecipe.created_at }}
+          </span>
+        </div>
+
+        <el-alert
+          v-if="recipeError"
+          type="error"
+          :closable="false"
+          show-icon
+          :title="recipeError"
+          class="courses__alert"
+        />
+
+        <el-skeleton v-if="recipeLoading" :rows="3" animated />
+        <template v-else>
+          <div v-for="(item, index) in recipeItems" :key="index" class="recipe-row">
+            <el-select
+              v-model="item.consumable_id"
+              filterable
+              placeholder="选择耗材"
+              class="recipe-row__select"
+            >
+              <el-option
+                v-for="option in consumableOptions"
+                :key="option.id"
+                :label="option.label"
+                :value="option.id"
+              />
+            </el-select>
+            <el-input-number
+              v-model="item.quantity_per_person"
+              :min="1"
+              :step="1"
+              step-strictly
+              class="recipe-row__qty"
+              aria-label="每人用量"
+            />
+            <el-input
+              :model-value="unitOf(item.consumable_id)"
+              class="recipe-row__unit"
+              placeholder="单位"
+              disabled
+            />
+            <el-button
+              text
+              type="danger"
+              :disabled="recipeItems.length === 1"
+              @click="removeRecipeItem(index)"
+            >
+              移除
+            </el-button>
+          </div>
+
+          <div class="recipe-actions">
+            <el-button :disabled="recipeItems.length >= MAX_RECIPE_ITEMS" @click="addRecipeItem">
+              添加耗材
+            </el-button>
+            <el-button type="primary" :loading="recipeSaving" @click="saveRecipe">
+              保存为新版本
+            </el-button>
+          </div>
+        </template>
+      </div>
+    </el-drawer>
+  </div>
+</template>
+
+<style scoped>
+.courses {
+  display: flex;
+  flex-direction: column;
+}
+
+.courses__toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 16px;
+  padding: 12px 16px;
+  margin-bottom: var(--space-4);
+}
+
+.courses__segment {
+  padding: 2px;
+  border-radius: var(--radius-control);
+  background: var(--surface-muted);
+}
+
+.courses__segment :deep(.el-radio-button__inner) {
+  min-height: 30px;
+  padding: 0 14px;
+  border: none;
+  border-radius: var(--radius-control);
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 30px;
+}
+
+.courses__segment :deep(.el-radio-button.is-active .el-radio-button__inner) {
+  background: var(--primary-soft);
+  box-shadow: none;
+  color: var(--primary);
+  font-weight: 600;
+}
+
+.courses__search {
+  display: flex;
+  flex: 1 1 260px;
+  align-items: center;
+  gap: 8px;
+}
+
+.courses__search-input {
+  max-width: 300px;
+}
+
+.courses__refresh {
+  margin-left: auto;
+  color: var(--text-secondary);
+}
+
+.courses__placeholder {
+  padding: var(--space-5);
+}
+
+.courses__error {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.courses__error-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.courses__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: var(--space-4);
+}
+
+.course-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+}
+
+.course-card__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.course-card__title h2 {
+  margin: 0 0 4px;
+  font-size: 16px;
+  line-height: 24px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.course-card__title p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--text-muted);
+}
+
+.course-card__meta {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+  padding: 10px 0;
+  border-top: 1px solid var(--line-soft);
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.course-card__meta div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.course-card__meta dt {
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--text-muted);
+}
+
+.course-card__meta dd {
+  margin: 0;
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 600;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.course-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.courses__pagination {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: var(--space-4);
+}
+
+.courses__alert {
+  margin-bottom: var(--space-4);
+}
+
+.drawer-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.drawer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.drawer-head__hint {
+  margin: 0;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--text-muted);
+}
+
+.drawer-pagination {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.recipe-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.recipe-meta__text {
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--text-muted);
+}
+
+.recipe-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 110px 80px auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.recipe-row__select {
+  width: 100%;
+}
+
+.recipe-row__unit {
+  width: 100%;
+}
+
+.recipe-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: var(--space-2);
+}
+
+.courses__date {
+  width: 100%;
+}
+
+@media (max-width: 767px) {
+  .courses__toolbar {
+    gap: 8px;
+    padding: 12px;
+  }
+
+  .courses__segment {
+    flex: 1 1 100%;
+    display: flex;
+  }
+
+  .courses__segment :deep(.el-radio-button) {
+    flex: 1;
+  }
+
+  .courses__segment :deep(.el-radio-button__inner) {
+    width: 100%;
+    min-height: 38px;
+    line-height: 38px;
+    padding: 0 6px;
+  }
+
+  .courses__search {
+    flex: 1 1 100%;
+  }
+
+  .courses__search-input {
+    max-width: none;
+    flex: 1;
+  }
+
+  .courses__refresh {
+    margin-left: 0;
+    min-height: 44px;
+  }
+
+  .course-card__actions :deep(.el-button) {
+    min-height: 44px;
+  }
+
+  .courses__grid {
+    grid-template-columns: 1fr;
+  }
+
+  .recipe-row {
+    grid-template-columns: minmax(0, 1fr) 96px;
+    row-gap: 8px;
+  }
+
+  .recipe-row__unit {
+    grid-column: 1 / 2;
+  }
+
+  .recipe-actions :deep(.el-button) {
+    min-height: 44px;
+  }
+}
+</style>
