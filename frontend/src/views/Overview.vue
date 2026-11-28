@@ -342,7 +342,7 @@ function showUncovered() {
 }
 
 function goUsers(query) {
-  router.push({ path: '/users', query: query ?? {} })
+  router.push({ path: '/settings/accounts', query: query ?? {} })
 }
 
 function goRequisition(row) {

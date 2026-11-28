@@ -22,7 +22,7 @@ const visible = computed({
   set: (value) => emit('update:modelValue', value),
 })
 
-const role = computed(() => userStore.user?.role ?? 'guest')
+const role = computed(() => userStore.activeRole ?? userStore.user?.role ?? 'guest')
 
 const roleName = computed(
   () => ({ student: '学生', teacher: '教师', admin: '班委', guest: '新用户' })[role.value],
@@ -39,7 +39,7 @@ const studentSteps = [
 const staffSteps = [
   '使用分配的账号登录；首次登录必须修改初始密码。',
   '教师可在「记录查询」查看、红冲或处理纠错申请。',
-  '班委还可在「耗材档案」「用户管理」「处置入库」「操作日志」维护数据和核查。',
+  '班委还可在「耗材档案」「账号管理」「处置入库」「操作日志」维护数据和核查。',
   '学生账号停用或恢复由班委处理；教师账号问题请联系部署方或系统管理员。',
   '遇到页面报错，请复制请求编号，交给能查看日志的班委或部署方。',
 ]

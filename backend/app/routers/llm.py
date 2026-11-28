@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from app import llm_crypto
 from app.agent import llm as agent_llm
 from app.database import get_db
-from app.deps import CurrentUser, require_role
+from app.deps import CurrentUser, require_permission
 from app.models import LlmFeatureBinding, LlmPrompt, LlmProvider, User
 from app.operation_log import record_operation
 from app.schemas_llm import (
@@ -29,7 +29,7 @@ from app.schemas_llm import (
 router = APIRouter(
     prefix="/api/v1/llm",
     tags=["llm"],
-    dependencies=[Depends(require_role("super_admin"))],
+    dependencies=[Depends(require_permission("llm.manage"))],
 )
 
 PROVIDER_NOT_FOUND = "供应商不存在"

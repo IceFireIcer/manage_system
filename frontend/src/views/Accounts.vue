@@ -1,5 +1,6 @@
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '../api'
 import { useUserStore } from '../stores/user'
@@ -7,6 +8,10 @@ import PageHeader from '../components/PageHeader.vue'
 import EmptyState from '../components/EmptyState.vue'
 
 const userStore = useUserStore()
+const route = useRoute()
+
+const ROLE_VALUES = ['', 'super_admin', 'teacher', 'admin', 'student']
+const STATUS_VALUES = ['', 'enabled', 'disabled']
 
 const ROLE_LABELS = {
   super_admin: '超级管理员',
@@ -52,6 +57,37 @@ const rolesForm = reactive({ id: null, account: '', name: '', roles: [] })
 
 const resetVisible = ref(false)
 const resetResult = ref(null)
+
+const viewportWidth = ref(window.innerWidth)
+const importVisible = ref(false)
+const importFileName = ref('')
+const importSource = ref('')
+const importRows = ref([])
+const importPreview = ref(null)
+const importOnExisting = ref('skip')
+const importRequestId = ref('')
+const importError = ref('')
+const importParsing = ref(false)
+const importSubmitting = ref(false)
+const importReceipt = ref(null)
+
+const IMPORT_STATUS_NAMES = {
+  ready: '可创建',
+  existing: '已存在',
+  update: '已存在·更正',
+  error: '错误',
+}
+
+const IMPORT_ACTION_NAMES = {
+  created: '已创建',
+  updated: '已更正',
+  unchanged: '无变化',
+  skipped: '已跳过',
+}
+
+const importDialogWidth = computed(() =>
+  viewportWidth.value < 860 ? `${viewportWidth.value - 32}px` : '820px',
+)
 
 async function fetchClasses() {
   try {
@@ -232,10 +268,164 @@ function closeReset() {
   resetResult.value = null
 }
 
+function errorMessage(error, fallback, unconfirmed) {
+  if (!error?.response) return unconfirmed
+  const detail = error.response?.data?.detail
+  if (Array.isArray(detail)) {
+    const messages = detail.map((item) => item?.msg).filter(Boolean)
+    return messages.length ? messages.join('；') : fallback
+  }
+  if (detail) return String(detail)
+  return fallback
+}
+
+function parseRosterCsv(text) {
+  const rows = []
+  const lines = String(text ?? '')
+    .replace(/^\ufeff/, '')
+    .split(/\r?\n/)
+  lines.forEach((raw, index) => {
+    if (!raw.trim()) return
+    const cells = raw.split(',').map((cell) => cell.trim())
+    if (index === 0 && (cells[0]?.includes('学号') || cells[1]?.includes('姓名'))) return
+    rows.push({ line_no: index + 1, account: cells[0] ?? '', name: cells[1] ?? '' })
+  })
+  return rows
+}
+
+function newRequestId() {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID()
+  return `roster-${Date.now()}-${Math.random().toString(16).slice(2)}`
+}
+
+function openImportDialog() {
+  importFileName.value = ''
+  importSource.value = ''
+  importRows.value = []
+  importPreview.value = null
+  importOnExisting.value = 'skip'
+  importRequestId.value = ''
+  importError.value = ''
+  importParsing.value = false
+  importSubmitting.value = false
+  importReceipt.value = null
+  importVisible.value = true
+}
+
+function closeImportDialog() {
+  if (importSubmitting.value) return
+  importVisible.value = false
+}
+
+async function handleTemplateDownload() {
+  try {
+    const response = await api.get('/users/import/template', { responseType: 'blob' })
+    const url = URL.createObjectURL(response.data)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = 'student_roster_template.csv'
+    anchor.click()
+    URL.revokeObjectURL(url)
+  } catch {
+    ElMessage.error('模板下载失败，请稍后重试')
+  }
+}
+
+async function runPreview() {
+  importError.value = ''
+  importPreview.value = null
+  if (!importRows.value.length) {
+    importError.value = '名单为空，请检查文件是否为「学号,姓名」两列 CSV'
+    return
+  }
+  importParsing.value = true
+  try {
+    const { data } = await api.post('/users/import/preview', {
+      source: importSource.value || '花名册导入',
+      rows: importRows.value,
+      on_existing: importOnExisting.value,
+    })
+    importPreview.value = data
+  } catch (error) {
+    importError.value = errorMessage(
+      error,
+      '预检失败，请稍后重试',
+      '暂未确认预检结果，请重试',
+    )
+  } finally {
+    importParsing.value = false
+  }
+}
+
+async function handleRosterFile(uploadFile) {
+  const file = uploadFile?.raw
+  if (!file || importSubmitting.value) return
+  importFileName.value = file.name
+  importSource.value = file.name.replace(/\.csv$/i, '') || '花名册导入'
+  importReceipt.value = null
+  importRequestId.value = newRequestId()
+  importError.value = ''
+  try {
+    importRows.value = parseRosterCsv(await file.text())
+  } catch {
+    importRows.value = []
+    importError.value = '名单读取失败，请确认文件为 CSV 编码'
+    return
+  }
+  await runPreview()
+}
+
+function handleOnExistingChange() {
+  if (importRows.value.length) runPreview()
+}
+
+async function handleImport() {
+  if (!importPreview.value?.valid || importSubmitting.value) return
+  importSubmitting.value = true
+  importError.value = ''
+  try {
+    const { data } = await api.post('/users/import', {
+      source: importSource.value || '花名册导入',
+      rows: importRows.value,
+      on_existing: importOnExisting.value,
+      request_id: importRequestId.value,
+    })
+    importReceipt.value = data
+    ElMessage.success('花名册已导入，请立即转交一次性临时密码')
+    await fetchAccounts()
+  } catch (error) {
+    importError.value = errorMessage(
+      error,
+      '导入失败，请稍后重试',
+      '暂未确认导入结果，请先查询批次回执再决定是否重试',
+    )
+  } finally {
+    importSubmitting.value = false
+  }
+}
+
+function applyRouteQuery() {
+  const { role, status } = route.query
+  if (typeof role === 'string') {
+    filters.role = ROLE_VALUES.includes(role) ? role : ''
+  }
+  if (typeof status === 'string') {
+    filters.status = STATUS_VALUES.includes(status) ? status : ''
+  }
+}
+
+function handleResize() {
+  viewportWidth.value = window.innerWidth
+}
+
 onMounted(async () => {
+  window.addEventListener('resize', handleResize)
+  applyRouteQuery()
   await fetchClasses()
   await fetchAccounts()
 })
+
+onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
 </script>
 
 <template>
@@ -246,6 +436,7 @@ onMounted(async () => {
       :breadcrumb="['设置', '账号与角色']"
     >
       <template #actions>
+        <el-button @click="openImportDialog">导入花名册</el-button>
         <el-button type="primary" @click="openCreate">新增账号</el-button>
       </template>
     </PageHeader>
@@ -414,6 +605,123 @@ onMounted(async () => {
         <el-button type="primary" @click="closeReset">我已记录</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog
+      v-model="importVisible"
+      title="导入花名册"
+      :width="importDialogWidth"
+      :close-on-click-modal="false"
+      :close-on-press-escape="!importSubmitting"
+      :show-close="!importSubmitting"
+      @closed="closeImportDialog"
+    >
+      <template v-if="!importReceipt">
+        <div class="accounts__import-actions">
+          <el-button @click="handleTemplateDownload">下载模板</el-button>
+          <el-upload
+            :auto-upload="false"
+            :show-file-list="false"
+            accept=".csv,text/csv"
+            :on-change="handleRosterFile"
+          >
+            <el-button type="primary" :loading="importParsing">选择名单 CSV</el-button>
+          </el-upload>
+          <span v-if="importFileName" class="accounts__import-file">{{ importFileName }}</span>
+        </div>
+        <el-alert
+          v-if="importError"
+          type="error"
+          :closable="false"
+          show-icon
+          :title="importError"
+          class="accounts__alert"
+        />
+        <div v-if="importRows.length" class="accounts__import-mode">
+          <span>已存在学号：</span>
+          <el-radio-group v-model="importOnExisting" @change="handleOnExistingChange">
+            <el-radio-button value="skip">跳过</el-radio-button>
+            <el-radio-button value="update">按学号更正姓名</el-radio-button>
+          </el-radio-group>
+        </div>
+        <template v-if="importPreview">
+          <p class="accounts__import-summary">
+            共 {{ importPreview.summary.total_rows }} 行：可创建
+            {{ importPreview.summary.ready_rows }}，已存在
+            {{ importPreview.summary.existing_rows }}，更正
+            {{ importPreview.summary.update_rows }}，错误
+            {{ importPreview.summary.error_rows }}
+          </p>
+          <el-table
+            :data="importPreview.rows"
+            row-key="line_no"
+            max-height="360"
+            class="table-dense"
+          >
+            <el-table-column prop="line_no" label="行" width="60" />
+            <el-table-column prop="account" label="学号" min-width="130" />
+            <el-table-column prop="name" label="姓名" min-width="100" />
+            <el-table-column label="预检" width="120">
+              <template #default="{ row }">
+                <el-tag
+                  size="small"
+                  :type="row.status === 'ready' ? 'success' : row.status === 'error' ? 'danger' : 'info'"
+                >
+                  {{ IMPORT_STATUS_NAMES[row.status] ?? row.status }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="说明" min-width="260">
+              <template #default="{ row }">
+                <span v-if="row.errors.length" class="accounts__import-error">
+                  {{ row.errors.map((item) => `${item.field}：${item.reason}`).join('；') }}
+                </span>
+                <span v-else>{{ row.message || '—' }}</span>
+              </template>
+            </el-table-column>
+          </el-table>
+        </template>
+      </template>
+      <template v-else>
+        <p class="accounts__import-summary">
+          批次 #{{ importReceipt.batch_id }}：创建
+          {{ importReceipt.summary.ready_rows }} 人，更正
+          {{ importReceipt.summary.update_rows }} 人，跳过
+          {{ importReceipt.summary.existing_rows }} 人。
+        </p>
+        <el-table :data="importReceipt.rows" row-key="line_no" max-height="360" class="table-dense">
+          <el-table-column prop="line_no" label="行" width="60" />
+          <el-table-column prop="account" label="学号" min-width="130" />
+          <el-table-column prop="name" label="姓名" min-width="100" />
+          <el-table-column label="结果" width="100">
+            <template #default="{ row }">
+              {{ IMPORT_ACTION_NAMES[row.action] ?? row.action }}
+            </template>
+          </el-table-column>
+          <el-table-column label="临时密码" min-width="180">
+            <template #default="{ row }">
+              <span class="accounts__receipt-password">{{ row.temporary_password || '—' }}</span>
+            </template>
+          </el-table-column>
+        </el-table>
+        <p class="accounts__hint">
+          临时密码仅本次显示；批次 #{{ importReceipt.batch_id }} 回执可再查询。
+        </p>
+      </template>
+      <template #footer>
+        <el-button :disabled="importSubmitting" @click="closeImportDialog">
+          {{ importReceipt ? '完成' : '取消' }}
+        </el-button>
+        <el-button
+          v-if="!importReceipt"
+          type="primary"
+          :loading="importSubmitting"
+          :disabled="!importPreview?.valid"
+          @click="handleImport"
+        >
+          确认导入
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -473,5 +781,59 @@ onMounted(async () => {
   background: var(--surface-muted);
   border-radius: var(--radius-control);
   word-break: break-all;
+}
+
+.accounts__import-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.accounts__import-file {
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--text-muted);
+  word-break: break-all;
+}
+
+.accounts__import-mode {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.accounts__import-summary {
+  margin: 12px 0 8px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.accounts__import-error {
+  color: var(--danger);
+}
+
+.accounts__receipt-password {
+  font-family: var(--font-mono);
+  word-break: break-all;
+}
+
+@media (max-width: 767px) {
+  .accounts__toolbar {
+    padding: 12px;
+  }
+
+  .accounts__select,
+  .accounts__search {
+    width: 100%;
+    max-width: none;
+  }
 }
 </style>
