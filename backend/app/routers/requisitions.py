@@ -19,7 +19,7 @@ from app.agent import service
 from app.auth_logs import trim_audit_logs
 from app.database import get_db
 from app.db import concurrency
-from app.deps import effective_role, require_permission
+from app.deps import CurrentUser, effective_role, require_permission
 from app.models import (
     Consumable,
     Course,
@@ -1216,7 +1216,7 @@ def _class_signal_change_ratio(current: int, previous: int) -> float | None:
 @router.get("/class-signals")
 def get_class_signals(
     db: Annotated[Session, Depends(get_db)],
-    current_user: ReportViewer,
+    current_user: CurrentUser,
     window: Annotated[int, Query()] = consumption_core.DEFAULT_WINDOW,
 ) -> ClassSignalsOut:
     if window not in CLASS_SIGNAL_WINDOWS:

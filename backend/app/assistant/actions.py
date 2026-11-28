@@ -38,14 +38,12 @@ def _loads(raw: str | None) -> dict:
 
 def _load_action(db: Session, token: str, user: User) -> AssistantToolAction:
     action = db.scalars(
-        select(AssistantToolAction).where(
-            AssistantToolAction.confirmation_token == token
-        )
+        select(AssistantToolAction).where(AssistantToolAction.confirmation_token == token)
     ).first()
     if action is None or action.user_id != user.id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=ACTION_NOT_FOUND
-        )
+        ) from None
     return action
 
 
@@ -110,9 +108,7 @@ def create_action(
     return action
 
 
-def list_actions(
-    db: Session, *, thread_id: int, user: User, class_id: int
-) -> list[dict]:
+def list_actions(db: Session, *, thread_id: int, user: User, class_id: int) -> list[dict]:
     rows = db.scalars(
         select(AssistantToolAction)
         .where(
@@ -126,54 +122,38 @@ def list_actions(
     return [serialize(row) for row in reversed(rows)]
 
 
-def confirm(
-    db: Session, *, user: User, role: str, class_id: int, token: str
-) -> dict:
+def confirm(db: Session, *, user: User, role: str, class_id: int, token: str) -> dict:
     action = _load_action(db, token, user)
     if action.status == assistant_tools.ACTION_CONFIRMED:
         return serialize(action)
     if action.status == assistant_tools.ACTION_CANCELLED:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT, detail=ACTION_CANCELLED
-        )
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=ACTION_CANCELLED)
     if action.status == assistant_tools.ACTION_FAILED:
         return serialize(action)
     if action.status != assistant_tools.ACTION_PENDING:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT, detail=ACTION_NOT_CONFIRMABLE
-        )
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=ACTION_NOT_CONFIRMABLE)
     if action.class_id != class_id:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT, detail=ACTION_CLASS_CHANGED
-        )
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=ACTION_CLASS_CHANGED)
     spec = assistant_tools.ACTION_TOOL_MAP.get(action.tool_name)
     if spec is None or spec.execute is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=ACTION_NOT_FOUND
-        )
-    ctx = assistant_tools.ToolContext(
-        db=db, user=user, role=role, class_id=class_id
-    )
+        ) from None
+    ctx = assistant_tools.ToolContext(db=db, user=user, role=role, class_id=class_id)
     if not assistant_tools.has_permission(ctx, spec.permission_key):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail=ACTION_CONFIRM_DENIED
-        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=ACTION_CONFIRM_DENIED)
 
     locked = db.scalars(
-        select(AssistantToolAction)
-        .where(AssistantToolAction.id == action.id)
-        .with_for_update()
+        select(AssistantToolAction).where(AssistantToolAction.id == action.id).with_for_update()
     ).first()
     if locked is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=ACTION_NOT_FOUND
-        )
+        ) from None
     if locked.status == assistant_tools.ACTION_CONFIRMED:
         return serialize(locked)
     if locked.status != assistant_tools.ACTION_PENDING:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT, detail=ACTION_NOT_CONFIRMABLE
-        )
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=ACTION_NOT_CONFIRMABLE)
 
     args = _loads(locked.args_json)
     preview = _preview_of(locked)
@@ -187,12 +167,10 @@ def confirm(
         if action is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail=ACTION_NOT_FOUND
-            )
+            ) from None
         action.status = assistant_tools.ACTION_FAILED
         action.confirmed_at = now
-        action.result_json = _dumps(
-            {"preview": preview, "error": str(exc)}
-        )
+        action.result_json = _dumps({"preview": preview, "error": str(exc)})
         record_operation(
             db,
             action="assistant_tool_call",
@@ -258,13 +236,9 @@ def cancel(db: Session, *, user: User, token: str) -> dict:
         assistant_tools.ACTION_CONFIRMED,
         assistant_tools.ACTION_FAILED,
     ):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT, detail=ACTION_EXECUTED
-        )
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=ACTION_EXECUTED)
     if action.status != assistant_tools.ACTION_PENDING:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT, detail=ACTION_NOT_CONFIRMABLE
-        )
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=ACTION_NOT_CONFIRMABLE)
     spec = assistant_tools.ACTION_TOOL_MAP.get(action.tool_name)
     action.status = assistant_tools.ACTION_CANCELLED
     record_operation(

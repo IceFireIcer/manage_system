@@ -129,7 +129,7 @@ CATALOG: Final[tuple[PermissionSpec, ...]] = (
     ),
     PermissionSpec(
         "course.view", "课程查看", "course", SCOPE_CLASS,
-        _ALL_ROLES, _ALL_ROLES, (ROLE_STUDENT,),
+        _TEACHER_ADMIN, _TEACHER_ADMIN, (ROLE_ADMIN,),
     ),
     PermissionSpec(
         "course.manage", "课程维护", "course", SCOPE_CLASS,

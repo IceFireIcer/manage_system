@@ -61,6 +61,11 @@ def get_current_user(
         raise credentials_error
     if payload.get("sv") != user.session_version:
         raise credentials_error
+    cid = payload.get("cid")
+    if isinstance(cid, str) and cid.lstrip("-").isdigit():
+        cid = int(cid)
+    if isinstance(cid, int):
+        user._active_class_id = cid
     if user.must_change_password and not _allows_pending_password_change(request.url.path):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

@@ -28,8 +28,12 @@ def upgrade() -> None:
         sa.Column("name", sa.String(length=128), nullable=False),
         sa.Column("code", sa.String(length=32), nullable=False, server_default=""),
         sa.Column("status", sa.String(length=16), nullable=False, server_default="enabled"),
-        sa.Column("created_at", sa.DATETIME(), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")),
-        sa.Column("updated_at", sa.DATETIME(), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")),
+        sa.Column(
+            "created_at", sa.DATETIME(), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")
+        ),
+        sa.Column(
+            "updated_at", sa.DATETIME(), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")
+        ),
         sa.CheckConstraint("status IN ('enabled','disabled')", name="ck_classes_status"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("name", name="uq_classes_name"),
@@ -43,8 +47,12 @@ def upgrade() -> None:
         sa.Column("start_date", sa.Date(), nullable=True),
         sa.Column("end_date", sa.Date(), nullable=True),
         sa.Column("status", sa.String(length=16), nullable=False, server_default="active"),
-        sa.Column("created_at", sa.DATETIME(), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")),
-        sa.Column("updated_at", sa.DATETIME(), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")),
+        sa.Column(
+            "created_at", sa.DATETIME(), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")
+        ),
+        sa.Column(
+            "updated_at", sa.DATETIME(), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")
+        ),
         sa.CheckConstraint(
             "status IN ('planned','active','archived')", name="ck_class_terms_status"
         ),
@@ -53,9 +61,7 @@ def upgrade() -> None:
         sa.UniqueConstraint("class_id", "name", name="uq_class_terms_class_name"),
     )
     op.create_index("ix_class_terms_class_id", "class_terms", ["class_id"])
-    op.create_index(
-        "ix_class_terms_class_status", "class_terms", ["class_id", "status"]
-    )
+    op.create_index("ix_class_terms_class_status", "class_terms", ["class_id", "status"])
 
     op.create_table(
         "class_memberships",
@@ -63,13 +69,13 @@ def upgrade() -> None:
         sa.Column("class_id", sa.Integer(), nullable=False),
         sa.Column("user_id", sa.Integer(), nullable=False),
         sa.Column("role", sa.String(length=16), nullable=False, server_default="teacher"),
-        sa.Column("created_at", sa.DATETIME(), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")),
+        sa.Column(
+            "created_at", sa.DATETIME(), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")
+        ),
         sa.ForeignKeyConstraint(["class_id"], ["classes.id"]),
         sa.ForeignKeyConstraint(["user_id"], ["users.id"]),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint(
-            "class_id", "user_id", name="uq_class_memberships_class_user"
-        ),
+        sa.UniqueConstraint("class_id", "user_id", name="uq_class_memberships_class_user"),
     )
     op.create_index("ix_class_memberships_class_id", "class_memberships", ["class_id"])
     op.create_index("ix_class_memberships_user_id", "class_memberships", ["user_id"])

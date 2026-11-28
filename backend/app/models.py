@@ -37,6 +37,14 @@ class User(Base):
     session_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
 
+    @property
+    def active_class_id(self) -> int:
+        return getattr(self, "_active_class_id", None) or self.class_id
+
+    @active_class_id.setter
+    def active_class_id(self, value: int) -> None:
+        self._active_class_id = value
+
 
 class UserProfile(Base):
     __tablename__ = "user_profiles"

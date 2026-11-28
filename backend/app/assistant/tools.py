@@ -7,8 +7,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
 from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
@@ -205,10 +205,7 @@ def _flow_totals(db: Session, class_id: int, start, end) -> list[tuple[int, int,
         .group_by(Requisition.consumable_id)
         .order_by(Requisition.consumable_id)
     ).all()
-    return [
-        (row[0], int(row[1]), int(row[2]), int(row[3]))
-        for row in rows
-    ]
+    return [(row[0], int(row[1]), int(row[2]), int(row[3])) for row in rows]
 
 
 def _records_summary(ctx: ToolContext, days: int = 7) -> dict:
@@ -218,9 +215,7 @@ def _records_summary(ctx: ToolContext, days: int = 7) -> dict:
     names = _consumable_names(db, class_id)
     items = []
     total_records = 0
-    for consumable_id, issued, reversed_quantity, records in _flow_totals(
-        db, class_id, start, end
-    ):
+    for consumable_id, issued, reversed_quantity, records in _flow_totals(db, class_id, start, end):
         name, unit = names.get(consumable_id, ("已删除耗材", ""))
         net = max(issued - reversed_quantity, 0)
         total_records += records
@@ -278,9 +273,7 @@ def _restock_suggestions(ctx: ToolContext) -> dict:
     items = []
     for consumable in _enabled_consumables(db, ctx.class_id):
         q7_flow = window_flow(db, consumable.id, q7_start, now)
-        prev_flow = window_flow(
-            db, consumable.id, prev_start, q7_start, end_inclusive=False
-        )
+        prev_flow = window_flow(db, consumable.id, prev_start, q7_start, end_inclusive=False)
         evaluation = rules.evaluate(
             current_stock=consumable.current_stock,
             safety_stock=consumable.safety_stock,
@@ -377,12 +370,8 @@ def _handover_health(ctx: ToolContext) -> dict:
     return {
         "stock_diff_count": int(stock_diff_count),
         "stock_diff_available": bool(stock_diff_available),
-        "open_incident_count": int(
-            handover_router._open_incident_health(ctx.db, ctx.class_id)
-        ),
-        "course_risk_count": int(
-            handover_router._course_risk_health(ctx.db, ctx.class_id)
-        ),
+        "open_incident_count": int(handover_router._open_incident_health(ctx.db, ctx.class_id)),
+        "course_risk_count": int(handover_router._course_risk_health(ctx.db, ctx.class_id)),
     }
 
 
@@ -456,17 +445,13 @@ def tool_catalog() -> list[dict]:
 
 
 def tool_prompt_text() -> str:
-    return "\n".join(
-        f"- {spec.name}：{spec.label}，{spec.description}" for spec in TOOL_SPECS
-    )
+    return "\n".join(f"- {spec.name}：{spec.label}，{spec.description}" for spec in TOOL_SPECS)
 
 
 def has_permission(ctx: ToolContext, permission_key: str) -> bool:
     if ctx.role == "super_admin":
         return True
-    return permission_key in effective_permission_set(
-        ctx.db, ctx.role, ctx.class_id
-    )
+    return permission_key in effective_permission_set(ctx.db, ctx.role, ctx.class_id)
 
 
 def run_tool(name: str, ctx: ToolContext) -> dict:
@@ -480,6 +465,7 @@ def run_tool(name: str, ctx: ToolContext) -> dict:
     except Exception:
         return {"ok": False, "tool": name, "label": spec.label, "error": EXECUTE_FAILED}
     return {"ok": True, "tool": name, "label": spec.label, "data": data}
+
 
 @dataclass(frozen=True)
 class ActionToolSpec:
@@ -501,7 +487,7 @@ def _int_arg(args: dict, key: str, label: str) -> int:
     try:
         value = int(raw)
     except (TypeError, ValueError):
-        raise ToolActionError(f"{label}格式不正确")
+        raise ToolActionError(f"{label}格式不正确") from None
     if value <= 0:
         raise ToolActionError(f"{label}必须为正整数")
     return value
@@ -534,7 +520,7 @@ def _http_action(call: Callable) -> object:
     try:
         return call()
     except HTTPException as exc:
-        raise ToolActionError(str(exc.detail))
+        raise ToolActionError(str(exc.detail)) from None
 
 
 def _preview_update_my_profile(ctx: ToolContext, args: dict) -> dict:
@@ -559,9 +545,7 @@ def _execute_update_my_profile(ctx: ToolContext, args: dict) -> dict:
     payload = profile_router.ProfileUpdate(
         **{key: args[key] for key in PROFILE_FIELDS if key in args}
     )
-    profile, changed = profile_router.update_profile_fields(
-        ctx.db, ctx.user, payload, commit=False
-    )
+    profile, changed = profile_router.update_profile_fields(ctx.db, ctx.user, payload, commit=False)
     return {
         "changed": changed,
         "fields": [key for key in PROFILE_FIELDS if key in args],
@@ -835,9 +819,7 @@ ACTION_TOOL_SPECS: tuple[ActionToolSpec, ...] = (
     ),
 )
 
-ACTION_TOOL_MAP: dict[str, ActionToolSpec] = {
-    spec.name: spec for spec in ACTION_TOOL_SPECS
-}
+ACTION_TOOL_MAP: dict[str, ActionToolSpec] = {spec.name: spec for spec in ACTION_TOOL_SPECS}
 
 
 def is_forbidden_tool(name: str) -> bool:
@@ -858,7 +840,7 @@ def clean_action_args(spec: ActionToolSpec, raw: object) -> dict:
         value = raw.get(key)
         if value is None or isinstance(value, bool):
             continue
-        if isinstance(value, (int, float)):
+        if isinstance(value, int | float):
             cleaned[key] = int(value)
             continue
         text = str(value).strip()
@@ -891,7 +873,5 @@ def action_tool_prompt_text() -> str:
     for spec in ACTION_TOOL_SPECS:
         params = "、".join(spec.params) or "无"
         mode = "需用户二次确认后执行" if spec.requires_confirmation else "只预填不提交"
-        lines.append(
-            f"- {spec.name}：{spec.label}（{mode}），参数：{params}。{spec.description}"
-        )
+        lines.append(f"- {spec.name}：{spec.label}（{mode}），参数：{params}。{spec.description}")
     return "\n".join(lines)

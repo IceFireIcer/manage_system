@@ -410,9 +410,9 @@ def resolve_generator(db, feature: str, settings: Settings | None = None) -> Rat
         provider, prompt = _provider_from_db(db, feature)
     except Exception:
         logger.warning("%s 读取 LLM 功能绑定失败，回退环境变量", log_tag(), exc_info=True)
-        return get_generator(settings)
+        return get_generator()
     if provider is None:
-        return get_generator(settings)
+        return get_generator()
     api_key = llm_crypto.decrypt_secret(provider.encrypted_api_key)
     if not api_key:
         logger.warning(
@@ -420,7 +420,7 @@ def resolve_generator(db, feature: str, settings: Settings | None = None) -> Rat
             log_tag(),
             provider.name,
         )
-        return get_generator(settings)
+        return get_generator()
     return DeepSeekRationaleGenerator(
         api_key=api_key,
         model=provider.model or DEFAULT_MODEL,

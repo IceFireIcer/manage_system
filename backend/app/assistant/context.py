@@ -54,7 +54,7 @@ def _sanitize_entity(raw: Any) -> dict | None:
         if key not in raw:
             continue
         value = raw.get(key)
-        if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if isinstance(value, int | float) and not isinstance(value, bool):
             entity[key] = value
         else:
             cleaned = _clean_text(value)

@@ -26,9 +26,7 @@ router = APIRouter(prefix="/api/v1/profile", tags=["profile"])
 NAME_MAX_LENGTH = 64
 PHONE_RE = re.compile(r"^1[3-9]\d{9}$")
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-AVATAR_DATA_URL_RE = re.compile(
-    r"^data:image/(jpeg|png|webp);base64,([A-Za-z0-9+/]+={0,2})$"
-)
+AVATAR_DATA_URL_RE = re.compile(r"^data:image/(jpeg|png|webp);base64,([A-Za-z0-9+/]+={0,2})$")
 AVATAR_MAX_BYTES = 200 * 1024
 PROFILE_EDITABLE_ROLES = (ROLE_STUDENT, *CLASS_COMMITTEE_ROLES)
 
@@ -83,9 +81,7 @@ def _clean(value: str | None) -> str:
 def _normalize_name(value: str) -> str:
     name = _clean(value)
     if not name:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="姓名不能为空"
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="姓名不能为空")
     if len(name) > NAME_MAX_LENGTH:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -97,18 +93,14 @@ def _normalize_name(value: str) -> str:
 def _normalize_phone(value: str | None) -> str:
     phone = _clean(value)
     if phone and not PHONE_RE.match(phone):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="手机号格式不正确"
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="手机号格式不正确")
     return phone
 
 
 def _normalize_email(value: str | None) -> str:
     email = _clean(value)
     if email and not EMAIL_RE.match(email):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="邮箱格式不正确"
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="邮箱格式不正确")
     return email
 
 
@@ -127,18 +119,14 @@ def _validate_avatar(value: str) -> str:
     except (ValueError, binascii.Error):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="头像数据格式不正确"
-        )
+        ) from None
     if len(raw) > AVATAR_MAX_BYTES:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="头像不能超过 200KB"
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="头像不能超过 200KB")
     return text
 
 
 def _get_or_create_profile(db: Session, user: User) -> UserProfile:
-    profile = db.scalars(
-        select(UserProfile).where(UserProfile.user_id == user.id)
-    ).first()
+    profile = db.scalars(select(UserProfile).where(UserProfile.user_id == user.id)).first()
     if profile is None:
         profile = UserProfile(user_id=user.id)
         db.add(profile)
@@ -182,9 +170,7 @@ def _profile_snapshot(user: User, profile: UserProfile) -> str:
     )
 
 
-def _ensure_unique_in_class(
-    db: Session, user: User, field: str, value: str
-) -> None:
+def _ensure_unique_in_class(db: Session, user: User, field: str, value: str) -> None:
     if not value:
         return
     column = UserProfile.student_no if field == "student_no" else UserProfile.employee_no
@@ -318,18 +304,14 @@ def admin_update_profile(
 ) -> ProfileOut:
     target = db.get(User, user_id)
     if target is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="用户不存在"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="用户不存在")
     if target.role not in PROFILE_EDITABLE_ROLES:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="仅可维护学生或班委的资料",
         )
     if not can_access_class(db, current_user, target.class_id):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="无权修改该成员的资料"
-        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权修改该成员的资料")
     profile = _get_or_create_profile(db, target)
     before = _profile_snapshot(target, profile)
     changed = _apply_common_fields(target, profile, payload)
