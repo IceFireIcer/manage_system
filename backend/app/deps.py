@@ -4,6 +4,7 @@ from typing import Annotated
 from fastapi import Cookie, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
+from app.class_scope import ROLE_SUPER_ADMIN, resolve_active_class_id
 from app.database import get_db
 from app.models import User
 from app.roles import granted_roles, resolve_active_role, role_passes
@@ -63,6 +64,7 @@ def get_current_user(
         )
     roles = granted_roles(db, user)
     setattr(user, EFFECTIVE_ROLE_ATTR, resolve_active_role(user, roles, payload.get("ar")))
+    request.state.token_payload = payload
     if not _allows_before_setup(request.url.path) and not setup_is_completed(db):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -72,6 +74,23 @@ def get_current_user(
 
 
 CurrentUser = Annotated[User, Depends(get_current_user)]
+
+
+def get_active_class_id(
+    request: Request,
+    current_user: CurrentUser,
+    db: Annotated[Session, Depends(get_db)],
+) -> int:
+    payload = getattr(request.state, "token_payload", None) or {}
+    requested = payload.get("cid")
+    if isinstance(requested, str) and requested.lstrip("-").isdigit():
+        requested = int(requested)
+    if not isinstance(requested, int):
+        requested = None
+    return resolve_active_class_id(db, current_user, requested)
+
+
+CurrentClassId = Annotated[int, Depends(get_active_class_id)]
 
 
 def require_role(*allowed_roles: str) -> Callable:

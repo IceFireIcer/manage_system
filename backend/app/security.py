@@ -28,7 +28,8 @@ def create_access_token(
     user_id: int,
     role: str,
     session_version: int = 0,
-    active_role: str | None = None,
+active_role: str | None = None,
+    active_class_id: int | None = None,
 ) -> tuple[str, int]:
     settings = get_settings()
     expire_seconds = settings.jwt_expire_minutes * 60
@@ -39,6 +40,8 @@ def create_access_token(
         "sv": session_version,
         "exp": datetime.now(UTC) + timedelta(seconds=expire_seconds),
     }
+    if active_class_id is not None:
+        payload["cid"] = active_class_id
     token = jwt.encode(payload, settings.jwt_secret_key, algorithm=ALGORITHM)
     return token, expire_seconds
 

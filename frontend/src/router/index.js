@@ -150,6 +150,16 @@ const routes = [
         },
       },
       {
+        path: 'settings/classes',
+        name: 'settings-classes',
+        component: () => import('../views/Classes.vue'),
+        meta: {
+          title: '班级与学期',
+          roles: ['super_admin', 'teacher'],
+          nav: { group: 'daily', icon: 'School', order: 4 },
+        },
+      },
+      {
         path: '403',
         name: 'forbidden',
         component: () => import('../views/Forbidden.vue'),

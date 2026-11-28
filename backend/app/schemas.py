@@ -26,10 +26,18 @@ class SwitchRoleRequest(BaseModel):
     role: str = Field(min_length=1, max_length=16)
 
 
+class SessionClassOut(BaseModel):
+    id: int
+    name: str
+    term_name: str | None = None
+
+
 class SessionOut(BaseModel):
     user: UserOut
     must_change_password: bool
     session_expires_at: datetime | None = None
     roles: list[str] = Field(default_factory=list)
     active_role: str | None = None
-    active_class: int | None = None
+    available_classes: list[SessionClassOut] = Field(default_factory=list)
+    active_class: SessionClassOut | None = None
+    can_switch_class: bool = False

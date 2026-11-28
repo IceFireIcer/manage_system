@@ -4,6 +4,7 @@ import api from '../api'
 const ROLE_NAMES = {
   super_admin: '超级管理员',
   teacher: '教师',
+  class_committee: '班委',
   admin: '班委',
   student: '学生',
   super_admin: '超级管理员',
@@ -39,6 +40,7 @@ export const useUserStore = defineStore('user', {
     identityLocked: false,
 roles: [],
     activeRole: null,
+    availableClasses: [],
     activeClass: null,
     setupRequired: false,
     setupStatus: null,
@@ -49,6 +51,9 @@ roles: [],
       ROLE_NAMES[state.activeRole] ?? ROLE_NAMES[state.user?.role] ?? '未知',
     hasMultipleRoles: (state) => state.roles.length > 1,
     canSwitchRole: (state) => state.roles.length > 1,
+    canSwitchClass: (state) =>
+      ['teacher', 'super_admin'].includes(state.activeRole ?? state.user?.role) &&
+      state.availableClasses.length > 1,
   },
   actions: {
     ensureSessionSync() {
@@ -112,6 +117,8 @@ roles: [],
       }
       this.mustChangePassword = Boolean(data.must_change_password)
       this.sessionExpiresAt = data.session_expires_at ?? null
+      this.availableClasses = data.available_classes ?? []
+      this.activeClass = data.active_class ?? null
     },
     async ensureSetupStatus(force = false) {
       if (!force && this.setupStatus) {
@@ -192,8 +199,13 @@ roles: [],
       }
       return data
     },
-    async switchRole(role) {
+async switchRole(role) {
       const { data } = await api.post('/auth/switch-role', { role })
+      this.applySession(data)
+      return data
+    },
+    async switchClass(classId) {
+      const { data } = await api.post('/auth/switch-class', { class_id: classId })
       this.applySession(data)
       return data
     },
