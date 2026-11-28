@@ -1108,3 +1108,47 @@ class LlmFeatureBinding(Base):
 
     provider: Mapped[LlmProvider | None] = relationship("LlmProvider")
     prompt: Mapped[LlmPrompt | None] = relationship("LlmPrompt")
+
+class AssistantThread(Base):
+    __tablename__ = "assistant_threads"
+    __table_args__ = (
+        Index("ix_assistant_threads_user_class", "user_id", "class_id", "archived"),
+        Index(
+            "ix_assistant_threads_last_message",
+            "user_id",
+            "class_id",
+            "last_message_at",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    class_id: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    title: Mapped[str] = mapped_column(String(128), nullable=False, default="新对话")
+    archived: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
+    updated_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
+    last_message_at: Mapped[datetime] = mapped_column(
+        DATETIME, nullable=False, default=business_now
+    )
+
+
+class AssistantMessage(Base):
+    __tablename__ = "assistant_messages"
+    __table_args__ = (
+        Index("ix_assistant_messages_thread", "thread_id", "id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    thread_id: Mapped[int] = mapped_column(
+        ForeignKey("assistant_threads.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    role: Mapped[str] = mapped_column(String(16), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    context_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    tool_calls_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
