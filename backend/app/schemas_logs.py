@@ -26,3 +26,21 @@ class OperationLogPageOut(BaseModel):
     total: int
     page: int
     page_size: int
+
+class AuditLogItemOut(OperationLogItemOut):
+    class_id: int | None = None
+    class_name: str | None = None
+
+
+class AuditLogPageOut(BaseModel):
+    items: list[AuditLogItemOut]
+    total: int
+    page: int
+    page_size: int
+
+
+class AuditOperatorOut(BaseModel):
+    id: int
+    account: str
+    name: str
+    role: str

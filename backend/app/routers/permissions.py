@@ -163,6 +163,7 @@ def write_class_overrides(
         db,
         action=ACTION_OVERRIDE_UPDATE,
         operator=manager,
+        class_id=class_id,
         target_type="class",
         target_id=class_id,
         target_label=class_display_name(db, class_id),

@@ -243,7 +243,7 @@ const routes = [
       {
         path: 'settings/audit',
         name: 'settings-audit',
-        component: SettingsPlaceholder,
+        component: () => import('../views/Audit.vue'),
         meta: {
           title: '审计',
           roles: ['super_admin', 'teacher'],

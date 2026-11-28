@@ -87,7 +87,7 @@ def finish_setup(
     current_user: Annotated[User, Depends(require_role("super_admin"))],
 ) -> SetupStatusOut:
     try:
-        complete_setup(db, operator_name=current_user.name)
+        complete_setup(db, operator_name=current_user.name, operator=current_user)
     except SetupError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)

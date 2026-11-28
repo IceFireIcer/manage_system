@@ -201,6 +201,13 @@ def confirm(
             target_id=action.id,
             target_label=spec.name,
             result="failure",
+            before_value=_dumps({"status": assistant_tools.ACTION_PENDING}),
+            after_value=_dumps(
+                {
+                    "status": assistant_tools.ACTION_FAILED,
+                    "error": str(exc),
+                }
+            ),
             remark=f"助手确认执行 {spec.name} 失败：{exc}",
         )
         db.commit()
@@ -224,6 +231,18 @@ def confirm(
         target_id=locked.id,
         target_label=spec.name,
         result="success",
+        before_value=_dumps(
+            {
+                "status": assistant_tools.ACTION_PENDING,
+                "summary": preview.get("summary"),
+            }
+        ),
+        after_value=_dumps(
+            {
+                "status": assistant_tools.ACTION_CONFIRMED,
+                "summary": preview.get("summary"),
+            }
+        ),
         remark=f"助手确认执行 {spec.name}：{preview.get('summary') or ''}",
     )
     db.commit()
@@ -256,6 +275,8 @@ def cancel(db: Session, *, user: User, token: str) -> dict:
         target_id=action.id,
         target_label=action.tool_name,
         result="success",
+        before_value=_dumps({"status": assistant_tools.ACTION_PENDING}),
+        after_value=_dumps({"status": assistant_tools.ACTION_CANCELLED}),
         remark=f"助手取消操作 {spec.label if spec else action.tool_name}",
     )
     db.commit()

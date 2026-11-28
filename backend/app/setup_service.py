@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import json
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.business_time import now as business_now
 from app.models import SystemSetting, User
+from app.operation_log import record_operation
 
 SETUP_COMPLETED_KEY = "setup_completed"
 SETUP_INITIALIZED_AT_KEY = "setup_initialized_at"
@@ -109,7 +112,9 @@ def setup_status(db: Session) -> dict[str, object]:
     }
 
 
-def complete_setup(db: Session, *, operator_name: str | None = None) -> None:
+def complete_setup(
+    db: Session, *, operator_name: str | None = None, operator: User | None = None
+) -> None:
     if not has_enabled_teacher(db):
         raise SetupError(TEACHER_REQUIRED_DETAIL)
     set_setting(
@@ -117,5 +122,16 @@ def complete_setup(db: Session, *, operator_name: str | None = None) -> None:
         key=SETUP_COMPLETED_KEY,
         value="1",
         updated_by=operator_name or SYSTEM_ACTOR,
+    )
+    record_operation(
+        db,
+        action="setup_complete",
+        operator=operator,
+        operator_name=operator_name,
+        target_type="system",
+        target_label="系统初始化",
+        before_value=json.dumps({"setup_completed": False}, ensure_ascii=False),
+        after_value=json.dumps({"setup_completed": True}, ensure_ascii=False),
+        remark=f"{operator_name or SYSTEM_ACTOR} 完成系统初始化",
     )
     db.commit()
