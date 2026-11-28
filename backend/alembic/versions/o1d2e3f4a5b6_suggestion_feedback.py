@@ -1,7 +1,7 @@
 """suggestion feedback
 
-Revision ID: m8b9c0d1e2f3
-Revises: l7a8b9c0d1e2
+Revision ID: o1d2e3f4a5b6
+Revises: n9c0d1e2f3a4
 Create Date: 2026-11-28 21:00:00.000000
 
 """
@@ -11,8 +11,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "m8b9c0d1e2f3"
-down_revision: str | Sequence[str] | None = "l7a8b9c0d1e2"
+revision: str = "o1d2e3f4a5b6"
+down_revision: str | Sequence[str] | None = "n9c0d1e2f3a4"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
