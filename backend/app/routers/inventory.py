@@ -1,12 +1,13 @@
 import json
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app import business_time, inventory_audit, inventory_count, inventory_ledger, restock
@@ -18,6 +19,7 @@ from app.models import (
     InventoryCount,
     InventoryCountLine,
     InventoryEvent,
+    OperationLog,
     Requisition,
     RequisitionCorrection,
     RequisitionOrder,
@@ -26,6 +28,7 @@ from app.models import (
     RestockCorrection,
     RestockLine,
     RestockOrder,
+    SuggestionFeedback,
     User,
 )
 from app.schemas_consumables import STATUS_ENABLED
@@ -46,6 +49,10 @@ from app.schemas_inventory import (
     InventorySummary,
     RestockCreate,
     RestockOut,
+    SuggestionFeedbackBrief,
+    SuggestionFeedbackCreate,
+    SuggestionFeedbackListOut,
+    SuggestionFeedbackOut,
     SuggestionListOut,
     TraceDocumentOut,
     TraceEventOut,
@@ -875,12 +882,105 @@ def get_inventory_overview(
     )
 
 
+def _latest_feedbacks(
+    db: Session, consumable_ids: list[int]
+) -> dict[int, SuggestionFeedback]:
+    if not consumable_ids:
+        return {}
+    rows = db.scalars(
+        select(SuggestionFeedback)
+        .where(SuggestionFeedback.consumable_id.in_(consumable_ids))
+        .order_by(SuggestionFeedback.id)
+    ).all()
+    return {row.consumable_id: row for row in rows}
+
+
+def _feedback_brief(row: SuggestionFeedback) -> SuggestionFeedbackBrief:
+    return SuggestionFeedbackBrief(
+        reason=row.reason,
+        note=row.note,
+        feedback_name=row.feedback_name,
+        created_at=row.created_at,
+    )
+
+
+def _attach_latest_feedback(
+    db: Session, result: SuggestionListOut
+) -> SuggestionListOut:
+    rows = _latest_feedbacks(db, [item.consumable_id for item in result.items])
+    if not rows:
+        return result
+    items = [
+        item.model_copy(
+            update={"latest_feedback": _feedback_brief(rows[item.consumable_id])}
+        )
+        if item.consumable_id in rows
+        else item
+        for item in result.items
+    ]
+    return result.model_copy(update={"items": items})
+
+
+def _feedback_key(result: SuggestionListOut, consumable_id: int) -> str:
+    item = next(
+        (entry for entry in result.items if entry.consumable_id == consumable_id),
+        None,
+    )
+    if item is None:
+        return f"window:{business_time.today().isoformat()}"
+    return f"g{result.generation}:{item.computed_at.strftime('%Y%m%d%H%M%S')}"
+
+
+def _feedback_out(
+    record: SuggestionFeedback, consumable_name: str
+) -> SuggestionFeedbackOut:
+    return SuggestionFeedbackOut(
+        id=record.id,
+        consumable_id=record.consumable_id,
+        consumable_name=consumable_name,
+        suggestion_key=record.suggestion_key,
+        reason=record.reason,
+        note=record.note,
+        feedback_by=record.feedback_by,
+        feedback_name=record.feedback_name,
+        created_at=record.created_at,
+        updated_at=record.updated_at,
+    )
+
+
+def _feedback_log(
+    db: Session,
+    record: SuggestionFeedback,
+    operator: User,
+    before: dict | None,
+) -> None:
+    db.add(
+        OperationLog(
+            operator_id=operator.id,
+            role=operator.role,
+            action="suggestion_feedback",
+            target_type="consumable",
+            target_id=record.consumable_id,
+            before_value=json.dumps(before, ensure_ascii=False) if before else None,
+            after_value=json.dumps(
+                {
+                    "suggestion_key": record.suggestion_key,
+                    "reason": record.reason,
+                    "note": record.note,
+                },
+                ensure_ascii=False,
+            ),
+            remark=record.note,
+        )
+    )
+
+
 @router.get("/suggestions")
 def list_suggestions(
     db: Annotated[Session, Depends(get_db)],
     _staff: StaffUser,
 ) -> SuggestionListOut:
-    return service.inspect(db)
+    return _attach_latest_feedback(db, service.inspect(db))
 
 
 @router.post("/suggestions/refresh")
@@ -889,7 +989,126 @@ def refresh_suggestions(
     _staff: StaffUser,
 ) -> SuggestionListOut:
     service.clear_cache()
-    return service.inspect(db)
+    return _attach_latest_feedback(db, service.inspect(db))
+
+
+@router.get("/suggestions/feedback")
+def list_suggestion_feedback(
+    db: Annotated[Session, Depends(get_db)],
+    staff: StaffUser,
+    consumable_id: Annotated[int | None, Query(gt=0)] = None,
+    date_from: Annotated[date | None, Query(alias="from")] = None,
+    date_to: Annotated[date | None, Query(alias="to")] = None,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
+) -> SuggestionFeedbackListOut:
+    if business_time.reversed_range(date_from, date_to):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=business_time.REVERSE_RANGE_DETAIL,
+        )
+    conditions = [SuggestionFeedback.class_id == staff.class_id]
+    if consumable_id is not None:
+        conditions.append(SuggestionFeedback.consumable_id == consumable_id)
+    if date_from is not None:
+        conditions.append(
+            SuggestionFeedback.created_at >= business_time.day_start(date_from)
+        )
+    if date_to is not None:
+        conditions.append(
+            SuggestionFeedback.created_at < business_time.next_day_start(date_to)
+        )
+    total = (
+        db.scalar(
+            select(func.count())
+            .select_from(SuggestionFeedback)
+            .where(*conditions)
+        )
+        or 0
+    )
+    rows = db.execute(
+        select(SuggestionFeedback, Consumable.name)
+        .join(Consumable, Consumable.id == SuggestionFeedback.consumable_id)
+        .where(*conditions)
+        .order_by(SuggestionFeedback.created_at.desc(), SuggestionFeedback.id.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    ).all()
+    return SuggestionFeedbackListOut(
+        page=page,
+        page_size=page_size,
+        total=total,
+        items=[_feedback_out(record, name) for record, name in rows],
+    )
+
+
+@router.post("/suggestions/{consumable_id}/feedback")
+def create_suggestion_feedback(
+    consumable_id: int,
+    payload: SuggestionFeedbackCreate,
+    db: Annotated[Session, Depends(get_db)],
+    staff: StaffUser,
+) -> SuggestionFeedbackOut:
+    consumable = db.get(Consumable, consumable_id)
+    if consumable is None or consumable.class_id != staff.class_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="耗材不存在"
+        )
+    key = _feedback_key(service.inspect(db), consumable.id)
+    existing = db.scalars(
+        select(SuggestionFeedback).where(
+            SuggestionFeedback.consumable_id == consumable.id,
+            SuggestionFeedback.suggestion_key == key,
+            SuggestionFeedback.feedback_by == staff.id,
+        )
+    ).first()
+    timestamp = business_time.now().replace(microsecond=0)
+    if existing is not None:
+        if existing.reason == payload.reason and existing.note == payload.note:
+            return _feedback_out(existing, consumable.name)
+        before = {
+            "suggestion_key": existing.suggestion_key,
+            "reason": existing.reason,
+            "note": existing.note,
+        }
+        existing.reason = payload.reason
+        existing.note = payload.note
+        existing.updated_at = timestamp
+        db.add(existing)
+        _feedback_log(db, existing, staff, before)
+    else:
+        existing = SuggestionFeedback(
+            class_id=consumable.class_id,
+            consumable_id=consumable.id,
+            suggestion_key=key,
+            reason=payload.reason,
+            note=payload.note,
+            feedback_by=staff.id,
+            feedback_name=staff.name,
+            created_at=timestamp,
+            updated_at=timestamp,
+        )
+        db.add(existing)
+        _feedback_log(db, existing, staff, None)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        existing = db.scalars(
+            select(SuggestionFeedback).where(
+                SuggestionFeedback.consumable_id == consumable.id,
+                SuggestionFeedback.suggestion_key == key,
+                SuggestionFeedback.feedback_by == staff.id,
+            )
+        ).first()
+        if existing is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="反馈保存冲突，请稍后重试",
+            ) from None
+        return _feedback_out(existing, consumable.name)
+    db.refresh(existing)
+    return _feedback_out(existing, consumable.name)
 
 
 @router.get("/ledger")

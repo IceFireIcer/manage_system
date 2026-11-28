@@ -38,10 +38,24 @@ const TIER_FILTERS = [
   { value: 'observe', label: '观察' },
 ]
 
+const FEEDBACK_REASON_OPTIONS = [
+  { value: 'substitute', label: '已有替代耗材' },
+  { value: 'schedule_adjust', label: '课时调整' },
+  { value: 'low_usage', label: '预计用量低于规则估计' },
+  { value: 'other', label: '其他' },
+]
+
+const FEEDBACK_REASON_META = Object.fromEntries(
+  FEEDBACK_REASON_OPTIONS.map((option) => [option.value, option.label]),
+)
+
 const router = useRouter()
 const route = useRoute()
 const userStore = useUserStore()
 const isAdmin = computed(() => userStore.user?.role === 'admin')
+const canFeedback = computed(
+  () => userStore.user?.role === 'teacher' || userStore.user?.role === 'admin',
+)
 
 const items = ref([])
 const ruleSpec = ref(null)
@@ -55,6 +69,7 @@ const quantityRef = ref(null)
 const focusId = ref(0)
 const hasFetched = ref(false)
 const restockTrigger = ref(null)
+const feedbackTrigger = ref(null)
 const errorRequestId = ref('')
 
 const restockDialog = reactive({
@@ -77,6 +92,17 @@ const receiptDialog = reactive({
   loading: false,
   error: '',
   data: null,
+})
+
+const feedbackDialog = reactive({
+  visible: false,
+  item: null,
+  reason: '',
+  note: '',
+  submitting: false,
+  reasonError: '',
+  noteError: '',
+  errorMessage: '',
 })
 
 let requestSeq = 0
@@ -203,6 +229,77 @@ function newRequestId() {
     return globalThis.crypto.randomUUID().replaceAll('-', '')
   }
   return `rst-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`
+}
+
+function feedbackReasonLabel(reason) {
+  return FEEDBACK_REASON_META[reason] ?? reason ?? ''
+}
+
+function openFeedback(item, event) {
+  feedbackTrigger.value = event?.currentTarget ?? null
+  feedbackDialog.item = item
+  feedbackDialog.reason = item.latest_feedback?.reason ?? ''
+  feedbackDialog.note = item.latest_feedback?.note ?? ''
+  feedbackDialog.reasonError = ''
+  feedbackDialog.noteError = ''
+  feedbackDialog.errorMessage = ''
+  feedbackDialog.submitting = false
+  feedbackDialog.visible = true
+}
+
+function handleFeedbackClose(done) {
+  if (feedbackDialog.submitting) return
+  done()
+}
+
+function handleFeedbackClosed() {
+  nextTick(() => {
+    const trigger = feedbackTrigger.value
+    if (trigger?.isConnected) {
+      trigger.focus()
+      return
+    }
+    document.querySelector('.restock__filters button')?.focus?.()
+  })
+}
+
+async function submitFeedback() {
+  if (feedbackDialog.submitting) return
+  const item = feedbackDialog.item
+  if (!item) return
+  const reason = feedbackDialog.reason
+  const note = feedbackDialog.note.trim()
+  feedbackDialog.reasonError = reason ? '' : '请选择拒绝原因'
+  feedbackDialog.noteError =
+    reason === 'other' && !note ? '选择“其他”时必须填写备注' : ''
+  feedbackDialog.errorMessage = ''
+  if (feedbackDialog.reasonError || feedbackDialog.noteError) {
+    announce(feedbackDialog.reasonError || feedbackDialog.noteError, {
+      assertive: true,
+    })
+    return
+  }
+  feedbackDialog.submitting = true
+  try {
+    const { data } = await api.post(
+      `/inventory/suggestions/${item.consumable_id}/feedback`,
+      { reason, note: note || null },
+    )
+    feedbackDialog.visible = false
+    item.latest_feedback = {
+      reason: data.reason,
+      note: data.note,
+      feedback_name: data.feedback_name,
+      created_at: data.created_at,
+    }
+    ElMessage.success('已记录拒绝原因')
+    announce('已记录拒绝原因')
+  } catch (error) {
+    feedbackDialog.errorMessage =
+      error.response?.data?.detail || '保存失败，请稍后重试。'
+  } finally {
+    feedbackDialog.submitting = false
+  }
 }
 
 function openRestock(item, event) {
@@ -541,6 +638,16 @@ onBeforeUnmount(() => {
           <span v-if="item.disposition_order_no">入库单 {{ item.disposition_order_no }}</span>
         </div>
 
+        <div v-if="item.latest_feedback" class="restock__disposition">
+          <span class="status-tag status-tag--warning">拒绝原因</span>
+          <span>{{ feedbackReasonLabel(item.latest_feedback.reason) }}</span>
+          <span v-if="item.latest_feedback.note">{{ item.latest_feedback.note }}</span>
+          <span>
+            {{ item.latest_feedback.feedback_name }} ·
+            {{ formatReceiptTime(item.latest_feedback.created_at) }}
+          </span>
+        </div>
+
         <dl class="restock__metrics">
           <div class="restock__metric">
             <dt>当前库存</dt>
@@ -624,9 +731,15 @@ onBeforeUnmount(() => {
               <dd>{{ formatDays(item.days_of_supply) }}</dd>
             </div>
           </dl>
-          <el-button v-if="isAdmin" type="primary" @click="openRestock(item, $event)">
-            处置入库
-          </el-button>
+
+          <div v-if="canFeedback" class="restock__foot-actions">
+            <el-button @click="openFeedback(item, $event)">
+              {{ item.latest_feedback ? '更新拒绝原因' : '拒绝建议' }}
+            </el-button>
+            <el-button v-if="isAdmin" type="primary" @click="openRestock(item, $event)">
+              处置入库
+            </el-button>
+          </div>
         </footer>
 
         <div class="restock__rationale">
@@ -803,6 +916,106 @@ onBeforeUnmount(() => {
           @click="submitRestock"
         >
           确认入库
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog
+      v-model="feedbackDialog.visible"
+      title="拒绝补货建议"
+      width="480px"
+      :before-close="handleFeedbackClose"
+      :close-on-click-modal="!feedbackDialog.submitting"
+      :close-on-press-escape="!feedbackDialog.submitting"
+      :show-close="!feedbackDialog.submitting"
+      @closed="handleFeedbackClosed"
+    >
+      <div
+        v-if="feedbackDialog.item"
+        class="restock__dialog"
+        @focusin="keepFocusedFieldVisible"
+      >
+        <dl class="restock__summary">
+          <div class="restock__summary-row">
+            <dt>耗材</dt>
+            <dd>{{ consumableLabel(feedbackDialog.item) }}</dd>
+          </div>
+          <div class="restock__summary-row">
+            <dt>建议补货量</dt>
+            <dd>
+              {{ feedbackDialog.item.recommended_quantity
+              }}{{ feedbackDialog.item.unit }}
+            </dd>
+          </div>
+        </dl>
+
+        <el-form label-position="top" @submit.prevent>
+          <el-form-item
+            label="拒绝原因"
+            required
+            :error="feedbackDialog.reasonError"
+          >
+            <el-select
+              v-model="feedbackDialog.reason"
+              placeholder="请选择原因"
+              class="restock__quantity"
+              :disabled="feedbackDialog.submitting"
+              aria-label="拒绝原因"
+              @change="feedbackDialog.reasonError = ''"
+            >
+              <el-option
+                v-for="option in FEEDBACK_REASON_OPTIONS"
+                :key="option.value"
+                :label="option.label"
+                :value="option.value"
+              />
+            </el-select>
+          </el-form-item>
+          <el-form-item
+            label="备注"
+            :required="feedbackDialog.reason === 'other'"
+            :error="feedbackDialog.noteError"
+          >
+            <el-input
+              v-model="feedbackDialog.note"
+              type="textarea"
+              :rows="3"
+              maxlength="255"
+              show-word-limit
+              :disabled="feedbackDialog.submitting"
+              placeholder="选择其他时必填"
+              aria-label="拒绝备注"
+              @input="feedbackDialog.noteError = ''"
+            />
+          </el-form-item>
+        </el-form>
+
+        <div v-if="feedbackDialog.errorMessage" class="restock__dialog-error">
+          <el-alert
+            type="error"
+            :closable="false"
+            show-icon
+            title="无法保存拒绝原因"
+            :description="feedbackDialog.errorMessage"
+            role="alert"
+          />
+        </div>
+      </div>
+
+      <template #footer>
+        <el-button
+          :disabled="feedbackDialog.submitting"
+          @click="feedbackDialog.visible = false"
+        >
+          取消
+        </el-button>
+        <el-button
+          type="primary"
+          :loading="feedbackDialog.submitting"
+          :disabled="feedbackDialog.submitting"
+          @click="submitFeedback"
+        >
+          保存
         </el-button>
       </template>
     </el-dialog>
@@ -1130,6 +1343,12 @@ onBeforeUnmount(() => {
   gap: 12px 16px;
   padding-top: 14px;
   border-top: 1px solid var(--line-soft);
+}
+
+.restock__foot-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .restock__meta {
