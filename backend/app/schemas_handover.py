@@ -95,3 +95,19 @@ class HandoverChecklistPageOut(BaseModel):
     total: int
     page: int
     page_size: int
+
+
+class HandoverHealthExpiryOut(BaseModel):
+    supported: bool
+    label: str
+    count: int | None = None
+
+
+class HandoverHealthOut(BaseModel):
+    generated_at: datetime
+    class_id: int
+    stock_diff_count: int
+    stock_diff_available: bool
+    open_incident_count: int
+    course_risk_count: int
+    expiry: HandoverHealthExpiryOut

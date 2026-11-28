@@ -1,9 +1,12 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
+import { useRouter } from 'vue-router'
 import api from '../api'
 import PageHeader from '../components/PageHeader.vue'
 import EmptyState from '../components/EmptyState.vue'
+
+const router = useRouter()
 
 const KIND_LABELS = {
   stock: '库存异常',
@@ -32,6 +35,9 @@ const detail = ref(null)
 const detailLoading = ref(false)
 const confirmingItemId = ref(null)
 const confirmingAll = ref(false)
+
+const health = ref(null)
+const healthError = ref('')
 
 const isNarrow = ref(window.innerWidth < 600)
 const drawerSize = computed(() => (isNarrow.value ? '92%' : '520px'))
@@ -74,6 +80,20 @@ async function load() {
   } finally {
     loading.value = false
   }
+}
+
+async function loadHealth() {
+  try {
+    const { data } = await api.get('/handover/health')
+    health.value = data
+    healthError.value = ''
+  } catch (requestError) {
+    healthError.value = requestError.response?.data?.detail ?? '交接健康加载失败'
+  }
+}
+
+function goTo(path) {
+  router.push(path)
 }
 
 function openCreate() {
@@ -167,6 +187,7 @@ onMounted(() => {
   onResize()
   window.addEventListener('resize', onResize)
   load()
+  loadHealth()
 })
 
 onBeforeUnmount(() => {
@@ -186,6 +207,63 @@ onBeforeUnmount(() => {
       v-if="error"
       :title="error"
       type="error"
+      show-icon
+      :closable="false"
+      class="handover__alert"
+    />
+
+    <section v-if="health" class="handover-health" aria-label="交接健康">
+      <p class="handover-health__title">
+        交接健康 · {{ formatTime(health.generated_at) }}
+      </p>
+      <div class="handover-health__grid">
+        <button
+          type="button"
+          class="handover-health__card"
+          @click="goTo('/overview')"
+        >
+          <span class="handover-health__label">账实偏差</span>
+          <strong class="handover-health__value">{{ health.stock_diff_count }}</strong>
+          <span class="handover-health__hint">
+            {{ health.stock_diff_available ? '最近盘点' : '暂无盘点' }}
+          </span>
+        </button>
+        <button
+          type="button"
+          class="handover-health__card"
+          @click="goTo('/incidents')"
+        >
+          <span class="handover-health__label">未闭合异常</span>
+          <strong class="handover-health__value">
+            {{ health.open_incident_count }}
+          </strong>
+          <span class="handover-health__hint">待处理</span>
+        </button>
+        <button
+          type="button"
+          class="handover-health__card"
+          @click="goTo('/courses')"
+        >
+          <span class="handover-health__label">课前风险</span>
+          <strong class="handover-health__value">{{ health.course_risk_count }}</strong>
+          <span class="handover-health__hint">未来 14 天</span>
+        </button>
+        <div class="handover-health__card handover-health__card--muted">
+          <span class="handover-health__label">过期风险</span>
+          <strong class="handover-health__value handover-health__value--text">
+            {{ health.expiry.supported ? health.expiry.count : health.expiry.label }}
+          </strong>
+          <span class="handover-health__hint">
+            {{ health.expiry.supported ? '临期耗材' : '—' }}
+          </span>
+        </div>
+      </div>
+    </section>
+
+    <el-alert
+      v-else-if="healthError"
+      :title="healthError"
+      type="warning"
       show-icon
       :closable="false"
       class="handover__alert"
@@ -363,6 +441,73 @@ onBeforeUnmount(() => {
   margin: 0;
 }
 
+.handover-health {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.handover-health__title {
+  margin: 0;
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+}
+
+.handover-health__grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.handover-health__card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 8px;
+  background: var(--el-bg-color);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+button.handover-health__card {
+  cursor: pointer;
+}
+
+button.handover-health__card:hover,
+button.handover-health__card:focus-visible {
+  border-color: var(--el-color-primary);
+  outline: none;
+}
+
+.handover-health__card--muted {
+  background: var(--el-fill-color-lighter);
+}
+
+.handover-health__label {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.handover-health__value {
+  font-size: 22px;
+  line-height: 1.2;
+  font-weight: 600;
+}
+
+.handover-health__value--text {
+  font-size: 16px;
+  color: var(--el-text-color-secondary);
+}
+
+.handover-health__hint {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
 .handover__list {
   display: flex;
   flex-direction: column;
@@ -492,6 +637,10 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 600px) {
+  .handover-health__grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .handover-detail__facts {
     grid-template-columns: minmax(0, 1fr);
   }
