@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
@@ -43,6 +43,28 @@ class RuleSpecOut(BaseModel):
     sort_rule: str
 
 
+class TeachingSessionOut(BaseModel):
+    course_id: int
+    course_name: str
+    session_id: int
+    session_seq: int
+    session_date: date
+    headcount: int
+    required_quantity: int
+
+
+class TeachingContextOut(BaseModel):
+    unlinked: bool
+    sessions: list[TeachingSessionOut]
+    session_count: int
+    headcount_total: int
+    expected_demand: int
+    expected_gap: int
+    consequence: str
+    consequence_source: Literal["llm", "rules"] = "rules"
+    consequence_degraded: bool = False
+
+
 class SuggestionOut(BaseModel):
     consumable_id: int
     name: str
@@ -62,6 +84,7 @@ class SuggestionOut(BaseModel):
     ]
     consumption_note: str
     rationale: str
+    teaching_context: TeachingContextOut
     computed_at: datetime
     rationale_source: Literal["llm", "rules"] = "rules"
     rationale_degraded: bool = False

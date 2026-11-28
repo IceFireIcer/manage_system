@@ -42,6 +42,26 @@ SYSTEM_PROMPT = (
     "可支撑天数与建议补货量，不得编造未给出的数据，不要使用 Markdown。"
 )
 
+TEACHING_UNLINKED_NOTE = "未关联课次"
+
+TEACHING_SYSTEM_PROMPT = (
+    "你是班级实训耗材管理系统的教学影响助手。"
+    "请只用给定的结构化数据，用 1 到 2 句简体中文说明不补货对已排课次的影响。"
+    "必须写明覆盖课次数、涉及学生人数与预计缺口，"
+    "不得编造未给出的课次、人数或数量，不要使用 Markdown。"
+)
+
+
+@dataclass(frozen=True)
+class TeachingConsequenceContext:
+    name: str
+    unit: str
+    unlinked: bool
+    session_count: int
+    headcount_total: int
+    expected_demand: int
+    expected_gap: int
+
 
 @dataclass(frozen=True)
 class RationaleContext:
@@ -138,6 +158,92 @@ def build_prompt(context: RationaleContext) -> str:
     )
 
 
+def format_teaching_template(context: TeachingConsequenceContext) -> str:
+    if context.unlinked:
+        return (
+            f"{context.name}未关联课次，暂无法评估补货对已排课次的影响。"
+        )
+    if context.expected_gap > 0:
+        return (
+            f"不补货将影响 {context.session_count} 个课次、"
+            f"{context.headcount_total} 名学生的实训，"
+            f"预计缺口 {context.expected_gap}{context.unit}。"
+        )
+    return (
+        f"当前库存可覆盖 {context.session_count} 个课次、"
+        f"{context.headcount_total} 名学生共 {context.expected_demand}"
+        f"{context.unit} 的预计需求，暂不影响上课。"
+    )
+
+
+def _anchor_before(text: str, keywords: tuple[str, ...]) -> float | None:
+    for keyword in keywords:
+        match = re.search(
+            r"(-?\d+(?:\.\d+)?)[^\d]{0,6}?" + re.escape(keyword), text
+        )
+        if match is not None:
+            return float(match.group(1))
+    return None
+
+
+def validate_teaching_consequence(
+    text: str, context: TeachingConsequenceContext
+) -> bool:
+    if context.unlinked:
+        return TEACHING_UNLINKED_NOTE in text
+    if not text or TEACHING_UNLINKED_NOTE in text:
+        return False
+    session_keywords = ("课次", "次课", "节课")
+    if not any(keyword in text for keyword in session_keywords):
+        return False
+    allowed = {
+        context.session_count,
+        context.headcount_total,
+        context.expected_demand,
+        context.expected_gap,
+    }
+    numbers = [
+        int(round(float(value)))
+        for value in re.findall(r"\d+(?:\.\d+)?", text)
+    ]
+    if any(value not in allowed for value in numbers):
+        return False
+    count = _anchor_before(text, session_keywords) or _anchor_value(
+        text, session_keywords
+    )
+    if count is None or int(round(count)) != context.session_count:
+        return False
+    if context.headcount_total > 0:
+        headcount = _anchor_before(text, ("学生", "名", "人"))
+        if headcount is None or int(round(headcount)) != context.headcount_total:
+            return False
+    if context.expected_gap > 0:
+        gap = _anchor_value(text, ("缺口",))
+        if gap is None or int(round(gap)) != context.expected_gap:
+            return False
+    return True
+
+
+def build_teaching_prompt(context: TeachingConsequenceContext) -> str:
+    if context.unlinked:
+        return (
+            f"耗材：{context.name}\n"
+            f"关联情况：{TEACHING_UNLINKED_NOTE}\n"
+            f"覆盖课次数：0\n"
+            f"涉及学生人数：0\n"
+            f"预计需求：0\n"
+            f"预计缺口：0"
+        )
+    return (
+        f"耗材：{context.name}\n"
+        f"单位：{context.unit or '件'}\n"
+        f"覆盖课次数：{context.session_count}\n"
+        f"涉及学生人数：{context.headcount_total}\n"
+        f"预计需求：{context.expected_demand}\n"
+        f"预计缺口：{context.expected_gap}"
+    )
+
+
 class TemplateGenerator:
 
     def generate(self, context: RationaleContext) -> str:
@@ -168,18 +274,34 @@ class DeepSeekRationaleGenerator:
     def base_url(self) -> str:
         return self._base_url
 
-    def generate(self, context: RationaleContext) -> str:
-        client = OpenAI(
+    def _client(self) -> OpenAI:
+        return OpenAI(
             api_key=self._api_key,
             base_url=self._base_url,
             timeout=LLM_TIMEOUT_SECONDS,
             max_retries=0,
         )
+
+    def generate(self, context: RationaleContext) -> str:
+        client = self._client()
         response = client.chat.completions.create(
             model=self._model,
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": build_prompt(context)},
+            ],
+            temperature=0.3,
+            timeout=LLM_TIMEOUT_SECONDS,
+        )
+        return (response.choices[0].message.content or "").strip()
+
+    def generate_teaching(self, context: TeachingConsequenceContext) -> str:
+        client = self._client()
+        response = client.chat.completions.create(
+            model=self._model,
+            messages=[
+                {"role": "system", "content": TEACHING_SYSTEM_PROMPT},
+                {"role": "user", "content": build_teaching_prompt(context)},
             ],
             temperature=0.3,
             timeout=LLM_TIMEOUT_SECONDS,
@@ -226,6 +348,36 @@ def generate_rationale_result(context: RationaleContext) -> RationaleResult:
         type(generator).__name__,
         time.perf_counter() - started,
     )
+    return RationaleResult(text, RATIONALE_SOURCE_LLM, False)
+
+
+def generate_teaching_consequence_result(
+    context: TeachingConsequenceContext,
+) -> RationaleResult:
+    template = format_teaching_template(context)
+    if context.unlinked:
+        return RationaleResult(template, RATIONALE_SOURCE_RULES, False)
+    generator = get_generator()
+    generate_teaching = getattr(generator, "generate_teaching", None)
+    if generate_teaching is None:
+        return RationaleResult(template, RATIONALE_SOURCE_RULES, False)
+    started = time.perf_counter()
+    try:
+        text = (generate_teaching(context) or "").strip()
+    except Exception:
+        logger.warning(
+            "%s 教学影响说明生成失败，回退规则模板（耗时 %.2fs）",
+            log_tag(),
+            time.perf_counter() - started,
+            exc_info=True,
+        )
+        return RationaleResult(template, RATIONALE_SOURCE_RULES, True)
+    if not text:
+        logger.warning("%s 教学影响说明为空，回退规则模板", log_tag())
+        return RationaleResult(template, RATIONALE_SOURCE_RULES, True)
+    if not validate_teaching_consequence(text, context):
+        logger.warning("%s 教学影响说明与结构化课次不一致，回退规则模板", log_tag())
+        return RationaleResult(template, RATIONALE_SOURCE_RULES, True)
     return RationaleResult(text, RATIONALE_SOURCE_LLM, False)
 
 

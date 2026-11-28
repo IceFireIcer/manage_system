@@ -566,6 +566,49 @@ onBeforeUnmount(() => {
           {{ item.consumption_note }}
         </p>
 
+        <section v-if="item.teaching_context" class="restock__teaching">
+          <div class="restock__teaching-head">
+            <span class="restock__teaching-title">教学上下文</span>
+            <span
+              v-if="item.teaching_context.unlinked"
+              class="status-tag status-tag--info"
+            >
+              未关联课次
+            </span>
+            <span v-else class="status-tag status-tag--info">
+              覆盖 {{ item.teaching_context.session_count }} 次课
+            </span>
+            <span
+              v-if="!item.teaching_context.unlinked"
+              class="restock__teaching-demand"
+            >
+              预计需求 {{ item.teaching_context.expected_demand }}{{ item.unit }} · 缺口
+              {{ item.teaching_context.expected_gap }}{{ item.unit }}
+            </span>
+            <span
+              v-if="item.teaching_context.consequence_degraded"
+              class="status-tag status-tag--warning"
+            >
+              已降级
+            </span>
+          </div>
+          <ul
+            v-if="item.teaching_context.sessions?.length"
+            class="restock__teaching-sessions"
+          >
+            <li
+              v-for="entry in item.teaching_context.sessions"
+              :key="entry.session_id"
+            >
+              {{ entry.course_name }} · 第 {{ entry.session_seq }} 次课 ·
+              {{ entry.headcount }} 人 · 需 {{ entry.required_quantity }}{{ item.unit }}
+            </li>
+          </ul>
+          <p class="restock__teaching-consequence">
+            {{ item.teaching_context.consequence }}
+          </p>
+        </section>
+
         <footer class="restock__foot">
           <dl class="restock__meta">
             <div class="restock__meta-item">
@@ -1118,6 +1161,64 @@ onBeforeUnmount(() => {
   font-weight: 600;
   color: var(--text-secondary);
   font-variant-numeric: tabular-nums;
+}
+
+.restock__teaching {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: var(--radius-control);
+  background: var(--surface-muted);
+}
+
+.restock__teaching-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.restock__teaching-head .status-tag {
+  height: 18px;
+  padding: 0 6px;
+  font-size: 11px;
+}
+
+.restock__teaching-title {
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.restock__teaching-demand {
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.restock__teaching-sessions {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.restock__teaching-sessions li {
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--text-secondary);
+}
+
+.restock__teaching-consequence {
+  margin: 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--text-muted);
 }
 
 .restock__rationale {

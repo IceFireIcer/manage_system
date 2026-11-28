@@ -8,7 +8,7 @@ import concurrent.futures
 import logging
 import threading
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -27,13 +27,20 @@ from app.agent.rules import (
     evaluate,
 )
 from app.consumption import local_day_start, window_flow
-from app.models import Consumable
+from app.models import (
+    Consumable,
+    Course,
+    CourseRecipeItem,
+    CourseSession,
+)
 from app.schemas_consumables import STATUS_ENABLED
 from app.schemas_inventory import (
     RuleSpecOut,
     RuleTierOut,
     SuggestionListOut,
     SuggestionOut,
+    TeachingContextOut,
+    TeachingSessionOut,
 )
 
 logger = logging.getLogger(__name__)
@@ -42,6 +49,7 @@ CACHE_TTL = timedelta(minutes=10)
 TIER_ORDER = {"urgent": 0, "moderate": 1, "observe": 2}
 LLM_BUDGET_SECONDS = 5.0
 MAX_LLM_WORKERS = 8
+MAX_TEACHING_SESSIONS = 3
 
 
 @dataclass(frozen=True)
@@ -144,48 +152,160 @@ def _store(
 
 
 def _fallback(
-    context: llm.RationaleContext, degraded: bool
+    context: llm.RationaleContext | llm.TeachingConsequenceContext,
+    degraded: bool,
 ) -> llm.RationaleResult:
-    return llm.RationaleResult(
-        llm.format_template(context), llm.RATIONALE_SOURCE_RULES, degraded
-    )
+    if isinstance(context, llm.TeachingConsequenceContext):
+        text = llm.format_teaching_template(context)
+    else:
+        text = llm.format_template(context)
+    return llm.RationaleResult(text, llm.RATIONALE_SOURCE_RULES, degraded)
 
 
-def _generate_rationales(
-    contexts: list[llm.RationaleContext],
-) -> list[llm.RationaleResult]:
-    if not contexts:
+def _generate_outputs(
+    pairs: list[tuple[llm.RationaleContext, llm.TeachingConsequenceContext]],
+) -> list[tuple[llm.RationaleResult, llm.RationaleResult]]:
+    if not pairs:
         return []
-    if len(contexts) == 1:
-        return [llm.generate_rationale_result(contexts[0])]
+    if len(pairs) == 1:
+        rationale_context, teaching_context = pairs[0]
+        return [
+            (
+                llm.generate_rationale_result(rationale_context),
+                llm.generate_teaching_consequence_result(teaching_context),
+            )
+        ]
 
     executor = concurrent.futures.ThreadPoolExecutor(
-        max_workers=min(len(contexts), MAX_LLM_WORKERS)
+        max_workers=min(len(pairs) * 2, MAX_LLM_WORKERS)
     )
     try:
-        futures = [
-            executor.submit(llm.generate_rationale_result, context)
-            for context in contexts
+        jobs = []
+        for index, (rationale_context, teaching_context) in enumerate(pairs):
+            jobs.append(
+                (
+                    index,
+                    0,
+                    rationale_context,
+                    executor.submit(
+                        llm.generate_rationale_result, rationale_context
+                    ),
+                )
+            )
+            jobs.append(
+                (
+                    index,
+                    1,
+                    teaching_context,
+                    executor.submit(
+                        llm.generate_teaching_consequence_result, teaching_context
+                    ),
+                )
+            )
+        done, _ = concurrent.futures.wait(
+            [job[3] for job in jobs], timeout=LLM_BUDGET_SECONDS
+        )
+        results: list[list[llm.RationaleResult | None]] = [
+            [None, None] for _ in pairs
         ]
-        done, _ = concurrent.futures.wait(futures, timeout=LLM_BUDGET_SECONDS)
-        results: list[llm.RationaleResult] = []
-        for future, context in zip(futures, contexts, strict=True):
+        for index, slot, context, future in jobs:
             if future in done:
                 try:
-                    results.append(future.result())
+                    results[index][slot] = future.result()
                 except Exception:
-                    results.append(_fallback(context, True))
+                    results[index][slot] = _fallback(context, True)
             else:
-                results.append(_fallback(context, True))
-        return results
+                results[index][slot] = _fallback(context, True)
+        return [
+            (rationale, teaching)
+            for rationale, teaching in results
+            if rationale is not None and teaching is not None
+        ]
     finally:
         executor.shutdown(wait=False, cancel_futures=True)
+
+
+def _teaching_contexts(
+    db: Session,
+    consumables: list[Consumable],
+    today: date,
+) -> dict[int, tuple[TeachingContextOut, llm.TeachingConsequenceContext]]:
+    if not consumables:
+        return {}
+    consumable_ids = [consumable.id for consumable in consumables]
+    rows = db.execute(
+        select(CourseSession, Course, CourseRecipeItem)
+        .join(Course, Course.id == CourseSession.course_id)
+        .join(
+            CourseRecipeItem,
+            (CourseRecipeItem.snapshot_id == CourseSession.recipe_snapshot_id)
+            & (CourseRecipeItem.consumable_id.in_(consumable_ids)),
+        )
+        .where(
+            CourseSession.status == "planned",
+            CourseSession.session_date >= today,
+            CourseSession.class_id == Course.class_id,
+            Course.status == "enabled",
+        )
+        .order_by(
+            CourseSession.session_date,
+            CourseSession.seq,
+            CourseSession.id,
+        )
+    ).all()
+
+    grouped: dict[int, list[tuple[CourseSession, Course, CourseRecipeItem]]] = {}
+    for session, course, item in rows:
+        grouped.setdefault(item.consumable_id, []).append((session, course, item))
+
+    contexts: dict[int, tuple[TeachingContextOut, llm.TeachingConsequenceContext]] = {}
+    for consumable in consumables:
+        records = grouped.get(consumable.id, [])
+        headcount_total = sum(max(session.headcount, 0) for session, _, _ in records)
+        expected_demand = sum(
+            item.quantity_per_person * max(session.headcount, 0)
+            for session, _, item in records
+        )
+        expected_gap = max(expected_demand - consumable.current_stock, 0)
+        llm_context = llm.TeachingConsequenceContext(
+            name=consumable.name,
+            unit=consumable.unit,
+            unlinked=not records,
+            session_count=len(records),
+            headcount_total=headcount_total,
+            expected_demand=expected_demand,
+            expected_gap=expected_gap,
+        )
+        teaching = TeachingContextOut(
+            unlinked=not records,
+            sessions=[
+                TeachingSessionOut(
+                    course_id=course.id,
+                    course_name=course.name,
+                    session_id=session.id,
+                    session_seq=session.seq,
+                    session_date=session.session_date,
+                    headcount=session.headcount,
+                    required_quantity=item.quantity_per_person
+                    * max(session.headcount, 0),
+                )
+                for session, course, item in records[:MAX_TEACHING_SESSIONS]
+            ],
+            session_count=len(records),
+            headcount_total=headcount_total,
+            expected_demand=expected_demand,
+            expected_gap=expected_gap,
+            consequence=llm.format_teaching_template(llm_context),
+        )
+        contexts[consumable.id] = (teaching, llm_context)
+    return contexts
 
 
 def _build_suggestion(
     consumable: Consumable,
     evaluation: Evaluation,
     result: llm.RationaleResult,
+    teaching_context: TeachingContextOut,
     computed_at: datetime,
 ) -> SuggestionOut:
     return SuggestionOut(
@@ -207,6 +327,7 @@ def _build_suggestion(
         rationale=result.text,
         rationale_source=result.source,
         rationale_degraded=result.degraded,
+        teaching_context=teaching_context,
         computed_at=computed_at,
     )
 
@@ -277,22 +398,39 @@ def _inspect(db: Session, now: datetime | None) -> SuggestionListOut:
 
     computed = bool(pending)
     if pending:
-        contexts = [
-            llm.RationaleContext(
-                name=consumable.name,
-                unit=consumable.unit,
-                evaluation=evaluation,
+        teaching_map = _teaching_contexts(
+            db, [consumable for consumable, _ in pending], now_local.date()
+        )
+        pairs = [
+            (
+                llm.RationaleContext(
+                    name=consumable.name,
+                    unit=consumable.unit,
+                    evaluation=evaluation,
+                ),
+                teaching_map[consumable.id][1],
             )
             for consumable, evaluation in pending
         ]
-        results = _generate_rationales(contexts)
-        for (consumable, evaluation), context, result in zip(
-            pending, contexts, results, strict=True
-        ):
+        results = _generate_outputs(pairs)
+        for index, (consumable, evaluation) in enumerate(pending):
+            rationale, teaching = results[index]
+            rationale_context = pairs[index][0]
+            teaching_schema = teaching_map[consumable.id][0]
             if not _version_matches(consumable.id, epoch, versions):
-                result = _fallback(context, True)
+                rationale = _fallback(rationale_context, True)
             suggestion = _build_suggestion(
-                consumable, evaluation, result, now_local
+                consumable,
+                evaluation,
+                rationale,
+                teaching_schema.model_copy(
+                    update={
+                        "consequence": teaching.text,
+                        "consequence_source": teaching.source,
+                        "consequence_degraded": teaching.degraded,
+                    }
+                ),
+                now_local,
             )
             if _version_matches(consumable.id, epoch, versions):
                 _store(consumable, epoch, versions, suggestion, now_local)
