@@ -1,3 +1,4 @@
+from datetime import timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -20,9 +21,12 @@ from app.schemas_courses import (
     CourseCreate,
     CourseOut,
     CoursePageOut,
+    CourseRiskItemOut,
+    CourseRiskListOut,
     CourseSessionCreate,
     CourseSessionOut,
     CourseSessionPageOut,
+    CourseSessionRiskOut,
     CourseSessionUpdate,
     CourseUpdate,
     RecipeHistoryOut,
@@ -302,6 +306,196 @@ def create_course(
         ) from error
     db.refresh(course)
     return _course_out(course)
+
+
+ITEM_RISK_RANK = {"sufficient": 0, "critical": 1, "insufficient": 2}
+
+
+def _unconfigured_risk(
+    course: Course,
+    session: CourseSession,
+    lead_days: int,
+    recipe_version: int | None = None,
+) -> CourseSessionRiskOut:
+    return CourseSessionRiskOut(
+        configured=False,
+        level="unconfigured",
+        course_id=course.id,
+        course_name=course.name,
+        session_id=session.id,
+        seq=session.seq,
+        session_date=session.session_date,
+        headcount=session.headcount,
+        recipe_version=recipe_version,
+        lead_days=lead_days,
+        arrival_deadline=None,
+        gap=0,
+        gap_consumable_name=None,
+        items=[],
+    )
+
+
+def _item_risk(
+    item: CourseRecipeItem, consumable: Consumable, headcount: int
+) -> CourseRiskItemOut:
+    required = item.quantity_per_person * headcount
+    available = consumable.current_stock
+    if available < required:
+        level = "insufficient"
+    elif available < consumable.safety_stock:
+        level = "critical"
+    else:
+        level = "sufficient"
+    return CourseRiskItemOut(
+        consumable_id=consumable.id,
+        consumable_name=consumable.name,
+        unit=consumable.unit,
+        quantity_per_person=item.quantity_per_person,
+        required_quantity=required,
+        available_quantity=available,
+        safety_stock=consumable.safety_stock,
+        gap=max(0, required - available),
+        level=level,
+    )
+
+
+def _build_risks(
+    db: Session,
+    entries: list[tuple[Course, CourseSession]],
+    lead_days: int,
+) -> list[CourseSessionRiskOut]:
+    snapshot_ids = {
+        session.recipe_snapshot_id
+        for _, session in entries
+        if session.recipe_snapshot_id is not None
+    }
+    snapshots: dict[int, CourseRecipeSnapshot] = {}
+    items_by_snapshot: dict[int, list[CourseRecipeItem]] = {}
+    consumables: dict[int, Consumable] = {}
+    if snapshot_ids:
+        snapshots = {
+            row.id: row
+            for row in db.scalars(
+                select(CourseRecipeSnapshot).where(
+                    CourseRecipeSnapshot.id.in_(snapshot_ids)
+                )
+            ).all()
+        }
+        item_rows = db.scalars(
+            select(CourseRecipeItem)
+            .where(CourseRecipeItem.snapshot_id.in_(snapshot_ids))
+            .order_by(CourseRecipeItem.id)
+        ).all()
+        for row in item_rows:
+            items_by_snapshot.setdefault(row.snapshot_id, []).append(row)
+        consumable_ids = {row.consumable_id for row in item_rows}
+        if consumable_ids:
+            consumables = {
+                row.id: row
+                for row in db.scalars(
+                    select(Consumable).where(Consumable.id.in_(consumable_ids))
+                ).all()
+            }
+
+    results: list[CourseSessionRiskOut] = []
+    for course, session in entries:
+        if session.recipe_snapshot_id is None:
+            results.append(_unconfigured_risk(course, session, lead_days))
+            continue
+        snapshot = snapshots.get(session.recipe_snapshot_id)
+        recipe_version = snapshot.version if snapshot is not None else None
+        rows = items_by_snapshot.get(session.recipe_snapshot_id, [])
+        if snapshot is None or not rows or session.headcount <= 0:
+            results.append(
+                _unconfigured_risk(course, session, lead_days, recipe_version)
+            )
+            continue
+
+        item_outs: list[CourseRiskItemOut] = []
+        missing = False
+        for row in rows:
+            consumable = consumables.get(row.consumable_id)
+            if consumable is None or consumable.class_id != course.class_id:
+                missing = True
+                break
+            item_outs.append(_item_risk(row, consumable, session.headcount))
+        if missing or not item_outs:
+            results.append(
+                _unconfigured_risk(course, session, lead_days, recipe_version)
+            )
+            continue
+
+        worst = max(
+            item_outs, key=lambda row: (ITEM_RISK_RANK[row.level], row.gap)
+        )
+        level = worst.level
+        result = CourseSessionRiskOut(
+            configured=True,
+            level=level,
+            course_id=course.id,
+            course_name=course.name,
+            session_id=session.id,
+            seq=session.seq,
+            session_date=session.session_date,
+            headcount=session.headcount,
+            recipe_version=recipe_version,
+            lead_days=lead_days,
+            arrival_deadline=(
+                session.session_date - timedelta(days=lead_days)
+                if level != "sufficient"
+                else None
+            ),
+            gap=worst.gap,
+            gap_consumable_name=worst.consumable_name,
+            items=item_outs,
+        )
+        results.append(result)
+    return results
+
+
+@router.get("/risk")
+def list_course_risks(
+    db: Annotated[Session, Depends(get_db)],
+    current_user: StaffUser,
+    days: Annotated[int, Query(ge=1, le=60)] = 14,
+    lead_days: Annotated[int, Query(ge=0, le=30)] = 1,
+) -> CourseRiskListOut:
+    start = business_time.today()
+    end = start + timedelta(days=days)
+    rows = db.execute(
+        select(Course, CourseSession)
+        .join(CourseSession, CourseSession.course_id == Course.id)
+        .where(
+            Course.class_id == current_user.class_id,
+            CourseSession.status == "planned",
+            CourseSession.session_date >= start,
+            CourseSession.session_date <= end,
+        )
+        .order_by(CourseSession.session_date, CourseSession.course_id, CourseSession.seq)
+    ).all()
+    entries = [(course, session) for course, session in rows]
+    return CourseRiskListOut(
+        days=days,
+        lead_days=lead_days,
+        items=_build_risks(db, entries, lead_days),
+    )
+
+
+@router.get("/{course_id}/sessions/{session_id}/risk")
+def get_session_risk(
+    course_id: int,
+    session_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    current_user: StaffUser,
+    lead_days: Annotated[int, Query(ge=0, le=30)] = 1,
+) -> CourseSessionRiskOut:
+    course = _get_course(db, course_id, current_user)
+    session = db.get(CourseSession, session_id)
+    if session is None or session.course_id != course.id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="课次不存在"
+        )
+    return _build_risks(db, [(course, session)], lead_days)[0]
 
 
 @router.get("/{course_id}")
