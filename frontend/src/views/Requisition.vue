@@ -42,7 +42,7 @@ const route = useRoute()
 const router = useRouter()
 
 const isStudent = computed(() => userStore.user?.role === 'student')
-const isAdmin = computed(() => userStore.user?.role === 'admin')
+const isAdmin = computed(() => ['super_admin', 'admin'].includes(userStore.user?.role))
 
 const locked = computed(() => {
   if (userStore.identityLocked) return true

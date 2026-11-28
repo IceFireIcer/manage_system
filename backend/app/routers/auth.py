@@ -13,7 +13,14 @@ from app.deps import CurrentUser
 from app.login_throttle import login_throttle
 from app.models import User
 from app.operation_log import record_operation, user_label
-from app.schemas import ChangePasswordRequest, LoginRequest, SessionOut, UserOut
+from app.roles import granted_roles, resolve_active_role
+from app.schemas import (
+    ChangePasswordRequest,
+    LoginRequest,
+    SessionOut,
+    SwitchRoleRequest,
+    UserOut,
+)
 from app.security import (
     TOKEN_COOKIE_NAME,
     create_access_token,
@@ -25,6 +32,28 @@ from app.security import (
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 LOGIN_THROTTLED_DETAIL = "登录尝试过于频繁，请稍后重试"
+ROLE_NOT_GRANTED_DETAIL = "未授予该角色"
+
+
+def _session_out(
+    user: User,
+    roles: list[str],
+    active_role: str,
+    expires_at: datetime | None,
+    must_change_password: bool | None = None,
+) -> SessionOut:
+    return SessionOut(
+        user=UserOut.model_validate(user),
+        must_change_password=(
+            user.must_change_password
+            if must_change_password is None
+            else must_change_password
+        ),
+        session_expires_at=expires_at,
+        roles=roles,
+        active_role=active_role,
+        active_class=user.class_id,
+    )
 
 
 def _log_login(
@@ -121,7 +150,12 @@ def login(
     if trim_auth_logs(db, settings) > 0:
         db.commit()
 
-    token, expire_seconds = create_access_token(user.id, user.role, user.session_version)
+    token, expire_seconds = create_access_token(
+        user.id,
+        user.role,
+        user.session_version,
+        active_role=resolve_active_role(user, granted_roles(db, user), None),
+    )
     _set_session_cookie(response, token, expire_seconds)
     return user
 
@@ -130,11 +164,60 @@ def login(
 def session_info(
     request: Request,
     current_user: CurrentUser,
+    db: Annotated[Session, Depends(get_db)],
 ) -> SessionOut:
-    return SessionOut(
-        user=UserOut.model_validate(current_user),
-        must_change_password=current_user.must_change_password,
-        session_expires_at=_session_expires_at(request),
+    roles = granted_roles(db, current_user)
+    active_role = resolve_active_role(
+        current_user, roles, getattr(current_user, "active_role", None)
+    )
+    return _session_out(
+        current_user, roles, active_role, _session_expires_at(request)
+    )
+
+
+@router.post("/switch-role")
+def switch_role(
+    payload: SwitchRoleRequest,
+    response: Response,
+    db: Annotated[Session, Depends(get_db)],
+    current_user: CurrentUser,
+) -> SessionOut:
+    roles = granted_roles(db, current_user)
+    previous_role = getattr(current_user, "active_role", None) or resolve_active_role(
+        current_user, roles, None
+    )
+    requested = payload.role.strip()
+    if requested not in roles:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=ROLE_NOT_GRANTED_DETAIL,
+        )
+    current_user.active_role = requested
+    token, expire_seconds = create_access_token(
+        current_user.id,
+        current_user.role,
+        current_user.session_version,
+        active_role=requested,
+    )
+    _set_session_cookie(response, token, expire_seconds)
+    if previous_role != requested:
+        record_operation(
+            db,
+            action="role_switch",
+            operator=current_user,
+            target_type="user",
+            target_id=current_user.id,
+            target_label=user_label(current_user),
+            before_value=json.dumps({"active_role": previous_role}, ensure_ascii=False),
+            after_value=json.dumps({"active_role": requested}, ensure_ascii=False),
+            remark=f"账号 {current_user.account} 从 {previous_role} 切换为 {requested}",
+        )
+        db.commit()
+    return _session_out(
+        current_user,
+        roles,
+        requested,
+        datetime.now(UTC) + timedelta(seconds=expire_seconds),
     )
 
 
@@ -176,14 +259,23 @@ def change_password(
     db.commit()
     db.refresh(current_user)
 
+    roles = granted_roles(db, current_user)
+    active_role = resolve_active_role(
+        current_user, roles, getattr(current_user, "active_role", None)
+    )
     token, expire_seconds = create_access_token(
-        current_user.id, current_user.role, current_user.session_version
+        current_user.id,
+        current_user.role,
+        current_user.session_version,
+        active_role=active_role,
     )
     _set_session_cookie(response, token, expire_seconds)
-    return SessionOut(
-        user=UserOut.model_validate(current_user),
+    return _session_out(
+        current_user,
+        roles,
+        active_role,
+        datetime.now(UTC) + timedelta(seconds=expire_seconds),
         must_change_password=current_user.must_change_password,
-        session_expires_at=datetime.now(UTC) + timedelta(seconds=expire_seconds),
     )
 
 

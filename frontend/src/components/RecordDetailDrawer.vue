@@ -57,7 +57,7 @@ const viewportWidth = ref(window.innerWidth)
 let requestSerial = 0
 
 const isStaff = computed(() =>
-  ['teacher', 'admin'].includes(userStore.user?.role),
+  ['super_admin', 'teacher', 'admin'].includes(userStore.user?.role),
 )
 
 const isStudent = computed(() => userStore.user?.role === 'student')

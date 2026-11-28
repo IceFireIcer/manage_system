@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app import business_time
 from app.models import OperationLog, StudentImportBatch, User
+from app.roles import ensure_grants
 from app.schemas_users import (
     ACCOUNT_MAX_LENGTH,
     NAME_MAX_LENGTH,
@@ -350,6 +351,7 @@ def execute_import(
                 )
                 db.add(user)
                 db.flush()
+                ensure_grants(db, user)
                 db.add(
                     OperationLog(
                         operator_id=operator.id,

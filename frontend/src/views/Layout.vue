@@ -28,15 +28,21 @@ const GROUP_META = {
 }
 
 const ROLE_TAG_CLASS = {
+  super_admin: 'role-tag--admin',
   teacher: 'role-tag--teacher',
   admin: 'role-tag--admin',
   student: 'role-tag--student',
 }
 
 const ROLE_LABEL = {
+  super_admin: '超级管理员',
   teacher: '教师',
   admin: '班委',
   student: '学生',
+}
+
+const AVATAR_ROLE = {
+  super_admin: 'admin',
 }
 
 const userInitial = computed(() => {
@@ -44,13 +50,20 @@ const userInitial = computed(() => {
   return name ? name.slice(0, 1) : '·'
 })
 
+const effectiveRole = computed(() => userStore.activeRole ?? userStore.user?.role)
+
 const avatarClass = computed(() => {
-  const role = userStore.user?.role
-  return role ? `layout__avatar--${role}` : ''
+  const role = effectiveRole.value
+  if (!role) return ''
+  return `layout__avatar--${AVATAR_ROLE[role] ?? role}`
 })
 
 const accountRole = computed(
-  () => ROLE_LABEL[userStore.user?.role] ?? userStore.roleName ?? '',
+  () => ROLE_LABEL[effectiveRole.value] ?? userStore.roleName ?? '',
+)
+
+const switchableRoles = computed(() =>
+  (userStore.roles ?? []).filter((role) => role !== userStore.activeRole),
 )
 
 const route = useRoute()
@@ -69,11 +82,13 @@ const userTriggerRef = ref(null)
 const mainRef = ref(null)
 
 const isMobile = computed(() => viewportWidth.value < 768)
-const canSeeAlerts = computed(() => ['teacher', 'admin'].includes(userStore.user?.role))
+const canSeeAlerts = computed(() =>
+  ['super_admin', 'teacher', 'admin'].includes(effectiveRole.value),
+)
 
 const currentTitle = computed(() => {
   const nav = route.meta?.nav
-  if (nav?.studentTitle && userStore.user?.role === 'student') {
+  if (nav?.studentTitle && effectiveRole.value === 'student') {
     return nav.studentTitle
   }
   return route.meta?.title ?? ''
@@ -94,7 +109,7 @@ const toggleLabel = computed(() => {
 })
 
 const navGroups = computed(() => {
-  const role = userStore.user?.role
+  const role = effectiveRole.value
   const groups = new Map()
 
   for (const record of router.getRoutes()) {
@@ -102,7 +117,7 @@ const navGroups = computed(() => {
     if (!nav) continue
     if (nav.group === 'dashboard') continue
     const allowedRoles = record.meta.roles
-    if (allowedRoles && !allowedRoles.includes(role)) continue
+    if (allowedRoles && role !== 'super_admin' && !allowedRoles.includes(role)) continue
     const groupMeta = GROUP_META[nav.group]
     if (!groupMeta) continue
 
@@ -313,6 +328,23 @@ function checkExpiry() {
   }
 }
 
+async function handleRoleSwitch(nextRole) {
+  if (!nextRole || nextRole === effectiveRole.value) return
+  try {
+    await userStore.switchRole(nextRole)
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || '角色切换失败，请重试')
+    return
+  }
+  ElMessage.success(`已切换为${ROLE_LABEL[nextRole] ?? nextRole}视角`)
+  const allowedRoles = route.meta?.roles
+  if (allowedRoles && nextRole !== 'super_admin' && !allowedRoles.includes(nextRole)) {
+    router.push('/dashboard')
+    return
+  }
+  router.go(0)
+}
+
 function handleUserCommand(command) {
   if (command === 'logout') {
     handleLogout()
@@ -320,6 +352,8 @@ function handleUserCommand(command) {
     handleLogoutAll()
   } else if (command === 'change-password') {
     openPasswordDialog()
+  } else if (typeof command === 'string' && command.startsWith('switch-role:')) {
+    handleRoleSwitch(command.slice('switch-role:'.length))
   }
 }
 
@@ -467,6 +501,14 @@ onBeforeUnmount(() => {
               <el-dropdown-item disabled>
                 <span class="layout__dropdown-name">{{ userStore.user?.name }}</span>
                 <span class="layout__dropdown-role">{{ userStore.roleName }}</span>
+              </el-dropdown-item>
+              <el-dropdown-item
+                v-for="(role, index) in switchableRoles"
+                :key="`role-${role}`"
+                :divided="index === 0"
+                :command="`switch-role:${role}`"
+              >
+                切换为{{ ROLE_LABEL[role] ?? role }}视角
               </el-dropdown-item>
               <el-dropdown-item divided command="change-password">修改密码</el-dropdown-item>
               <el-dropdown-item command="logout">退出当前会话</el-dropdown-item>

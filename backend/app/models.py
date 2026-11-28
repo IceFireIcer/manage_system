@@ -37,6 +37,20 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
 
 
+class UserRole(Base):
+    __tablename__ = "user_roles"
+    __table_args__ = (
+        UniqueConstraint("user_id", "role", name="uq_user_roles_user_role"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    role: Mapped[str] = mapped_column(String(16), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
+
+
 class Consumable(Base):
     __tablename__ = "consumables"
     __table_args__ = (

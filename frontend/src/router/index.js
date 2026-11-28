@@ -195,8 +195,9 @@ router.beforeEach(async (to) => {
     }
   }
 
+  const activeRole = userStore.activeRole ?? userStore.user.role
   const allowedRoles = to.meta.roles
-  if (allowedRoles && !allowedRoles.includes(userStore.user.role)) {
+  if (allowedRoles && activeRole !== 'super_admin' && !allowedRoles.includes(activeRole)) {
     return { path: '/403', query: { from: to.fullPath } }
   }
 

@@ -24,12 +24,18 @@ def verify_password(password: str, password_hash: str) -> bool:
         return False
 
 
-def create_access_token(user_id: int, role: str, session_version: int = 0) -> tuple[str, int]:
+def create_access_token(
+    user_id: int,
+    role: str,
+    session_version: int = 0,
+    active_role: str | None = None,
+) -> tuple[str, int]:
     settings = get_settings()
     expire_seconds = settings.jwt_expire_minutes * 60
     payload: dict[str, Any] = {
         "sub": str(user_id),
         "role": role,
+        "ar": active_role or role,
         "sv": session_version,
         "exp": datetime.now(UTC) + timedelta(seconds=expire_seconds),
     }

@@ -6,14 +6,21 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models import User
+from app.roles import granted_roles, resolve_active_role, role_passes
 from app.security import decode_access_token
 
 AUTH_PATH_PREFIX = "/api/v1/auth/"
 CHANGE_PASSWORD_REQUIRED_DETAIL = "请先修改初始密码"
+EFFECTIVE_ROLE_ATTR = "active_role"
 
 
 def _allows_pending_password_change(path: str) -> bool:
     return path.startswith(AUTH_PATH_PREFIX)
+
+
+def effective_role(user: User) -> str:
+    """当前会话的生效角色；未解析时回落到账号默认角色。"""
+    return getattr(user, EFFECTIVE_ROLE_ATTR, None) or user.role
 
 
 def get_current_user(
@@ -40,6 +47,8 @@ def get_current_user(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=CHANGE_PASSWORD_REQUIRED_DETAIL,
         )
+    roles = granted_roles(db, user)
+    setattr(user, EFFECTIVE_ROLE_ATTR, resolve_active_role(user, roles, payload.get("ar")))
     return user
 
 
@@ -48,7 +57,7 @@ CurrentUser = Annotated[User, Depends(get_current_user)]
 
 def require_role(*allowed_roles: str) -> Callable:
     def checker(current_user: CurrentUser) -> User:
-        if current_user.role not in allowed_roles:
+        if not role_passes(effective_role(current_user), allowed_roles):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="无权限访问",

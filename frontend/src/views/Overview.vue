@@ -22,8 +22,8 @@ const userStore = useUserStore()
 const alertsStore = useAlertsStore()
 
 const isStudent = computed(() => userStore.user?.role === 'student')
-const isAdmin = computed(() => userStore.user?.role === 'admin')
-const canAudit = computed(() => ['teacher', 'admin'].includes(userStore.user?.role))
+const isAdmin = computed(() => ['super_admin', 'admin'].includes(userStore.user?.role))
+const canAudit = computed(() => ['super_admin', 'teacher', 'admin'].includes(userStore.user?.role))
 const canManageAlerts = computed(() => isAdmin.value)
 
 const ALERT_STATUS_META = {

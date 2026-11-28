@@ -31,7 +31,7 @@ const route = useRoute()
 const router = useRouter()
 
 const isStudent = computed(() => userStore.user?.role === 'student')
-const isStaff = computed(() => ['teacher', 'admin'].includes(userStore.user?.role))
+const isStaff = computed(() => ['super_admin', 'teacher', 'admin'].includes(userStore.user?.role))
 
 const pageTitle = computed(() => (isStudent.value ? '我的记录' : '记录查询'))
 const breadcrumb = computed(() => ['领用管理', pageTitle.value])
