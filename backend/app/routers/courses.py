@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -15,9 +15,14 @@ from app.models import (
     CourseRecipeItem,
     CourseRecipeSnapshot,
     CourseSession,
+    RestockLine,
+    RestockOrder,
     User,
 )
 from app.schemas_courses import (
+    ArrivalCoverageItemOut,
+    ArrivalCoverageOut,
+    ArrivalCoverageSessionOut,
     CourseCreate,
     CourseOut,
     CoursePageOut,
@@ -34,6 +39,10 @@ from app.schemas_courses import (
     RecipeOut,
     RecipeSaveRequest,
     RecipeSnapshotOut,
+    WeekRiskItemOut,
+    WeekRiskOut,
+    WeekRiskSessionOut,
+    WeekRiskUnconfiguredOut,
 )
 
 router = APIRouter(prefix="/api/v1/courses", tags=["courses"])
@@ -310,6 +319,81 @@ def create_course(
 
 ITEM_RISK_RANK = {"sufficient": 0, "critical": 1, "insufficient": 2}
 
+WEEK_RISK_DEFAULT_DAYS = 7
+ARRIVAL_COVERAGE_DEFAULT_DAYS = 7
+ARRIVAL_COVERAGE_SESSION_LIMIT = 20
+ARRIVAL_COVERAGE_SESSION_MAX = 50
+
+
+def _risk_level(available: int, safety_stock: int, required: int) -> str:
+    if available < required:
+        return "insufficient"
+    if available < safety_stock:
+        return "critical"
+    return "sufficient"
+
+
+def _load_recipe_context(
+    db: Session, sessions: list[CourseSession]
+) -> tuple[
+    dict[int, CourseRecipeSnapshot],
+    dict[int, list[CourseRecipeItem]],
+    dict[int, Consumable],
+]:
+    snapshot_ids = {
+        session.recipe_snapshot_id
+        for session in sessions
+        if session.recipe_snapshot_id is not None
+    }
+    snapshots: dict[int, CourseRecipeSnapshot] = {}
+    items_by_snapshot: dict[int, list[CourseRecipeItem]] = {}
+    consumables: dict[int, Consumable] = {}
+    if not snapshot_ids:
+        return snapshots, items_by_snapshot, consumables
+    snapshots = {
+        row.id: row
+        for row in db.scalars(
+            select(CourseRecipeSnapshot).where(
+                CourseRecipeSnapshot.id.in_(snapshot_ids)
+            )
+        ).all()
+    }
+    item_rows = db.scalars(
+        select(CourseRecipeItem)
+        .where(CourseRecipeItem.snapshot_id.in_(snapshot_ids))
+        .order_by(CourseRecipeItem.id)
+    ).all()
+    for row in item_rows:
+        items_by_snapshot.setdefault(row.snapshot_id, []).append(row)
+    consumable_ids = {row.consumable_id for row in item_rows}
+    if consumable_ids:
+        consumables = {
+            row.id: row
+            for row in db.scalars(
+                select(Consumable).where(Consumable.id.in_(consumable_ids))
+            ).all()
+        }
+    return snapshots, items_by_snapshot, consumables
+
+
+def _upcoming_entries(
+    db: Session, class_id: int, days: int
+) -> list[tuple[Course, CourseSession]]:
+    start = business_time.today()
+    end = start + timedelta(days=days)
+    rows = db.execute(
+        select(Course, CourseSession)
+        .join(CourseSession, CourseSession.course_id == Course.id)
+        .where(
+            Course.class_id == class_id,
+            CourseSession.status == "planned",
+            CourseSession.session_date >= start,
+            CourseSession.session_date <= end,
+        )
+        .order_by(CourseSession.session_date, Course.id, CourseSession.seq)
+    ).all()
+    return [(course, session) for course, session in rows]
+
 
 def _unconfigured_risk(
     course: Course,
@@ -340,12 +424,7 @@ def _item_risk(
 ) -> CourseRiskItemOut:
     required = item.quantity_per_person * headcount
     available = consumable.current_stock
-    if available < required:
-        level = "insufficient"
-    elif available < consumable.safety_stock:
-        level = "critical"
-    else:
-        level = "sufficient"
+    level = _risk_level(available, consumable.safety_stock, required)
     return CourseRiskItemOut(
         consumable_id=consumable.id,
         consumable_name=consumable.name,
@@ -364,38 +443,9 @@ def _build_risks(
     entries: list[tuple[Course, CourseSession]],
     lead_days: int,
 ) -> list[CourseSessionRiskOut]:
-    snapshot_ids = {
-        session.recipe_snapshot_id
-        for _, session in entries
-        if session.recipe_snapshot_id is not None
-    }
-    snapshots: dict[int, CourseRecipeSnapshot] = {}
-    items_by_snapshot: dict[int, list[CourseRecipeItem]] = {}
-    consumables: dict[int, Consumable] = {}
-    if snapshot_ids:
-        snapshots = {
-            row.id: row
-            for row in db.scalars(
-                select(CourseRecipeSnapshot).where(
-                    CourseRecipeSnapshot.id.in_(snapshot_ids)
-                )
-            ).all()
-        }
-        item_rows = db.scalars(
-            select(CourseRecipeItem)
-            .where(CourseRecipeItem.snapshot_id.in_(snapshot_ids))
-            .order_by(CourseRecipeItem.id)
-        ).all()
-        for row in item_rows:
-            items_by_snapshot.setdefault(row.snapshot_id, []).append(row)
-        consumable_ids = {row.consumable_id for row in item_rows}
-        if consumable_ids:
-            consumables = {
-                row.id: row
-                for row in db.scalars(
-                    select(Consumable).where(Consumable.id.in_(consumable_ids))
-                ).all()
-            }
+    snapshots, items_by_snapshot, consumables = _load_recipe_context(
+        db, [session for _, session in entries]
+    )
 
     results: list[CourseSessionRiskOut] = []
     for course, session in entries:
@@ -478,6 +528,336 @@ def list_course_risks(
         days=days,
         lead_days=lead_days,
         items=_build_risks(db, entries, lead_days),
+    )
+
+
+def _build_week_risks(
+    db: Session,
+    entries: list[tuple[Course, CourseSession]],
+    lead_days: int,
+) -> tuple[list[WeekRiskItemOut], list[WeekRiskUnconfiguredOut]]:
+    snapshots, items_by_snapshot, consumables = _load_recipe_context(
+        db, [session for _, session in entries]
+    )
+    groups: dict[tuple, dict] = {}
+    unconfigured: list[WeekRiskUnconfiguredOut] = []
+
+    def skip(course: Course, session: CourseSession, reason: str, message: str) -> None:
+        unconfigured.append(
+            WeekRiskUnconfiguredOut(
+                course_id=course.id,
+                course_name=course.name,
+                session_id=session.id,
+                seq=session.seq,
+                session_date=session.session_date,
+                headcount=session.headcount,
+                reason=reason,
+                message=message,
+            )
+        )
+
+    for course, session in entries:
+        if session.recipe_snapshot_id is None:
+            skip(course, session, "missing_recipe", "课次未绑定配方快照，未计入实训周聚合")
+            continue
+        snapshot = snapshots.get(session.recipe_snapshot_id)
+        rows = items_by_snapshot.get(session.recipe_snapshot_id, [])
+        if snapshot is None:
+            skip(course, session, "missing_recipe", "配方快照不存在，未计入实训周聚合")
+            continue
+        if not rows:
+            skip(course, session, "empty_recipe", "配方快照没有耗材，未计入实训周聚合")
+            continue
+        if session.headcount <= 0:
+            skip(course, session, "missing_headcount", "课次人数为 0，未计入实训周聚合")
+            continue
+        missing = any(
+            consumables.get(row.consumable_id) is None
+            or consumables[row.consumable_id].class_id != course.class_id
+            for row in rows
+        )
+        if missing:
+            skip(
+                course,
+                session,
+                "missing_consumable",
+                "配方中的耗材不存在或不属于本班，未计入实训周聚合",
+            )
+            continue
+        for row in rows:
+            consumable = consumables[row.consumable_id]
+            key = (session.session_date, row.consumable_id)
+            group = groups.get(key)
+            if group is None:
+                group = {
+                    "class_label": course.class_label or session.class_label,
+                    "consumable": consumable,
+                    "required": 0,
+                    "sessions": [],
+                }
+                groups[key] = group
+            elif not group["class_label"]:
+                group["class_label"] = course.class_label or session.class_label
+            required = row.quantity_per_person * session.headcount
+            group["required"] += required
+            group["sessions"].append(
+                WeekRiskSessionOut(
+                    course_id=course.id,
+                    course_name=course.name,
+                    session_id=session.id,
+                    seq=session.seq,
+                    headcount=session.headcount,
+                    required_quantity=required,
+                    recipe_version=snapshot.version,
+                )
+            )
+
+    items: list[WeekRiskItemOut] = []
+    for (session_date, _), group in groups.items():
+        consumable = group["consumable"]
+        required = group["required"]
+        available = consumable.current_stock
+        level = _risk_level(available, consumable.safety_stock, required)
+        items.append(
+            WeekRiskItemOut(
+                class_id=consumable.class_id,
+                class_label=group["class_label"],
+                session_date=session_date,
+                consumable_id=consumable.id,
+                consumable_name=consumable.name,
+                unit=consumable.unit,
+                required_quantity=required,
+                available_quantity=available,
+                safety_stock=consumable.safety_stock,
+                gap=max(0, required - available),
+                level=level,
+                arrival_deadline=(
+                    session_date - timedelta(days=lead_days)
+                    if level != "sufficient"
+                    else None
+                ),
+                sessions=group["sessions"],
+            )
+        )
+    items.sort(
+        key=lambda item: (
+            item.session_date,
+            -ITEM_RISK_RANK[item.level],
+            -item.gap,
+            item.consumable_id,
+        )
+    )
+    unconfigured.sort(
+        key=lambda row: (row.session_date, row.course_id, row.seq)
+    )
+    return items, unconfigured
+
+
+@router.get("/risk/week")
+def get_week_risk(
+    db: Annotated[Session, Depends(get_db)],
+    current_user: StaffUser,
+    days: Annotated[int, Query(ge=1, le=60)] = WEEK_RISK_DEFAULT_DAYS,
+    lead_days: Annotated[int, Query(ge=0, le=30)] = 1,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
+) -> WeekRiskOut:
+    entries = _upcoming_entries(db, current_user.class_id, days)
+    items, unconfigured = _build_week_risks(db, entries, lead_days)
+    total = len(items)
+    start = (page - 1) * page_size
+    return WeekRiskOut(
+        days=days,
+        lead_days=lead_days,
+        page=page,
+        page_size=page_size,
+        total=total,
+        items=items[start : start + page_size],
+        unconfigured=unconfigured,
+    )
+
+
+def _arrival_response(
+    *,
+    status: str,
+    matched: bool,
+    order_no: str,
+    message: str,
+    days: int,
+    lead_days: int,
+    items: list[ArrivalCoverageSessionOut],
+    business_at: datetime | None = None,
+    total: int = 0,
+    truncated: bool = False,
+) -> ArrivalCoverageOut:
+    return ArrivalCoverageOut(
+        matched=matched,
+        status=status,
+        order_no=order_no,
+        message=message,
+        days=days,
+        lead_days=lead_days,
+        business_at=business_at,
+        total=total,
+        items=items,
+        truncated=truncated,
+    )
+
+
+@router.get("/risk/arrival-coverage")
+def get_arrival_coverage(
+    db: Annotated[Session, Depends(get_db)],
+    current_user: StaffUser,
+    order_no: Annotated[str, Query(min_length=1, max_length=40)],
+    days: Annotated[int, Query(ge=1, le=60)] = ARRIVAL_COVERAGE_DEFAULT_DAYS,
+    lead_days: Annotated[int, Query(ge=0, le=30)] = 1,
+    limit: Annotated[
+        int, Query(ge=1, le=ARRIVAL_COVERAGE_SESSION_MAX)
+    ] = ARRIVAL_COVERAGE_SESSION_LIMIT,
+) -> ArrivalCoverageOut:
+    normalized = order_no.strip()
+    order = db.scalars(
+        select(RestockOrder).where(
+            RestockOrder.order_no == normalized,
+            RestockOrder.class_id == current_user.class_id,
+        )
+    ).first()
+    if order is None:
+        return _arrival_response(
+            status="unmatched",
+            matched=False,
+            order_no=normalized,
+            message="未匹配到本班该入库单",
+            days=days,
+            lead_days=lead_days,
+            items=[],
+        )
+    if order.status != "submitted":
+        return _arrival_response(
+            status="not_arrived",
+            matched=False,
+            order_no=normalized,
+            message="该入库单尚未完成入库，暂无法判定覆盖",
+            days=days,
+            lead_days=lead_days,
+            business_at=order.business_at,
+            items=[],
+        )
+    lines = db.scalars(
+        select(RestockLine)
+        .where(RestockLine.order_id == order.id)
+        .order_by(RestockLine.line_no)
+    ).all()
+    if not lines:
+        return _arrival_response(
+            status="unmatched",
+            matched=False,
+            order_no=normalized,
+            message="该入库单没有入库明细",
+            days=days,
+            lead_days=lead_days,
+            business_at=order.business_at,
+            items=[],
+        )
+
+    arrived: dict[int, int] = {}
+    for line in lines:
+        arrived[line.consumable_id] = arrived.get(line.consumable_id, 0) + line.quantity
+
+    entries = _upcoming_entries(db, current_user.class_id, days)
+    snapshots, items_by_snapshot, consumables = _load_recipe_context(
+        db, [session for _, session in entries]
+    )
+    session_items: dict[int, dict] = {}
+    ordered_ids: list[int] = []
+
+    for consumable_id, quantity in arrived.items():
+        consumable = consumables.get(consumable_id)
+        if consumable is None or consumable.class_id != current_user.class_id:
+            continue
+        demands: list[tuple[Course, CourseSession, CourseRecipeItem]] = []
+        for course, session in entries:
+            if session.recipe_snapshot_id is None or session.headcount <= 0:
+                continue
+            rows = items_by_snapshot.get(session.recipe_snapshot_id, [])
+            for row in rows:
+                if row.consumable_id == consumable_id:
+                    demands.append((course, session, row))
+                    break
+        if not demands:
+            continue
+        pool = consumable.current_stock
+        before_stock = max(0, pool - quantity)
+        for course, session, row in demands:
+            required = row.quantity_per_person * session.headcount
+            allocated = min(pool, required)
+            pool -= allocated
+            info = session_items.get(session.id)
+            if info is None:
+                info = {"course": course, "session": session, "items": []}
+                session_items[session.id] = info
+                ordered_ids.append(session.id)
+            info["items"].append(
+                ArrivalCoverageItemOut(
+                    consumable_id=consumable.id,
+                    consumable_name=consumable.name,
+                    unit=consumable.unit,
+                    arrived_quantity=quantity,
+                    required_quantity=required,
+                    covered_quantity=allocated,
+                    remaining_quantity=pool,
+                    level_before=_risk_level(
+                        before_stock, consumable.safety_stock, required
+                    ),
+                    level_after=_risk_level(
+                        allocated, consumable.safety_stock, required
+                    ),
+                    covered=allocated >= required,
+                )
+            )
+
+    sessions: list[ArrivalCoverageSessionOut] = []
+    for session_id in ordered_ids:
+        info = session_items[session_id]
+        session = info["session"]
+        covered = all(item.covered for item in info["items"])
+        sessions.append(
+            ArrivalCoverageSessionOut(
+                course_id=info["course"].id,
+                course_name=info["course"].name,
+                session_id=session.id,
+                seq=session.seq,
+                session_date=session.session_date,
+                headcount=session.headcount,
+                covered=covered,
+                items=info["items"],
+                arrival_deadline=(
+                    session.session_date - timedelta(days=lead_days)
+                    if not covered
+                    else None
+                ),
+            )
+        )
+    sessions.sort(key=lambda row: (row.session_date, row.course_id, row.seq))
+    total = len(sessions)
+    trimmed = sessions[:limit]
+    covered_count = sum(1 for row in trimmed if row.covered)
+    message = (
+        f"本次到货匹配 {len(trimmed)} 个待上课次，其中 {covered_count} 个可覆盖"
+        if trimmed
+        else "未匹配到需要本次到货耗材的 upcoming 课次"
+    )
+    return _arrival_response(
+        status="matched",
+        matched=True,
+        order_no=normalized,
+        message=message,
+        days=days,
+        lead_days=lead_days,
+        business_at=order.business_at,
+        items=trimmed,
+        total=total,
+        truncated=total > limit,
     )
 
 

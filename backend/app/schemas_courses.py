@@ -237,3 +237,94 @@ class CourseRiskListOut(BaseModel):
     days: int
     lead_days: int
     items: list[CourseSessionRiskOut]
+
+WeekRiskReason = Literal[
+    "missing_recipe", "empty_recipe", "missing_headcount", "missing_consumable"
+]
+
+
+class WeekRiskSessionOut(BaseModel):
+    course_id: int
+    course_name: str
+    session_id: int
+    seq: int
+    headcount: int
+    required_quantity: int
+    recipe_version: int | None = None
+
+
+class WeekRiskItemOut(BaseModel):
+    class_id: int
+    class_label: str
+    session_date: date
+    consumable_id: int
+    consumable_name: str
+    unit: str
+    required_quantity: int
+    available_quantity: int
+    safety_stock: int
+    gap: int
+    level: ItemRiskLevel
+    arrival_deadline: date | None = None
+    sessions: list[WeekRiskSessionOut]
+
+
+class WeekRiskUnconfiguredOut(BaseModel):
+    course_id: int
+    course_name: str
+    session_id: int
+    seq: int
+    session_date: date
+    headcount: int
+    reason: WeekRiskReason
+    message: str
+
+
+class WeekRiskOut(BaseModel):
+    days: int
+    lead_days: int
+    page: int
+    page_size: int
+    total: int
+    items: list[WeekRiskItemOut]
+    unconfigured: list[WeekRiskUnconfiguredOut]
+
+
+ArrivalCoverageStatus = Literal["matched", "unmatched", "not_arrived"]
+
+
+class ArrivalCoverageItemOut(BaseModel):
+    consumable_id: int
+    consumable_name: str
+    unit: str
+    arrived_quantity: int
+    required_quantity: int
+    covered_quantity: int
+    remaining_quantity: int
+    level_before: ItemRiskLevel
+    level_after: ItemRiskLevel
+    covered: bool
+
+
+class ArrivalCoverageSessionOut(BaseModel):
+    course_id: int
+    course_name: str
+    session_id: int
+    seq: int
+    session_date: date
+    headcount: int
+    covered: bool
+    items: list[ArrivalCoverageItemOut]
+
+
+class ArrivalCoverageOut(BaseModel):
+    matched: bool
+    status: ArrivalCoverageStatus
+    order_no: str
+    message: str
+    days: int
+    lead_days: int
+    business_at: datetime | None = None
+    total: int
+    items: list[ArrivalCoverageSessionOut]
+    truncated: bool = False
