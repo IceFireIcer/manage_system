@@ -9,6 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app import business_time
+from app.class_scope import active_class_id
 from app.models import OperationLog, StudentImportBatch, User
 from app.roles import ensure_grants
 from app.schemas_users import (
@@ -288,7 +289,7 @@ def _existing_batch(db: Session, request_id: str) -> StudentImportBatch | None:
 def execute_import(
     db: Session, *, operator: User, payload: RosterImportRequest
 ) -> tuple[RosterImportReceiptOut, bool]:
-    preview = build_preview(db, class_id=operator.class_id, payload=payload)
+    preview = build_preview(db, class_id=active_class_id(operator), payload=payload)
     request_id = payload.request_id or uuid.uuid4().hex
     signature = _signature(preview)
     existing = _existing_batch(db, request_id)
@@ -321,7 +322,7 @@ def execute_import(
         operator_id=operator.id,
         operator_name=operator.name,
         operator_role=operator.role,
-        class_id=operator.class_id,
+        class_id=active_class_id(operator),
         total_rows=preview.summary.total_rows,
         created_rows=0,
         existing_rows=preview.summary.existing_rows,
@@ -345,7 +346,7 @@ def execute_import(
                     password_hash=hash_password(temporary_password),
                     name=row.name or "",
                     role=ROLE_STUDENT,
-                    class_id=operator.class_id,
+                    class_id=active_class_id(operator),
                     status=STATUS_ENABLED,
                     must_change_password=True,
                 )

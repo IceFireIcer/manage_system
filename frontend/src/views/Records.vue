@@ -30,8 +30,11 @@ const userStore = useUserStore()
 const route = useRoute()
 const router = useRouter()
 
-const isStudent = computed(() => userStore.user?.role === 'student')
-const isStaff = computed(() => ['super_admin', 'teacher', 'admin'].includes(userStore.user?.role))
+const activeRole = computed(() => userStore.activeRole ?? userStore.user?.role)
+const isStudent = computed(() => activeRole.value === 'student')
+const isStaff = computed(() => ['super_admin', 'teacher', 'admin'].includes(activeRole.value))
+const canExport = computed(() => userStore.hasPermission('record.export'))
+const canApprove = computed(() => userStore.hasPermission('requisition.approve'))
 
 const pageTitle = computed(() => (isStudent.value ? '我的记录' : '记录查询'))
 const breadcrumb = computed(() => ['领用管理', pageTitle.value])
@@ -275,7 +278,7 @@ function relatedLabel(row) {
 }
 
 function canReverseRow(row) {
-  return isStaff.value && row.type === 'normal' && row.status === 'active'
+  return canApprove.value && row.type === 'normal' && row.status === 'active'
 }
 
 function canStockActionRow(row) {
@@ -283,7 +286,7 @@ function canStockActionRow(row) {
 }
 
 function canScrapRow(row) {
-  return isStaff.value && canStockActionRow(row)
+  return canApprove.value && canStockActionRow(row)
 }
 
 function rowClassName({ row }) {
@@ -717,7 +720,7 @@ onMounted(async () => {
     <PageHeader :title="pageTitle" :breadcrumb="breadcrumb">
       <template #actions>
         <el-button
-          v-if="isStaff"
+          v-if="canExport"
           :loading="exporting"
           :disabled="exporting"
           @click="handleExport"

@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app import business_time
 from app.database import get_db
-from app.deps import require_role
+from app.deps import require_permission
 from app.models import (
     Consumable,
     Course,
@@ -113,7 +113,7 @@ REVIEW_FIELDS = (
     ("created_by_name", "记录人"),
 )
 
-StaffUser = Annotated[User, Depends(require_role("teacher", "admin"))]
+ReportViewer = Annotated[User, Depends(require_permission("report.view"))]
 
 
 def _is_ops_request(request: Request) -> bool:
@@ -354,7 +354,7 @@ def _collect_semester_close(
 ) -> dict:
     start_at = business_time.day_start(start)
     end_at = business_time.next_day_start(end)
-    class_id = current_user.class_id
+    class_id = current_user.active_class_id
 
     key_events = _event_rows(db, class_id, start_at, end_at)
     incidents = _incident_rows(db, class_id, start_at, end_at)
@@ -413,7 +413,7 @@ def _build_archive(payload: dict, current_user: User, generated_at: datetime) ->
             "name": current_user.name,
             "role": current_user.role,
         },
-        "class_id": current_user.class_id,
+        "class_id": current_user.active_class_id,
         "files": _files_payload(files),
         "totals": payload["totals"],
     }
@@ -461,7 +461,7 @@ def _validated_range(start: date, end: date) -> None:
 @router.get("/semester-close/preview")
 def preview_semester_close(
     db: Annotated[Session, Depends(get_db)],
-    current_user: StaffUser,
+    current_user: ReportViewer,
     start: Annotated[date, Query()],
     end: Annotated[date, Query()],
 ) -> dict[str, object]:
@@ -477,7 +477,7 @@ def preview_semester_close(
 @router.get("/semester-close")
 def export_semester_close(
     db: Annotated[Session, Depends(get_db)],
-    current_user: StaffUser,
+    current_user: ReportViewer,
     start: Annotated[date, Query()],
     end: Annotated[date, Query()],
 ) -> Response:

@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from app import business_time
 from app import consumption as consumption_core
 from app.database import get_db
-from app.deps import require_role
+from app.deps import require_permission
 from app.models import (
     Consumable,
     CourseSession,
@@ -31,7 +31,7 @@ from app.schemas_consumption import (
 
 router = APIRouter(prefix="/api/v1/consumption", tags=["consumption"])
 
-StaffUser = Annotated[User, Depends(require_role("teacher", "admin"))]
+StaffUser = Annotated[User, Depends(require_permission("consumption.view"))]
 
 TEACHING_INSIGHT_WINDOWS = consumption_core.VALID_WINDOWS
 NON_TRAINING_GROWTH_THRESHOLD = 0.5
@@ -297,7 +297,7 @@ def get_teaching_insight(
         )
     start = consumption_core.window_start(window)
     end = consumption_core.window_end()
-    class_id = staff.class_id
+    class_id = staff.active_class_id
 
     current = _net_quantity(db, class_id, start, end, end_inclusive=True)
     previous = _net_quantity(

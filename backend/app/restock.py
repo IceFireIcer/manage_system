@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app import business_time, inventory_ledger, stock_alerts
 from app.agent import rules
+from app.class_scope import active_class_id
 from app.consumption import local_day_start, window_flow
 from app.db import concurrency
 from app.models import (
@@ -234,7 +235,7 @@ def _resolve_repeat(
         time_matches = _normalize_received_at(received_at) == order.business_at
     if (
         order.operator_id != operator.id
-        or order.class_id != operator.class_id
+        or order.class_id != active_class_id(operator)
         or order.items_signature != signature
         or order.source != source
         or order.remark != remark
@@ -285,7 +286,7 @@ def create_restock_order(
         operator_id=operator.id,
         operator_name=operator.name,
         operator_role=operator.role,
-        class_id=operator.class_id,
+        class_id=active_class_id(operator),
         business_at=business_at,
         remark=remark,
         items_signature=signature,
@@ -323,7 +324,7 @@ def create_restock_order(
         for row_number, item in enumerate(items, start=1):
             field_path = f"items[{row_number - 1}]"
             consumable = consumables.get(item.consumable_id)
-            if consumable is None or consumable.class_id != operator.class_id:
+            if consumable is None or consumable.class_id != active_class_id(operator):
                 raise RestockRowError(
                     line_no=row_number,
                     field=f"{field_path}.consumable_id",

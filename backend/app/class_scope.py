@@ -74,6 +74,11 @@ def resolve_active_class_id(
     return allowed[0] if allowed else user.class_id
 
 
+def active_class_id(user: User) -> int:
+    """会话生效班级；未解析时回落到账号主班，兼容内部调用。"""
+    return getattr(user, "active_class_id", None) or user.class_id
+
+
 def class_display_name(db: Session, class_id: int) -> str:
     obj = db.get(Class, class_id)
     return obj.name if obj is not None else DEFAULT_CLASS_NAME

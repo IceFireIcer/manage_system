@@ -19,9 +19,9 @@ const router = useRouter()
 const userStore = useUserStore()
 const alertsStore = useAlertsStore()
 
-const isStudent = computed(() => userStore.user?.role === 'student')
-const isAdmin = computed(() => ['super_admin', 'admin'].includes(userStore.user?.role))
-const isStaff = computed(() => ['super_admin', 'teacher', 'admin'].includes(userStore.user?.role))
+const activeRole = computed(() => userStore.activeRole ?? userStore.user?.role)
+const isStudent = computed(() => activeRole.value === 'student')
+const isStaff = computed(() => ['super_admin', 'teacher', 'admin'].includes(activeRole.value))
 
 const loading = ref(true)
 const refreshing = ref(false)
@@ -145,8 +145,10 @@ const quickActions = computed(() => {
     { label: '记录查询', icon: Document, path: '/records' },
     { label: '消耗汇总', icon: TrendCharts, path: '/consumption' },
   ]
-  if (isAdmin.value) {
+  if (userStore.hasPermission('consumable.manage')) {
     actions.push({ label: '耗材档案', icon: Box, path: '/consumables' })
+  }
+  if (userStore.hasPermission('account.manage')) {
     actions.push({ label: '用户管理', icon: Setting, path: '/users' })
   }
   return actions

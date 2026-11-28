@@ -27,6 +27,7 @@ const routes = [
         component: () => import('../views/Dashboard.vue'),
         meta: {
           title: '工作台',
+          permissions: ['dashboard.view'],
           nav: { group: 'dashboard', icon: 'Odometer', order: 1 },
         },
       },
@@ -34,13 +35,21 @@ const routes = [
         path: 'overview',
         name: 'overview',
         component: () => import('../views/Overview.vue'),
-        meta: { title: '库存总览', nav: { group: 'inventory', icon: 'Box', order: 1 } },
+        meta: {
+          title: '库存总览',
+          permissions: ['inventory.view'],
+          nav: { group: 'inventory', icon: 'Box', order: 1 },
+        },
       },
       {
         path: 'requisition',
         name: 'requisition',
         component: () => import('../views/Requisition.vue'),
-        meta: { title: '领用登记', nav: { group: 'requisition', icon: 'Tickets', order: 1 } },
+        meta: {
+          title: '领用登记',
+          permissions: ['requisition.create'],
+          nav: { group: 'requisition', icon: 'Tickets', order: 1 },
+        },
       },
       {
         path: 'records',
@@ -48,6 +57,7 @@ const routes = [
         component: () => import('../views/Records.vue'),
         meta: {
           title: '记录查询',
+          permissions: ['record.view'],
           nav: { group: 'requisition', icon: 'Tickets', order: 2, studentTitle: '我的记录' },
         },
       },
@@ -57,6 +67,7 @@ const routes = [
         component: () => import('../views/Incidents.vue'),
         meta: {
           title: '异常上报',
+          permissions: ['incident.view'],
           nav: { group: 'requisition', icon: 'Warning', order: 3 },
         },
       },
@@ -66,6 +77,7 @@ const routes = [
         component: () => import('../views/MyFootprint.vue'),
         meta: {
           title: '我的耗材足迹',
+          permissions: ['record.view'],
           nav: { group: 'requisition', icon: 'DataLine', order: 4 },
         },
       },
@@ -76,6 +88,7 @@ const routes = [
         meta: {
           title: '课程配方',
           roles: ['teacher', 'admin'],
+          permissions: ['course.manage'],
           nav: { group: 'teaching', icon: 'Reading', order: 1 },
         },
       },
@@ -86,6 +99,7 @@ const routes = [
         meta: {
           title: '班委交接',
           roles: ['teacher', 'admin'],
+          permissions: ['handover.view'],
           nav: { group: 'daily', icon: 'Switch', order: 0 },
         },
       },
@@ -96,6 +110,7 @@ const routes = [
         meta: {
           title: '耗材档案',
           roles: ['admin'],
+          permissions: ['consumable.manage'],
           nav: { group: 'daily', icon: 'Setting', order: 1 },
         },
       },
@@ -106,6 +121,7 @@ const routes = [
         meta: {
           title: '用户管理',
           roles: ['admin'],
+          permissions: ['account.manage'],
           nav: { group: 'daily', icon: 'Setting', order: 2 },
         },
       },
@@ -113,7 +129,7 @@ const routes = [
         path: 'profile',
         name: 'profile',
         component: () => import('../views/Profile.vue'),
-        meta: { title: '个人资料' },
+        meta: { title: '个人资料', permissions: ['profile.view'] },
       },
       {
         path: 'restock',
@@ -122,6 +138,7 @@ const routes = [
         meta: {
           title: '补货建议',
           roles: ['teacher', 'admin'],
+          permissions: ['restock.view'],
           nav: { group: 'analysis', icon: 'TrendCharts', order: 1 },
         },
       },
@@ -132,6 +149,7 @@ const routes = [
         meta: {
           title: '消耗汇总',
           roles: ['teacher', 'admin'],
+          permissions: ['consumption.view'],
           nav: { group: 'analysis', icon: 'TrendCharts', order: 2 },
         },
       },
@@ -142,6 +160,7 @@ const routes = [
         meta: {
           title: '学期结账',
           roles: ['teacher', 'admin'],
+          permissions: ['report.view'],
           nav: { group: 'analysis', icon: 'Files', order: 3 },
         },
       },
@@ -152,6 +171,7 @@ const routes = [
         meta: {
           title: '操作日志',
           roles: ['teacher', 'admin'],
+          permissions: ['log.view'],
           nav: { group: 'daily', icon: 'Setting', order: 3 },
         },
       },
@@ -162,6 +182,7 @@ const routes = [
         meta: {
           title: '班级与学期',
           roles: ['super_admin', 'teacher'],
+          permissions: ['settings.manage'],
           nav: { group: 'daily', icon: 'School', order: 4 },
         },
       },
@@ -172,6 +193,7 @@ const routes = [
         meta: {
           title: 'LLM 配置',
           roles: ['super_admin'],
+          permissions: ['llm.manage'],
           nav: { group: 'daily', icon: 'Setting', order: 5 },
         },
       },
@@ -241,6 +263,17 @@ await userStore.ensureSetupStatus()
   }
 
   const activeRole = userStore.activeRole ?? userStore.user.role
+  const required = to.meta.permissions
+  if (required) {
+    const allowed =
+      activeRole === 'super_admin' ||
+      required.some((key) => userStore.permissions.includes(key))
+    if (!allowed) {
+      return { path: '/403', query: { from: to.fullPath } }
+    }
+    return true
+  }
+
   const allowedRoles = to.meta.roles
   if (allowedRoles && activeRole !== 'super_admin' && !allowedRoles.includes(activeRole)) {
     return { path: '/403', query: { from: to.fullPath } }

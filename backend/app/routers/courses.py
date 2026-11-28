@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app import business_time
 from app.database import get_db
-from app.deps import require_role
+from app.deps import require_permission
 from app.models import (
     Consumable,
     Course,
@@ -61,12 +61,14 @@ MAX_PAGE_SIZE = 100
 RECIPE_HISTORY_LIMIT = 20
 REVIEW_HISTORY_LIMIT = 50
 
-StaffUser = Annotated[User, Depends(require_role("teacher", "admin"))]
+CourseViewer = Annotated[User, Depends(require_permission("course.view"))]
+CourseManager = Annotated[User, Depends(require_permission("course.manage"))]
+RestockViewer = Annotated[User, Depends(require_permission("restock.view"))]
 
 
 def _get_course(db: Session, course_id: int, user: User) -> Course:
     course = db.get(Course, course_id)
-    if course is None or course.class_id != user.class_id:
+    if course is None or course.class_id != user.active_class_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="课程不存在"
         )
@@ -247,7 +249,7 @@ def _ensure_seq_unique(
 @router.get("")
 def list_courses(
     db: Annotated[Session, Depends(get_db)],
-    current_user: StaffUser,
+    current_user: CourseViewer,
     status_filter: Annotated[str | None, Query(alias="status")] = None,
     keyword: Annotated[str | None, Query()] = None,
     page: Annotated[int, Query(ge=1)] = 1,
@@ -261,7 +263,7 @@ def list_courses(
             detail="status 参数仅支持 enabled/disabled/all",
         )
 
-    filters = [Course.class_id == current_user.class_id]
+    filters = [Course.class_id == current_user.active_class_id]
     if status_filter is not None:
         filters.append(Course.status == status_filter)
     keyword_text = (keyword or "").strip()
@@ -301,9 +303,9 @@ def list_courses(
 def create_course(
     payload: CourseCreate,
     db: Annotated[Session, Depends(get_db)],
-    current_user: StaffUser,
+    current_user: CourseManager,
 ) -> CourseOut:
-    class_id = current_user.class_id
+    class_id = current_user.active_class_id
     _ensure_course_unique(db, class_id, payload.name, payload.semester)
     course = Course(
         class_id=class_id,
@@ -516,7 +518,7 @@ def _build_risks(
 @router.get("/risk")
 def list_course_risks(
     db: Annotated[Session, Depends(get_db)],
-    current_user: StaffUser,
+    current_user: CourseViewer,
     days: Annotated[int, Query(ge=1, le=60)] = 14,
     lead_days: Annotated[int, Query(ge=0, le=30)] = 1,
 ) -> CourseRiskListOut:
@@ -526,7 +528,7 @@ def list_course_risks(
         select(Course, CourseSession)
         .join(CourseSession, CourseSession.course_id == Course.id)
         .where(
-            Course.class_id == current_user.class_id,
+            Course.class_id == current_user.active_class_id,
             CourseSession.status == "planned",
             CourseSession.session_date >= start,
             CourseSession.session_date <= end,
@@ -666,13 +668,13 @@ def _build_week_risks(
 @router.get("/risk/week")
 def get_week_risk(
     db: Annotated[Session, Depends(get_db)],
-    current_user: StaffUser,
+    current_user: CourseViewer,
     days: Annotated[int, Query(ge=1, le=60)] = WEEK_RISK_DEFAULT_DAYS,
     lead_days: Annotated[int, Query(ge=0, le=30)] = 1,
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
 ) -> WeekRiskOut:
-    entries = _upcoming_entries(db, current_user.class_id, days)
+    entries = _upcoming_entries(db, current_user.active_class_id, days)
     items, unconfigured = _build_week_risks(db, entries, lead_days)
     total = len(items)
     start = (page - 1) * page_size
@@ -717,7 +719,7 @@ def _arrival_response(
 @router.get("/risk/arrival-coverage")
 def get_arrival_coverage(
     db: Annotated[Session, Depends(get_db)],
-    current_user: StaffUser,
+    current_user: RestockViewer,
     order_no: Annotated[str, Query(min_length=1, max_length=40)],
     days: Annotated[int, Query(ge=1, le=60)] = ARRIVAL_COVERAGE_DEFAULT_DAYS,
     lead_days: Annotated[int, Query(ge=0, le=30)] = 1,
@@ -729,7 +731,7 @@ def get_arrival_coverage(
     order = db.scalars(
         select(RestockOrder).where(
             RestockOrder.order_no == normalized,
-            RestockOrder.class_id == current_user.class_id,
+            RestockOrder.class_id == current_user.active_class_id,
         )
     ).first()
     if order is None:
@@ -774,7 +776,7 @@ def get_arrival_coverage(
     for line in lines:
         arrived[line.consumable_id] = arrived.get(line.consumable_id, 0) + line.quantity
 
-    entries = _upcoming_entries(db, current_user.class_id, days)
+    entries = _upcoming_entries(db, current_user.active_class_id, days)
     snapshots, items_by_snapshot, consumables = _load_recipe_context(
         db, [session for _, session in entries]
     )
@@ -783,7 +785,7 @@ def get_arrival_coverage(
 
     for consumable_id, quantity in arrived.items():
         consumable = consumables.get(consumable_id)
-        if consumable is None or consumable.class_id != current_user.class_id:
+        if consumable is None or consumable.class_id != current_user.active_class_id:
             continue
         demands: list[tuple[Course, CourseSession, CourseRecipeItem]] = []
         for course, session in entries:
@@ -876,7 +878,7 @@ def get_session_risk(
     course_id: int,
     session_id: int,
     db: Annotated[Session, Depends(get_db)],
-    current_user: StaffUser,
+    current_user: CourseViewer,
     lead_days: Annotated[int, Query(ge=0, le=30)] = 1,
 ) -> CourseSessionRiskOut:
     course = _get_course(db, course_id, current_user)
@@ -1055,7 +1057,7 @@ def create_session_review(
     session_id: int,
     payload: TeachingReviewCreate,
     db: Annotated[Session, Depends(get_db)],
-    current_user: StaffUser,
+    current_user: CourseManager,
 ) -> TeachingReviewOut:
     course = _get_course(db, course_id, current_user)
     session = _get_session(db, course, session_id)
@@ -1100,7 +1102,7 @@ def list_session_reviews(
     course_id: int,
     session_id: int,
     db: Annotated[Session, Depends(get_db)],
-    current_user: StaffUser,
+    current_user: CourseViewer,
 ) -> TeachingReviewListOut:
     course = _get_course(db, course_id, current_user)
     session = _get_session(db, course, session_id)
@@ -1123,10 +1125,10 @@ def list_session_reviews(
 def get_review(
     review_id: int,
     db: Annotated[Session, Depends(get_db)],
-    current_user: StaffUser,
+    current_user: CourseViewer,
 ) -> TeachingReviewOut:
     review = db.get(TeachingReview, review_id)
-    if review is None or review.class_id != current_user.class_id:
+    if review is None or review.class_id != current_user.active_class_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="复盘不存在"
         )
@@ -1138,10 +1140,10 @@ def update_review(
     review_id: int,
     payload: TeachingReviewUpdate,
     db: Annotated[Session, Depends(get_db)],
-    current_user: StaffUser,
+    current_user: CourseManager,
 ) -> TeachingReviewOut:
     review = db.get(TeachingReview, review_id)
-    if review is None or review.class_id != current_user.class_id:
+    if review is None or review.class_id != current_user.active_class_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="复盘不存在"
         )
@@ -1159,7 +1161,7 @@ def update_review(
 def get_course(
     course_id: int,
     db: Annotated[Session, Depends(get_db)],
-    current_user: StaffUser,
+    current_user: CourseViewer,
 ) -> CourseOut:
     course = _get_course(db, course_id, current_user)
     counts = _session_counts(db, [course.id])
@@ -1172,7 +1174,7 @@ def update_course(
     course_id: int,
     payload: CourseUpdate,
     db: Annotated[Session, Depends(get_db)],
-    current_user: StaffUser,
+    current_user: CourseManager,
 ) -> CourseOut:
     course = _get_course(db, course_id, current_user)
     _assert_course_version(course, payload.expected_version)
@@ -1212,7 +1214,7 @@ def update_course(
 def list_sessions(
     course_id: int,
     db: Annotated[Session, Depends(get_db)],
-    current_user: StaffUser,
+    current_user: CourseViewer,
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
 ) -> CourseSessionPageOut:
@@ -1249,7 +1251,7 @@ def create_session(
     course_id: int,
     payload: CourseSessionCreate,
     db: Annotated[Session, Depends(get_db)],
-    current_user: StaffUser,
+    current_user: CourseManager,
 ) -> CourseSessionOut:
     course = _get_course(db, course_id, current_user)
     _ensure_seq_unique(db, course.id, payload.seq)
@@ -1285,7 +1287,7 @@ def update_session(
     session_id: int,
     payload: CourseSessionUpdate,
     db: Annotated[Session, Depends(get_db)],
-    current_user: StaffUser,
+    current_user: CourseManager,
 ) -> CourseSessionOut:
     course = _get_course(db, course_id, current_user)
     session = db.get(CourseSession, session_id)
@@ -1323,7 +1325,7 @@ def update_session(
 def get_current_recipe(
     course_id: int,
     db: Annotated[Session, Depends(get_db)],
-    current_user: StaffUser,
+    current_user: CourseViewer,
 ) -> RecipeOut:
     course = _get_course(db, course_id, current_user)
     snapshot = _latest_snapshot(db, course.id)
@@ -1336,7 +1338,7 @@ def get_current_recipe(
 def list_recipe_history(
     course_id: int,
     db: Annotated[Session, Depends(get_db)],
-    current_user: StaffUser,
+    current_user: CourseViewer,
 ) -> RecipeHistoryOut:
     course = _get_course(db, course_id, current_user)
     snapshots = db.scalars(
@@ -1355,7 +1357,7 @@ def save_recipe(
     course_id: int,
     payload: RecipeSaveRequest,
     db: Annotated[Session, Depends(get_db)],
-    current_user: StaffUser,
+    current_user: CourseManager,
 ) -> RecipeSnapshotOut:
     course = _get_course(db, course_id, current_user)
     consumable_ids = [item.consumable_id for item in payload.items]

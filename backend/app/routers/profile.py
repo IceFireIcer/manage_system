@@ -17,7 +17,7 @@ from app.class_scope import (
     class_display_name,
 )
 from app.database import get_db
-from app.deps import CurrentUser, require_role
+from app.deps import CurrentUser, require_permission
 from app.models import User, UserProfile
 from app.operation_log import record_operation, user_label
 
@@ -298,7 +298,7 @@ def admin_update_profile(
     user_id: int,
     payload: AdminProfileUpdate,
     db: Annotated[Session, Depends(get_db)],
-    current_user: Annotated[User, Depends(require_role("teacher", "admin"))],
+    current_user: Annotated[User, Depends(require_permission("account.manage"))],
 ) -> ProfileOut:
     target = db.get(User, user_id)
     if target is None:

@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from app import business_time, consumable_import, inventory_ledger, stock_alerts
 from app.agent import service
 from app.database import get_db
-from app.deps import CurrentUser, require_role
+from app.deps import effective_role, require_permission
 from app.models import (
     Consumable,
     InventoryEvent,
@@ -44,7 +44,8 @@ from app.schemas_consumables import (
 
 router = APIRouter(prefix="/api/v1/consumables", tags=["consumables"])
 
-AdminUser = Annotated[User, Depends(require_role("admin"))]
+ConsumableViewer = Annotated[User, Depends(require_permission("consumable.view"))]
+AdminUser = Annotated[User, Depends(require_permission("consumable.manage"))]
 
 
 def _serialize(consumable: Consumable) -> ConsumableOut:
@@ -279,9 +280,13 @@ def _deactivation_context(
     )
 
 
-def _get_or_404(db: Session, consumable_id: int) -> Consumable:
+def _get_or_404(
+    db: Session, consumable_id: int, class_id: int | None = None
+) -> Consumable:
     consumable = db.get(Consumable, consumable_id)
-    if consumable is None:
+    if consumable is None or (
+        class_id is not None and consumable.class_id != class_id
+    ):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="耗材不存在")
     return consumable
 
@@ -346,7 +351,7 @@ def _creation_conflict_detail(
 @router.get("")
 def list_consumables(
     db: Annotated[Session, Depends(get_db)],
-    current_user: CurrentUser,
+    current_user: ConsumableViewer,
     status_filter: Annotated[str | None, Query(alias="status")] = None,
 ) -> list[ConsumableOut]:
     if status_filter is None:
@@ -357,7 +362,7 @@ def list_consumables(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="status 参数仅支持 enabled/disabled/all",
         )
-    if status_filter in ("disabled", "all") and current_user.role == "student":
+    if status_filter in ("disabled", "all") and effective_role(current_user) == "student":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="无权限访问",
@@ -365,7 +370,7 @@ def list_consumables(
 
     query = (
         select(Consumable)
-        .where(Consumable.class_id == current_user.class_id)
+        .where(Consumable.class_id == current_user.active_class_id)
         .order_by(Consumable.id)
     )
     if status_filter != "all":
@@ -379,7 +384,7 @@ def create_consumable(
     db: Annotated[Session, Depends(get_db)],
     admin: AdminUser,
 ) -> ConsumableOut:
-    class_id = admin.class_id
+    class_id = admin.active_class_id
     name = payload.name.strip()
     spec = payload.spec.strip()
     _ensure_identity_unique(db, class_id, name, spec)
@@ -426,7 +431,7 @@ def update_consumable(
     db: Annotated[Session, Depends(get_db)],
     admin: AdminUser,
 ) -> ConsumableOut:
-    consumable = _get_or_404(db, consumable_id)
+    consumable = _get_or_404(db, consumable_id, admin.active_class_id)
     data = payload.model_dump(exclude_unset=True)
     data.pop("expected_version", None)
     _assert_version(db, admin, consumable, payload.expected_version, data)
@@ -497,7 +502,7 @@ def preview_deactivation(
     db: Annotated[Session, Depends(get_db)],
     admin: AdminUser,
 ) -> DeactivationPreviewOut:
-    consumable = _get_or_404(db, consumable_id)
+    consumable = _get_or_404(db, consumable_id, admin.active_class_id)
     return _deactivation_context(db, consumable)
 
 
@@ -508,7 +513,7 @@ def toggle_consumable_status(
     db: Annotated[Session, Depends(get_db)],
     admin: AdminUser,
 ) -> ConsumableStatusOut:
-    consumable = _get_or_404(db, consumable_id)
+    consumable = _get_or_404(db, consumable_id, admin.active_class_id)
     _assert_version(
         db,
         admin,
@@ -578,7 +583,7 @@ def preview_ledger_import(
     admin: AdminUser,
 ) -> LedgerImportPreviewOut:
     return consumable_import.build_preview(
-        db, class_id=admin.class_id, payload=payload
+        db, class_id=admin.active_class_id, payload=payload
     )
 
 
@@ -605,5 +610,5 @@ def get_import_batch(
     admin: AdminUser,
 ) -> LedgerImportReceiptOut:
     return consumable_import.get_receipt(
-        db, batch_id=batch_id, class_id=admin.class_id
+        db, batch_id=batch_id, class_id=admin.active_class_id
     )

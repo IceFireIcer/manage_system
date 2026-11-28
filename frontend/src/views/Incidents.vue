@@ -32,8 +32,10 @@ const PHOTO_MAX_BYTES = 5 * 1024 * 1024
 const PAGE_SIZE = 20
 
 const userStore = useUserStore()
-const isStudent = computed(() => userStore.user?.role === 'student')
-const isStaff = computed(() => ['super_admin', 'teacher', 'admin'].includes(userStore.user?.role))
+const activeRole = computed(() => userStore.activeRole ?? userStore.user?.role)
+const isStudent = computed(() => activeRole.value === 'student')
+const isStaff = computed(() => ['super_admin', 'teacher', 'admin'].includes(activeRole.value))
+const canManage = computed(() => userStore.hasPermission('incident.manage'))
 
 const consumables = ref([])
 const consumablesLoading = ref(false)
@@ -414,7 +416,7 @@ onMounted(async () => {
               >
                 查看照片
               </el-button>
-              <template v-if="isStaff && item.status === 'open'">
+              <template v-if="canManage && item.status === 'open'">
                 <el-button
                   type="primary"
                   class="incidents__action"
@@ -434,7 +436,7 @@ onMounted(async () => {
                 </el-button>
               </template>
               <el-button
-                v-if="isStaff && ['open', 'confirmed'].includes(item.status)"
+                v-if="canManage && ['open', 'confirmed'].includes(item.status)"
                 type="success"
                 plain
                 class="incidents__action"

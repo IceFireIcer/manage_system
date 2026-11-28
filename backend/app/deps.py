@@ -20,6 +20,7 @@ SUPER_ADMIN_ROLE = "super_admin"
 CHANGE_PASSWORD_REQUIRED_DETAIL = "请先修改初始密码"
 PERMISSION_DENIED_DETAIL = "无权限访问"
 EFFECTIVE_ROLE_ATTR = "active_role"
+EFFECTIVE_CLASS_ATTR = "active_class_id"
 EFFECTIVE_PERMISSIONS_ATTR = "effective_permissions"
 
 
@@ -90,7 +91,9 @@ def get_active_class_id(
         requested = int(requested)
     if not isinstance(requested, int):
         requested = None
-    return resolve_active_class_id(db, current_user, requested)
+    class_id = resolve_active_class_id(db, current_user, requested)
+    setattr(current_user, EFFECTIVE_CLASS_ATTR, class_id)
+    return class_id
 
 
 CurrentClassId = Annotated[int, Depends(get_active_class_id)]
