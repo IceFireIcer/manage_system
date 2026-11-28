@@ -124,6 +124,16 @@ const routes = [
         },
       },
       {
+        path: 'semester-close',
+        name: 'semester-close',
+        component: () => import('../views/SemesterClose.vue'),
+        meta: {
+          title: '学期结账',
+          roles: ['teacher', 'admin'],
+          nav: { group: 'analysis', icon: 'Files', order: 3 },
+        },
+      },
+      {
         path: 'logs',
         name: 'logs',
         component: () => import('../views/Logs.vue'),
