@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import api from '../api'
 import EmptyState from './EmptyState.vue'
+import EventTraceDrawer from './EventTraceDrawer.vue'
 
 const props = defineProps({
   modelValue: {
@@ -48,6 +49,8 @@ const audit = ref(null)
 const cutoff = ref(null)
 const basisKey = ref('posting')
 const viewportWidth = ref(window.innerWidth)
+const traceVisible = ref(false)
+const traceEventId = ref(null)
 
 const visible = computed({
   get: () => props.modelValue,
@@ -180,14 +183,24 @@ function handleViewSource(event) {
   }
 }
 
+function openTrace(event) {
+  traceEventId.value = event.id
+  traceVisible.value = true
+}
+
 watch(
   () => [props.modelValue, props.consumableId],
   ([open, consumableId], previous) => {
-    if (!open) return
+    if (!open) {
+      traceVisible.value = false
+      return
+    }
     if (previous?.[1] !== consumableId) {
       audit.value = null
       basisKey.value = 'posting'
       cutoff.value = null
+      traceVisible.value = false
+      traceEventId.value = null
     }
     fetchAudit()
   },
@@ -364,6 +377,7 @@ onBeforeUnmount(() => {
                 >
                   查看来源
                 </el-button>
+                <el-button link type="primary" @click="openTrace(row)">轨迹</el-button>
               </div>
             </template>
           </el-table-column>
@@ -383,6 +397,8 @@ onBeforeUnmount(() => {
       </div>
     </template>
   </el-drawer>
+
+  <EventTraceDrawer v-model="traceVisible" :event-id="traceEventId" />
 </template>
 
 <style scoped>
