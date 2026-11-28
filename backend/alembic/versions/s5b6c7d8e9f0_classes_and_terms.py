@@ -1,7 +1,7 @@
 """classes, class terms and memberships
 
-Revision ID: q3f4a5b6c7d8
-Revises: p2e3f4a5b6c7
+Revision ID: s5b6c7d8e9f0
+Revises: r4a5b6c7d8e9
 Create Date: 2026-11-28 12:00:00.000000
 
 """
@@ -11,8 +11,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "q3f4a5b6c7d8"
-down_revision: str | Sequence[str] | None = "p2e3f4a5b6c7"
+revision: str = "s5b6c7d8e9f0"
+down_revision: str | Sequence[str] | None = "r4a5b6c7d8e9"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
