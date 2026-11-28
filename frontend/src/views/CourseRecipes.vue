@@ -8,6 +8,8 @@ import EmptyState from '../components/EmptyState.vue'
 const PAGE_SIZE = 9
 const SESSION_PAGE_SIZE = 10
 const MAX_RECIPE_ITEMS = 3
+const WEEK_PAGE_SIZE = 10
+const WEEK_DAYS_OPTIONS = [7, 14, 30]
 
 const SESSION_STATUS = {
   planned: { label: '待上课', tag: 'status-tag--info' },
@@ -94,6 +96,14 @@ const consumableOptions = computed(() =>
   })),
 )
 
+const weekDrawerOpen = ref(false)
+const weekDays = ref(7)
+const weekLeadDays = ref(1)
+const weekLoading = ref(false)
+const weekError = ref('')
+const weekData = ref(null)
+const weekPage = ref(1)
+
 const isEmpty = computed(() => hasLoaded.value && !courses.value.length)
 
 function errorMessage(error, fallback) {
@@ -108,6 +118,51 @@ function errorMessage(error, fallback) {
   }
   if (detail) return String(detail)
   return fallback
+}
+
+async function fetchWeekRisk() {
+  weekLoading.value = true
+  weekError.value = ''
+  try {
+    const { data } = await api.get('/courses/risk/week', {
+      params: {
+        days: weekDays.value,
+        lead_days: weekLeadDays.value,
+        page: weekPage.value,
+        page_size: WEEK_PAGE_SIZE,
+      },
+    })
+    weekData.value = data
+  } catch (error) {
+    weekError.value = errorMessage(error, '实训周聚合读取失败，请稍后重试')
+    weekData.value = null
+  } finally {
+    weekLoading.value = false
+  }
+}
+
+function openWeekRisk() {
+  weekDrawerOpen.value = true
+  weekPage.value = 1
+  fetchWeekRisk()
+}
+
+function refreshWeek() {
+  weekPage.value = 1
+  fetchWeekRisk()
+}
+
+function handleWeekPageChange(value) {
+  weekPage.value = value
+  fetchWeekRisk()
+}
+
+function weekItemKey(item) {
+  return `${item.session_date}-${item.consumable_id}`
+}
+
+function weekLevelMeta(level) {
+  return RISK_META[level] ?? { label: level, tag: 'status-tag--neutral' }
 }
 
 async function fetchCourses() {
@@ -516,6 +571,7 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
         />
         <el-button @click="applySearch">查询</el-button>
       </div>
+      <el-button class="courses__week" @click="openWeekRisk">实训周聚合</el-button>
       <el-button text class="courses__refresh" :loading="loading" @click="fetchCourses">
         刷新
       </el-button>
@@ -866,6 +922,112 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
         </template>
       </div>
     </el-drawer>
+
+    <el-drawer
+      v-model="weekDrawerOpen"
+      :size="drawerSize"
+      title="实训周聚合"
+      destroy-on-close
+    >
+      <div class="drawer-body">
+        <div class="week-toolbar">
+          <el-radio-group v-model="weekDays" size="small" @change="refreshWeek">
+            <el-radio-button
+              v-for="option in WEEK_DAYS_OPTIONS"
+              :key="option"
+              :value="option"
+            >
+              {{ option }} 天
+            </el-radio-button>
+          </el-radio-group>
+          <el-button text :loading="weekLoading" @click="refreshWeek">刷新</el-button>
+        </div>
+        <p class="week-hint">
+          同班同日多课次对同一耗材合并判读；预计到货与在途不计入可用库存。
+        </p>
+
+        <el-alert
+          v-if="weekError"
+          type="error"
+          :closable="false"
+          show-icon
+          :title="weekError"
+          class="courses__alert"
+        />
+
+        <el-skeleton v-if="weekLoading && !weekData" :rows="4" animated />
+        <template v-else-if="weekData">
+          <EmptyState
+            v-if="!weekData.items.length && !weekData.unconfigured.length"
+            title="实训周内没有待上课次"
+            description="仅统计未来窗口内状态为待上课的课次。"
+          />
+          <template v-else>
+            <p v-if="!weekData.items.length" class="week-empty">
+              本周没有可聚合的已配置课次。
+            </p>
+            <article
+              v-for="item in weekData.items"
+              :key="weekItemKey(item)"
+              class="week-card panel"
+            >
+              <header class="week-card__head">
+                <div class="week-card__title">
+                  <h3>{{ item.session_date }} · {{ item.consumable_name }}</h3>
+                  <p>
+                    {{ item.class_label || '未填班级' }} · 合并需求
+                    {{ item.required_quantity }}{{ item.unit }} / 可用
+                    {{ item.available_quantity }}{{ item.unit }}
+                  </p>
+                </div>
+                <span class="status-tag" :class="weekLevelMeta(item.level).tag">
+                  {{ weekLevelMeta(item.level).label }}
+                </span>
+              </header>
+              <p v-if="item.gap > 0" class="week-card__gap">
+                合并缺口 {{ item.gap }}{{ item.unit }}
+              </p>
+              <p v-else-if="item.level === 'critical'" class="week-card__gap">
+                低于安全库存 {{ item.safety_stock }}{{ item.unit }}
+              </p>
+              <p v-if="item.arrival_deadline" class="week-card__deadline">
+                {{ item.arrival_deadline.slice(5) }} 前到货
+              </p>
+              <ul class="week-card__sessions">
+                <li v-for="session in item.sessions" :key="session.session_id">
+                  {{ session.course_name }} · 第 {{ session.seq }} 次
+                  <span>
+                    {{ session.headcount }} 人，需
+                    {{ session.required_quantity }}{{ item.unit }}
+                  </span>
+                </li>
+              </ul>
+            </article>
+            <div v-if="weekData.total > WEEK_PAGE_SIZE" class="drawer-pagination">
+              <el-pagination
+                layout="prev, pager, next"
+                :total="weekData.total"
+                :page-size="WEEK_PAGE_SIZE"
+                :current-page="weekPage"
+                small
+                background
+                @current-change="handleWeekPageChange"
+              />
+            </div>
+          </template>
+
+          <section v-if="weekData.unconfigured.length" class="week-unconfigured">
+            <h3>未计入聚合的课次</h3>
+            <ul>
+              <li v-for="row in weekData.unconfigured" :key="row.session_id">
+                {{ row.course_name }} · 第 {{ row.seq }} 次（{{ row.session_date }}）
+                <span>{{ row.message }}</span>
+              </li>
+            </ul>
+          </section>
+        </template>
+      </div>
+    </el-drawer>
   </div>
 </template>
 
@@ -1111,6 +1273,134 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
   width: 100%;
 }
 
+.courses__week {
+  min-height: 32px;
+}
+
+.week-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.week-hint {
+  margin: 0;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--text-muted);
+}
+
+.week-empty {
+  margin: 0;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--text-muted);
+}
+
+.week-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 16px;
+}
+
+.week-card__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.week-card__title h3 {
+  margin: 0 0 4px;
+  font-size: 14px;
+  line-height: 22px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.week-card__title p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.week-card__gap {
+  margin: 0;
+  font-size: 13px;
+  line-height: 20px;
+  font-weight: 500;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.week-card__deadline {
+  margin: 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--text-secondary);
+}
+
+.week-card__sessions {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 8px 0 0;
+  border-top: 1px solid var(--line-soft);
+  list-style: none;
+}
+
+.week-card__sessions li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--text);
+}
+
+.week-card__sessions span {
+  color: var(--text-muted);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.week-unconfigured {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--line-soft);
+}
+
+.week-unconfigured h3 {
+  margin: 0;
+  font-size: 13px;
+  line-height: 20px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.week-unconfigured ul {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--text-muted);
+}
+
+.week-unconfigured span {
+  display: block;
+}
+
 @media (max-width: 767px) {
   .courses__toolbar {
     gap: 8px;
@@ -1153,6 +1443,23 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
 
   .courses__grid {
     grid-template-columns: 1fr;
+  }
+
+  .courses__week {
+    min-height: 44px;
+  }
+
+  .week-toolbar :deep(.el-button) {
+    min-height: 40px;
+  }
+
+  .week-card__sessions li {
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .week-card__sessions span {
+    text-align: left;
   }
 
   .recipe-row {

@@ -35,8 +35,33 @@ const form = reactive({
 const submitting = ref(false)
 const fieldError = ref('')
 const errorMessage = ref('')
+const receipt = ref(null)
+const coverage = ref(null)
+const coverageLoading = ref(false)
+const coverageError = ref('')
 let requestId = ''
 let lastSignature = ''
+
+const RISK_LABELS = {
+  sufficient: '充足',
+  critical: '临界',
+  insufficient: '不足',
+}
+
+function riskLabel(level) {
+  return RISK_LABELS[level] ?? level
+}
+
+const resultDescription = computed(() => {
+  if (!receipt.value) return ''
+  const lines = Array.isArray(receipt.value.lines) ? receipt.value.lines : []
+  return lines
+    .map(
+      (line) =>
+        `${line.consumable_name} 实收 ${line.quantity}${line.unit}，当前库存 ${line.stock_after}${line.unit}`,
+    )
+    .join('；')
+})
 
 const unit = computed(() => props.consumable?.unit ?? '')
 
@@ -65,6 +90,10 @@ watch(
     form.remark = ''
     fieldError.value = ''
     errorMessage.value = ''
+    receipt.value = null
+    coverage.value = null
+    coverageLoading.value = false
+    coverageError.value = ''
     submitting.value = false
     requestId = newRequestId()
     lastSignature = ''
@@ -109,7 +138,21 @@ async function submit() {
       `已生成入库单 ${data.order_no}${line ? `，当前库存 ${line.stock_after}${line.unit}` : ''}`,
     )
     emit('completed', data)
-    visible.value = false
+    receipt.value = data
+    coverage.value = null
+    coverageError.value = ''
+    coverageLoading.value = true
+    try {
+      const { data: coverageData } = await api.get(
+        '/courses/risk/arrival-coverage',
+        { params: { order_no: data.order_no, days: 7 } },
+      )
+      coverage.value = coverageData
+    } catch {
+      coverageError.value = '到货覆盖信息读取失败，不影响本次入库结果。'
+    } finally {
+      coverageLoading.value = false
+    }
   } catch (error) {
     if (!error.response) {
       errorMessage.value = '网络异常或请求超时，暂未确认本次入库是否成功，可重试或按单号查询。'
@@ -135,7 +178,7 @@ async function submit() {
     :close-on-press-escape="!submitting"
     :show-close="!submitting"
   >
-    <div v-if="consumable" class="receive-dialog">
+    <div v-if="consumable && !receipt" class="receive-dialog">
       <dl class="receive-dialog__summary">
         <div class="receive-dialog__row">
           <dt class="receive-dialog__label">耗材</dt>
@@ -213,11 +256,73 @@ async function submit() {
       />
     </div>
 
+    <div v-else-if="receipt" class="receive-dialog receive-result">
+      <el-alert
+        type="success"
+        :closable="false"
+        show-icon
+        :title="`已生成入库单 ${receipt.order_no}`"
+        :description="resultDescription"
+      />
+
+      <section class="receive-coverage">
+        <h4 class="receive-coverage__title">本次到货可覆盖课次</h4>
+        <el-skeleton v-if="coverageLoading" :rows="2" animated />
+        <p v-else-if="coverageError" class="receive-coverage__empty">
+          {{ coverageError }}
+        </p>
+        <p
+          v-else-if="coverage && (!coverage.matched || !coverage.items.length)"
+          class="receive-coverage__empty"
+        >
+          {{ coverage.matched ? coverage.message : `未匹配：${coverage.message}` }}
+        </p>
+        <template v-else-if="coverage">
+          <p class="receive-coverage__hint">{{ coverage.message }}</p>
+          <ul class="receive-coverage__list">
+            <li v-for="row in coverage.items" :key="row.session_id">
+              <div class="receive-coverage__head">
+                <span>
+                  {{ row.session_date }} · {{ row.course_name }} 第 {{ row.seq }}
+                  次（{{ row.headcount }} 人）
+                </span>
+                <span
+                  class="status-tag"
+                  :class="row.covered ? 'status-tag--success' : 'status-tag--warning'"
+                >
+                  {{ row.covered ? '可覆盖' : '未覆盖' }}
+                </span>
+              </div>
+              <p
+                v-for="line in row.items"
+                :key="line.consumable_id"
+                class="receive-coverage__line"
+              >
+                {{ line.consumable_name }}：到货 {{ line.arrived_quantity
+                }}{{ line.unit }}，覆盖 {{ line.covered_quantity }}/{{
+                  line.required_quantity
+                }}{{ line.unit }}（{{ riskLabel(line.level_before) }} →
+                {{ riskLabel(line.level_after) }}）
+              </p>
+            </li>
+          </ul>
+          <p v-if="coverage.truncated" class="receive-coverage__hint">
+            仅显示前 {{ coverage.items.length }} 个课次
+          </p>
+        </template>
+      </section>
+    </div>
+
     <template #footer>
-      <el-button :disabled="submitting" @click="visible = false">取消</el-button>
-      <el-button type="primary" :loading="submitting" :disabled="submitting" @click="submit">
-        确认入库
-      </el-button>
+      <template v-if="receipt">
+        <el-button type="primary" @click="visible = false">完成</el-button>
+      </template>
+      <template v-else>
+        <el-button :disabled="submitting" @click="visible = false">取消</el-button>
+        <el-button type="primary" :loading="submitting" :disabled="submitting" @click="submit">
+          确认入库
+        </el-button>
+      </template>
     </template>
   </el-dialog>
 </template>
@@ -273,6 +378,79 @@ async function submit() {
   margin: 4px 0 0;
   font-size: 13px;
   line-height: 20px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.receive-result {
+  gap: var(--space-3);
+}
+
+.receive-coverage {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.receive-coverage__title {
+  margin: 0;
+  font-size: 14px;
+  line-height: 22px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.receive-coverage__hint {
+  margin: 0;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--text-muted);
+}
+
+.receive-coverage__empty {
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px dashed var(--line-soft);
+  border-radius: var(--radius-control);
+  background: var(--surface-subtle);
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--text-muted);
+}
+
+.receive-coverage__list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.receive-coverage__list li {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-control);
+}
+
+.receive-coverage__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 13px;
+  line-height: 20px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.receive-coverage__line {
+  margin: 0;
+  font-size: 12px;
+  line-height: 18px;
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
 }
