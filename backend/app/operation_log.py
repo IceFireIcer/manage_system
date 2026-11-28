@@ -27,7 +27,12 @@ AUDIT_ACTIONS: Final = (
     "admin_recover_rejected",
     "permission_override_update",
     "permission_role_update",
-
+    "account_create",
+    "account_update",
+    "account_status",
+    "account_password_reset",
+    "account_role_update",
+    "account_class_update",
 )
 SENSITIVE_ACTIONS: Final = SESSION_ACTIONS + AUDIT_ACTIONS
 

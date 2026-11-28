@@ -177,7 +177,7 @@ const routes = [
       {
         path: 'settings/accounts',
         name: 'settings-accounts',
-        component: SettingsPlaceholder,
+        component: () => import('../views/Accounts.vue'),
         meta: {
           title: '账号与角色',
           roles: ['super_admin', 'teacher'],
