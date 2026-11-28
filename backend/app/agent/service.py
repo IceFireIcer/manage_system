@@ -164,6 +164,8 @@ def _fallback(
 
 def _generate_outputs(
     pairs: list[tuple[llm.RationaleContext, llm.TeachingConsequenceContext]],
+    rationale_generator: llm.RationaleGenerator | None = None,
+    teaching_generator: llm.RationaleGenerator | None = None,
 ) -> list[tuple[llm.RationaleResult, llm.RationaleResult]]:
     if not pairs:
         return []
@@ -171,8 +173,10 @@ def _generate_outputs(
         rationale_context, teaching_context = pairs[0]
         return [
             (
-                llm.generate_rationale_result(rationale_context),
-                llm.generate_teaching_consequence_result(teaching_context),
+                llm.generate_rationale_result(rationale_context, rationale_generator),
+                llm.generate_teaching_consequence_result(
+                    teaching_context, teaching_generator
+                ),
             )
         ]
 
@@ -188,7 +192,9 @@ def _generate_outputs(
                     0,
                     rationale_context,
                     executor.submit(
-                        llm.generate_rationale_result, rationale_context
+                        llm.generate_rationale_result,
+                        rationale_context,
+                        rationale_generator,
                     ),
                 )
             )
@@ -198,7 +204,9 @@ def _generate_outputs(
                     1,
                     teaching_context,
                     executor.submit(
-                        llm.generate_teaching_consequence_result, teaching_context
+                        llm.generate_teaching_consequence_result,
+                        teaching_context,
+                        teaching_generator,
                     ),
                 )
             )
@@ -412,7 +420,11 @@ def _inspect(db: Session, now: datetime | None) -> SuggestionListOut:
             )
             for consumable, evaluation in pending
         ]
-        results = _generate_outputs(pairs)
+        results = _generate_outputs(
+            pairs,
+            llm.resolve_generator(db, llm.FEATURE_RESTOCK_RATIONALE),
+            llm.resolve_generator(db, llm.FEATURE_TEACHING_CONSEQUENCE),
+        )
         for index, (consumable, evaluation) in enumerate(pending):
             rationale, teaching = results[index]
             rationale_context = pairs[index][0]

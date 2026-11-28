@@ -57,6 +57,7 @@ services:
       LLM_API_KEY: ${LLM_API_KEY:-}
       LLM_BASE_URL: ${LLM_BASE_URL:-https://api.deepseek.com/v1}
       LLM_MODEL: ${LLM_MODEL:-deepseek-chat}
+      SETTINGS_ENCRYPTION_KEY: ${SETTINGS_ENCRYPTION_KEY:-}
       OPS_BACKUP_DIR: ${OPS_BACKUP_DIR:-/app/backups}
       OPS_BACKUP_MAX_AGE_HOURS: ${OPS_BACKUP_MAX_AGE_HOURS:-36}
       OPS_DISK_MIN_FREE_MB: ${OPS_DISK_MIN_FREE_MB:-500}
