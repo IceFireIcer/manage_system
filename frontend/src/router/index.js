@@ -160,6 +160,16 @@ const routes = [
         },
       },
       {
+        path: 'settings/llm',
+        name: 'settings-llm',
+        component: () => import('../views/LlmSettings.vue'),
+        meta: {
+          title: 'LLM 配置',
+          roles: ['super_admin'],
+          nav: { group: 'daily', icon: 'Setting', order: 5 },
+        },
+      },
+      {
         path: '403',
         name: 'forbidden',
         component: () => import('../views/Forbidden.vue'),

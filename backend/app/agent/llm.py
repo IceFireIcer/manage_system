@@ -19,6 +19,34 @@ LLM_TIMEOUT_SECONDS = 3.0
 RATIONALE_SOURCE_LLM = "llm"
 RATIONALE_SOURCE_RULES = "rules"
 
+FEATURE_RESTOCK_RATIONALE = "restock_rationale"
+FEATURE_TEACHING_CONSEQUENCE = "teaching_consequence"
+FEATURE_ASSISTANT = "assistant"
+
+FEATURE_SPECS: tuple[dict[str, str], ...] = (
+    {
+        "key": FEATURE_RESTOCK_RATIONALE,
+        "label": "补货理由",
+        "description": "补货建议的判断依据说明",
+    },
+    {
+        "key": FEATURE_TEACHING_CONSEQUENCE,
+        "label": "教学后果",
+        "description": "不补货对已排课次的影响说明",
+    },
+    {
+        "key": FEATURE_ASSISTANT,
+        "label": "悬浮助手",
+        "description": "悬浮助手的系统提示词",
+    },
+)
+FEATURE_KEYS: tuple[str, ...] = tuple(spec["key"] for spec in FEATURE_SPECS)
+FEATURE_LABELS: dict[str, str] = {spec["key"]: spec["label"] for spec in FEATURE_SPECS}
+
+
+def is_known_feature(feature: str) -> bool:
+    return feature in FEATURE_LABELS
+
 _RATIONALE_ANCHORS = (
     ("current_stock", ("当前库存",), None),
     ("safety_stock", ("安全库存线",), None),
@@ -257,10 +285,16 @@ class DeepSeekRationaleGenerator:
         api_key: str,
         model: str = DEFAULT_MODEL,
         base_url: str = DEFAULT_BASE_URL,
+        timeout: float = LLM_TIMEOUT_SECONDS,
+        temperature: float = 0.3,
+        system_prompt: str | None = None,
     ) -> None:
         self._api_key = api_key
         self._model = model
         self._base_url = base_url
+        self._timeout = timeout if timeout and timeout > 0 else LLM_TIMEOUT_SECONDS
+        self._temperature = temperature
+        self._system_prompt = system_prompt
 
     @property
     def api_key(self) -> str:
@@ -274,24 +308,42 @@ class DeepSeekRationaleGenerator:
     def base_url(self) -> str:
         return self._base_url
 
+    @property
+    def timeout(self) -> float:
+        return self._timeout
+
+    @property
+    def temperature(self) -> float:
+        return self._temperature
+
+    @property
+    def system_prompt(self) -> str | None:
+        return self._system_prompt
+
     def _client(self) -> OpenAI:
         return OpenAI(
             api_key=self._api_key,
             base_url=self._base_url,
-            timeout=LLM_TIMEOUT_SECONDS,
+            timeout=self._timeout,
             max_retries=0,
         )
+
+    def _rationale_prompt(self) -> str:
+        return self._system_prompt or SYSTEM_PROMPT
+
+    def _teaching_prompt(self) -> str:
+        return self._system_prompt or TEACHING_SYSTEM_PROMPT
 
     def generate(self, context: RationaleContext) -> str:
         client = self._client()
         response = client.chat.completions.create(
             model=self._model,
             messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": self._rationale_prompt()},
                 {"role": "user", "content": build_prompt(context)},
             ],
-            temperature=0.3,
-            timeout=LLM_TIMEOUT_SECONDS,
+            temperature=self._temperature,
+            timeout=self._timeout,
         )
         return (response.choices[0].message.content or "").strip()
 
@@ -300,11 +352,11 @@ class DeepSeekRationaleGenerator:
         response = client.chat.completions.create(
             model=self._model,
             messages=[
-                {"role": "system", "content": TEACHING_SYSTEM_PROMPT},
+                {"role": "system", "content": self._teaching_prompt()},
                 {"role": "user", "content": build_teaching_prompt(context)},
             ],
-            temperature=0.3,
-            timeout=LLM_TIMEOUT_SECONDS,
+            temperature=self._temperature,
+            timeout=self._timeout,
         )
         return (response.choices[0].message.content or "").strip()
 
@@ -321,9 +373,98 @@ def get_generator(settings: Settings | None = None) -> RationaleGenerator:
     )
 
 
-def generate_rationale_result(context: RationaleContext) -> RationaleResult:
+def _provider_from_db(db, feature: str):
+    """按功能绑定或默认供应商解析可用供应商；异常时返回 None 交由 env 回退。"""
+    from sqlalchemy import select
+
+    from app.models import LlmFeatureBinding, LlmProvider
+
+    binding = db.scalars(
+        select(LlmFeatureBinding).where(
+            LlmFeatureBinding.feature == feature,
+            LlmFeatureBinding.enabled.is_(True),
+        )
+    ).first()
+    provider = None
+    prompt = None
+    if binding is not None:
+        if binding.provider is not None and binding.provider.enabled:
+            provider = binding.provider
+        if binding.prompt is not None and binding.prompt.enabled:
+            prompt = binding.prompt
+    if provider is None:
+        provider = db.scalars(
+            select(LlmProvider).where(
+                LlmProvider.is_default.is_(True),
+                LlmProvider.enabled.is_(True),
+            )
+        ).first()
+    return provider, prompt
+
+
+def resolve_generator(db, feature: str, settings: Settings | None = None) -> RationaleGenerator:
+    """优先 DB 绑定，异常或未配置回退 env，再回退规则模板。"""
+    from app import llm_crypto
+
+    try:
+        provider, prompt = _provider_from_db(db, feature)
+    except Exception:
+        logger.warning("%s 读取 LLM 功能绑定失败，回退环境变量", log_tag(), exc_info=True)
+        return get_generator(settings)
+    if provider is None:
+        return get_generator(settings)
+    api_key = llm_crypto.decrypt_secret(provider.encrypted_api_key)
+    if not api_key:
+        logger.warning(
+            "%s 供应商 %s 的 API Key 缺失或无法解密，回退环境变量",
+            log_tag(),
+            provider.name,
+        )
+        return get_generator(settings)
+    return DeepSeekRationaleGenerator(
+        api_key=api_key,
+        model=provider.model or DEFAULT_MODEL,
+        base_url=provider.base_url or DEFAULT_BASE_URL,
+        timeout=provider.timeout or LLM_TIMEOUT_SECONDS,
+        temperature=provider.temperature,
+        system_prompt=prompt.system_prompt if prompt is not None else None,
+    )
+
+
+def test_connection(
+    base_url: str,
+    api_key: str,
+    model: str,
+    timeout: float = 10.0,
+) -> tuple[bool, str, int | None]:
+    """发送最小请求验证供应商连通性；返回 (是否成功, 消息, 耗时毫秒)。"""
     started = time.perf_counter()
-    generator = get_generator()
+    try:
+        client = OpenAI(
+            api_key=api_key,
+            base_url=base_url or DEFAULT_BASE_URL,
+            timeout=timeout if timeout and timeout > 0 else 10.0,
+            max_retries=0,
+        )
+        client.chat.completions.create(
+            model=model or DEFAULT_MODEL,
+            messages=[{"role": "user", "content": "ping"}],
+            max_tokens=1,
+            temperature=0,
+        )
+    except Exception as error:  # noqa: BLE001 - 测试连接需回显任意异常
+        latency = int((time.perf_counter() - started) * 1000)
+        return False, str(error)[:200] or "连接失败", latency
+    latency = int((time.perf_counter() - started) * 1000)
+    return True, "连接成功", latency
+
+
+def generate_rationale_result(
+    context: RationaleContext,
+    generator: RationaleGenerator | None = None,
+) -> RationaleResult:
+    started = time.perf_counter()
+    generator = generator if generator is not None else get_generator()
     if isinstance(generator, TemplateGenerator):
         return RationaleResult(format_template(context), RATIONALE_SOURCE_RULES, False)
     try:
@@ -353,11 +494,12 @@ def generate_rationale_result(context: RationaleContext) -> RationaleResult:
 
 def generate_teaching_consequence_result(
     context: TeachingConsequenceContext,
+    generator: RationaleGenerator | None = None,
 ) -> RationaleResult:
     template = format_teaching_template(context)
     if context.unlinked:
         return RationaleResult(template, RATIONALE_SOURCE_RULES, False)
-    generator = get_generator()
+    generator = generator if generator is not None else get_generator()
     generate_teaching = getattr(generator, "generate_teaching", None)
     if generate_teaching is None:
         return RationaleResult(template, RATIONALE_SOURCE_RULES, False)
@@ -381,5 +523,8 @@ def generate_teaching_consequence_result(
     return RationaleResult(text, RATIONALE_SOURCE_LLM, False)
 
 
-def generate_rationale(context: RationaleContext) -> str:
-    return generate_rationale_result(context).text
+def generate_rationale(
+    context: RationaleContext,
+    generator: RationaleGenerator | None = None,
+) -> str:
+    return generate_rationale_result(context, generator).text

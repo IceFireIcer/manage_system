@@ -14,7 +14,7 @@ from sqlalchemy import (
     UniqueConstraint,
     event,
 )
-from sqlalchemy.orm import Mapped, mapped_column, object_session
+from sqlalchemy.orm import Mapped, mapped_column, object_session, relationship
 
 from app.business_time import now as business_now
 from app.database import Base
@@ -1027,3 +1027,59 @@ class ClassRolePermission(Base):
         ForeignKey("users.id"), nullable=True
     )
     updated_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
+class LlmProvider(Base):
+    __tablename__ = "llm_providers"
+    __table_args__ = (
+        UniqueConstraint("name", name="uq_llm_providers_name"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(64), nullable=False)
+    base_url: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    model: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    encrypted_api_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+    timeout: Mapped[float] = mapped_column(Float, nullable=False, default=30.0)
+    temperature: Mapped[float] = mapped_column(Float, nullable=False, default=0.3)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    supports_tools: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
+    updated_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
+
+
+class LlmPrompt(Base):
+    __tablename__ = "llm_prompts"
+    __table_args__ = (
+        UniqueConstraint("feature", "version", name="uq_llm_prompts_feature_version"),
+        Index("ix_llm_prompts_feature_active", "feature", "active"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    feature: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    system_prompt: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
+
+
+class LlmFeatureBinding(Base):
+    __tablename__ = "llm_feature_bindings"
+    __table_args__ = (
+        UniqueConstraint("feature", name="uq_llm_feature_bindings_feature"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    feature: Mapped[str] = mapped_column(String(32), nullable=False)
+    provider_id: Mapped[int | None] = mapped_column(
+        ForeignKey("llm_providers.id", ondelete="SET NULL"), nullable=True
+    )
+    prompt_id: Mapped[int | None] = mapped_column(
+        ForeignKey("llm_prompts.id", ondelete="SET NULL"), nullable=True
+    )
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    updated_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
+
+    provider: Mapped[LlmProvider | None] = relationship("LlmProvider")
+    prompt: Mapped[LlmPrompt | None] = relationship("LlmPrompt")
