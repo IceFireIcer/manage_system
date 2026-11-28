@@ -104,6 +104,21 @@ const weekError = ref('')
 const weekData = ref(null)
 const weekPage = ref(1)
 
+const reviewDrawerOpen = ref(false)
+const reviewSession = ref(null)
+const reviewList = ref([])
+const reviewSelected = ref(null)
+const reviewCandidates = ref([])
+const reviewLoading = ref(false)
+const reviewGenerating = ref(false)
+const reviewSaving = ref(false)
+const reviewError = ref('')
+const reviewForm = reactive({ reason_tags: [], teacher_note: '' })
+
+const reviewTitle = computed(() =>
+  reviewSession.value ? `第 ${reviewSession.value.seq} 次课 · 复盘` : '课次复盘',
+)
+
 const isEmpty = computed(() => hasLoaded.value && !courses.value.length)
 
 function errorMessage(error, fallback) {
@@ -155,6 +170,96 @@ function refreshWeek() {
 function handleWeekPageChange(value) {
   weekPage.value = value
   fetchWeekRisk()
+}
+
+function reviewDeviationText(review) {
+  if (!review || !review.deviation_available) return '不计算'
+  const ratio = review.deviation_ratio ?? 0
+  const sign = ratio > 0 ? '+' : ''
+  return `${sign}${(ratio * 100).toFixed(1)}%`
+}
+
+function reviewDeviationClass(review) {
+  if (!review || !review.deviation_available || review.deviation_ratio === 0) {
+    return ''
+  }
+  return review.deviation_ratio > 0 ? 'is-high' : 'is-low'
+}
+
+function selectReview(review) {
+  reviewSelected.value = review
+  Object.assign(reviewForm, {
+    reason_tags: [...(review?.reason_tags ?? [])],
+    teacher_note: review?.teacher_note ?? '',
+  })
+}
+
+async function fetchReviews() {
+  if (!activeCourse.value || !reviewSession.value) return
+  reviewLoading.value = true
+  reviewError.value = ''
+  try {
+    const { data } = await api.get(
+      `/courses/${activeCourse.value.id}/sessions/${reviewSession.value.id}/reviews`,
+    )
+    reviewList.value = data.items ?? []
+    reviewCandidates.value = data.reason_candidates ?? []
+    selectReview(reviewList.value[0] ?? null)
+  } catch (error) {
+    reviewError.value = errorMessage(error, '复盘读取失败，请稍后重试')
+  } finally {
+    reviewLoading.value = false
+  }
+}
+
+function openReview(session) {
+  reviewSession.value = session
+  reviewDrawerOpen.value = true
+  reviewList.value = []
+  reviewSelected.value = null
+  reviewCandidates.value = []
+  reviewError.value = ''
+  Object.assign(reviewForm, { reason_tags: [], teacher_note: '' })
+  fetchReviews()
+}
+
+async function generateReview() {
+  if (reviewGenerating.value || !activeCourse.value || !reviewSession.value) return
+  reviewGenerating.value = true
+  reviewError.value = ''
+  try {
+    await api.post(
+      `/courses/${activeCourse.value.id}/sessions/${reviewSession.value.id}/reviews`,
+      {
+        reason_tags: reviewForm.reason_tags,
+        teacher_note: reviewForm.teacher_note.trim() || null,
+      },
+    )
+    ElMessage.success('已生成复盘版本')
+    await fetchReviews()
+  } catch (error) {
+    reviewError.value = errorMessage(error, '生成复盘失败，请稍后重试')
+  } finally {
+    reviewGenerating.value = false
+  }
+}
+
+async function saveReview() {
+  if (!reviewSelected.value || reviewSaving.value) return
+  reviewSaving.value = true
+  reviewError.value = ''
+  try {
+    await api.patch(`/courses/reviews/${reviewSelected.value.id}`, {
+      reason_tags: reviewForm.reason_tags,
+      teacher_note: reviewForm.teacher_note.trim() || null,
+    })
+    ElMessage.success('复盘已更新')
+    await fetchReviews()
+  } catch (error) {
+    reviewError.value = errorMessage(error, '保存失败，请稍后重试')
+  } finally {
+    reviewSaving.value = false
+  }
 }
 
 function weekItemKey(item) {
@@ -774,10 +879,13 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
               </span>
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="72" fixed="right">
+          <el-table-column label="操作" width="128" fixed="right">
             <template #default="{ row }">
               <el-button link type="primary" size="small" @click="openEditSession(row)">
                 编辑
+              </el-button>
+              <el-button link type="primary" size="small" @click="openReview(row)">
+                复盘
               </el-button>
             </template>
           </el-table-column>
@@ -1024,6 +1132,140 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
                 <span>{{ row.message }}</span>
               </li>
             </ul>
+          </section>
+        </template>
+      </div>
+    </el-drawer>
+
+    <el-drawer
+      v-model="reviewDrawerOpen"
+      :size="drawerSize"
+      :title="reviewTitle"
+      destroy-on-close
+    >
+      <div class="drawer-body">
+        <div class="review-head">
+          <p v-if="reviewSession" class="review-head__meta">
+            {{ reviewSession.session_date }} · {{ reviewSession.headcount }} 人
+          </p>
+          <el-button
+            type="primary"
+            size="small"
+            :loading="reviewGenerating"
+            @click="generateReview"
+          >
+            生成复盘
+          </el-button>
+        </div>
+
+        <el-alert
+          v-if="reviewError"
+          type="error"
+          :closable="false"
+          show-icon
+          :title="reviewError"
+          class="courses__alert"
+        />
+
+        <el-skeleton v-if="reviewLoading && !reviewList.length" :rows="4" animated />
+        <EmptyState
+          v-else-if="!reviewList.length"
+          title="暂无复盘"
+          description="生成后可对比实际净消耗与配方标准量。"
+        >
+          <template #action>
+            <el-button type="primary" :loading="reviewGenerating" @click="generateReview">
+              生成复盘
+            </el-button>
+          </template>
+        </EmptyState>
+        <template v-else-if="reviewSelected">
+          <div class="review-metrics">
+            <div class="review-metric">
+              <span>实际净消耗</span>
+              <strong>{{ reviewSelected.actual_net_quantity }}</strong>
+            </div>
+            <div class="review-metric">
+              <span>配方标准量</span>
+              <strong>{{ reviewSelected.standard_quantity }}</strong>
+            </div>
+            <div class="review-metric">
+              <span>偏差</span>
+              <strong :class="reviewDeviationClass(reviewSelected)">
+                {{ reviewDeviationText(reviewSelected) }}
+              </strong>
+            </div>
+          </div>
+          <p v-if="!reviewSelected.deviation_available" class="review-note">
+            标准量为 0，仅展示实际值。
+          </p>
+          <p class="review-note">
+            v{{ reviewSelected.version }} · 配方 v{{ reviewSelected.recipe_version }} ·
+            {{ reviewSelected.created_by_name }} · {{ reviewSelected.created_at }}
+          </p>
+
+          <ul class="review-items">
+            <li v-for="item in reviewSelected.items" :key="item.consumable_id">
+              <span>{{ item.consumable_name }}</span>
+              <span>
+                {{ item.quantity_per_person }} × {{ reviewSelected.headcount }} 人 =
+                {{ item.standard_quantity }}{{ item.unit }}
+              </span>
+            </li>
+          </ul>
+
+          <el-form label-position="top">
+            <el-form-item label="原因标签">
+              <el-select
+                v-model="reviewForm.reason_tags"
+                class="review-tags"
+                multiple
+                filterable
+                allow-create
+                default-first-option
+                placeholder="选择或补充原因"
+              >
+                <el-option
+                  v-for="tag in reviewCandidates"
+                  :key="tag"
+                  :label="tag"
+                  :value="tag"
+                />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="教师备注">
+              <el-input
+                v-model="reviewForm.teacher_note"
+                type="textarea"
+                :rows="2"
+                maxlength="255"
+                show-word-limit
+              />
+            </el-form-item>
+          </el-form>
+          <div class="review-actions">
+            <el-button type="primary" :loading="reviewSaving" @click="saveReview">
+              保存修改
+            </el-button>
+            <el-button text :loading="reviewGenerating" @click="generateReview">
+              生成新版本
+            </el-button>
+          </div>
+
+          <section class="review-history">
+            <h3>历史版本</h3>
+            <button
+              v-for="row in reviewList"
+              :key="row.id"
+              type="button"
+              class="review-history__item"
+              :class="{ 'is-active': reviewSelected.id === row.id }"
+              @click="selectReview(row)"
+            >
+              <span>v{{ row.version }}</span>
+              <span>{{ row.created_at }}</span>
+              <span>{{ row.actual_net_quantity }} / {{ row.standard_quantity }}</span>
+            </button>
           </section>
         </template>
       </div>
@@ -1401,6 +1643,149 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
   display: block;
 }
 
+.review-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.review-head__meta {
+  margin: 0;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--text-muted);
+}
+
+.review-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding: 12px 0;
+  border-top: 1px solid var(--line-soft);
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.review-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.review-metric span {
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--text-muted);
+}
+
+.review-metric strong {
+  font-size: 18px;
+  line-height: 26px;
+  font-weight: 600;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.review-metric strong.is-high {
+  color: var(--danger);
+}
+
+.review-metric strong.is-low {
+  color: var(--warning);
+}
+
+.review-note {
+  margin: 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.review-items {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 8px 0;
+  border-top: 1px solid var(--line-soft);
+  border-bottom: 1px solid var(--line-soft);
+  list-style: none;
+}
+
+.review-items li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--text);
+}
+
+.review-items li span:last-child {
+  color: var(--text-muted);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.review-tags {
+  width: 100%;
+}
+
+.review-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.review-history {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--line-soft);
+}
+
+.review-history h3 {
+  margin: 0;
+  font-size: 13px;
+  line-height: 20px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.review-history__item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 40px;
+  padding: 8px 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 18px;
+  font-variant-numeric: tabular-nums;
+  text-align: left;
+  cursor: pointer;
+}
+
+.review-history__item.is-active {
+  border-color: var(--primary);
+  background: var(--primary-soft);
+  color: var(--primary);
+}
+
+.review-history__item span:last-child {
+  color: var(--text-muted);
+}
+
+.review-history__item.is-active span:last-child {
+  color: var(--primary);
+}
+
 @media (max-width: 767px) {
   .courses__toolbar {
     gap: 8px;
@@ -1473,6 +1858,24 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
 
   .recipe-actions :deep(.el-button) {
     min-height: 44px;
+  }
+
+  .review-head :deep(.el-button),
+  .review-actions :deep(.el-button) {
+    min-height: 44px;
+  }
+
+  .review-history__item {
+    min-height: 44px;
+  }
+
+  .review-items li {
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .review-items li span:last-child {
+    text-align: left;
   }
 }
 </style>

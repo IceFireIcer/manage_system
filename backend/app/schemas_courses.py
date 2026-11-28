@@ -328,3 +328,101 @@ class ArrivalCoverageOut(BaseModel):
     total: int
     items: list[ArrivalCoverageSessionOut]
     truncated: bool = False
+
+REVIEW_TAG_CANDIDATES = (
+    "学生操作不熟",
+    "耗材损耗偏高",
+    "配方估算偏高",
+    "课时调整",
+    "其他",
+)
+MAX_REVIEW_TAGS = 6
+MAX_REVIEW_TAG_LENGTH = 32
+
+
+def _normalize_review_tags(tags: list[str]) -> list[str]:
+    normalized: list[str] = []
+    for raw in tags:
+        tag = raw.strip()
+        if not tag:
+            continue
+        if len(tag) > MAX_REVIEW_TAG_LENGTH:
+            raise ValueError(f"原因标签不能超过 {MAX_REVIEW_TAG_LENGTH} 个字符")
+        if tag not in normalized:
+            normalized.append(tag)
+    if len(normalized) > MAX_REVIEW_TAGS:
+        raise ValueError(f"原因标签最多 {MAX_REVIEW_TAGS} 个")
+    return normalized
+
+
+class TeachingReviewCreate(BaseModel):
+    reason_tags: list[str] = Field(default_factory=list)
+    teacher_note: str | None = Field(default=None, max_length=255)
+
+    @field_validator("reason_tags", mode="after")
+    @classmethod
+    def normalize_tags(cls, value: list[str]) -> list[str]:
+        return _normalize_review_tags(value)
+
+    @field_validator("teacher_note", mode="after")
+    @classmethod
+    def normalize_note(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        stripped = _strip(value)
+        return stripped or None
+
+
+class TeachingReviewUpdate(BaseModel):
+    reason_tags: list[str] | None = None
+    teacher_note: str | None = Field(default=None, max_length=255)
+
+    @field_validator("reason_tags", mode="after")
+    @classmethod
+    def normalize_tags(cls, value: list[str] | None) -> list[str] | None:
+        return None if value is None else _normalize_review_tags(value)
+
+    @field_validator("teacher_note", mode="after")
+    @classmethod
+    def normalize_note(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        stripped = _strip(value)
+        return stripped or None
+
+
+class TeachingReviewRecipeItemOut(BaseModel):
+    consumable_id: int
+    consumable_name: str
+    unit: str
+    quantity_per_person: int
+    standard_quantity: int
+
+
+class TeachingReviewOut(BaseModel):
+    id: int
+    class_id: int
+    course_id: int
+    course_name: str
+    session_id: int
+    session_seq: int
+    session_date: date
+    headcount: int
+    snapshot_id: int
+    recipe_version: int | None = None
+    actual_net_quantity: int
+    standard_quantity: int
+    deviation_ratio: float | None = None
+    deviation_available: bool
+    reason_tags: list[str]
+    teacher_note: str | None = None
+    created_by_name: str
+    created_at: datetime
+    version: int
+    items: list[TeachingReviewRecipeItemOut]
+    reason_candidates: list[str]
+
+
+class TeachingReviewListOut(BaseModel):
+    items: list[TeachingReviewOut]
+    reason_candidates: list[str]

@@ -5,6 +5,7 @@ from sqlalchemy import (
     Boolean,
     CheckConstraint,
     Date,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -727,6 +728,40 @@ class CourseSession(Base):
     created_by_name: Mapped[str] = mapped_column(String(64), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
     updated_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
+
+
+class TeachingReview(Base):
+    __tablename__ = "teaching_reviews"
+    __table_args__ = (
+        UniqueConstraint(
+            "session_id", "version", name="uq_teaching_reviews_session_version"
+        ),
+        CheckConstraint(
+            "standard_quantity >= 0", name="ck_teaching_reviews_standard"
+        ),
+        CheckConstraint(
+            "actual_net_quantity >= 0", name="ck_teaching_reviews_actual"
+        ),
+        Index("ix_teaching_reviews_class_session", "class_id", "session_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    class_id: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    session_id: Mapped[int] = mapped_column(
+        ForeignKey("course_sessions.id"), nullable=False, index=True
+    )
+    snapshot_id: Mapped[int] = mapped_column(
+        ForeignKey("course_recipe_snapshots.id"), nullable=False
+    )
+    actual_net_quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    standard_quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    deviation_ratio: Mapped[float | None] = mapped_column(Float, nullable=True)
+    reason_tags: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    teacher_note: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    created_by_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
 
 
 class IncidentReport(Base):
