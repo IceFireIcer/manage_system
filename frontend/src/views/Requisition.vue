@@ -7,10 +7,18 @@ import api from '../api'
 import { useUserStore } from '../stores/user'
 import PageHeader from '../components/PageHeader.vue'
 import EmptyState from '../components/EmptyState.vue'
+import RequisitionReceiptCard from '../components/RequisitionReceiptCard.vue'
 import { businessDate, businessNowInput, businessToday } from '../utils/businessDate'
 import { announce } from '../utils/announcer'
 import { copyRequestId, recordRequestId, requestIdOf } from '../utils/requestTrace'
 import { keepFocusedFieldVisible } from '../utils/mobileFocus'
+import {
+  appendReceipt,
+  clearReceipts,
+  readBreaktimeMode,
+  readReceipts,
+  writeBreaktimeMode,
+} from '../utils/requisitionBreaktime'
 
 const MAX_ROWS = 5
 const MAX_BACKFILL_DAYS = 30
@@ -20,6 +28,9 @@ const DRAFT_TTL = 30 * 60 * 1000
 const draftOwnerId = ref(null)
 const draftNotice = ref('')
 const recentItems = ref([])
+const breaktimeMode = ref(false)
+const showCompactRemark = ref(false)
+const savedReceipts = ref([])
 let draftReady = false
 let draftTimer = null
 
@@ -148,6 +159,26 @@ const totalQuantity = computed(() =>
     return Number.isInteger(value) && value > 0 ? sum + value : sum
   }, 0),
 )
+
+const quickItems = computed(() => {
+  const byId = new Map(consumables.value.map((item) => [item.id, item]))
+  const result = []
+  for (const recent of recentItems.value) {
+    const item = byId.get(recent.consumableId)
+    if (item && !result.some((entry) => entry.id === item.id)) {
+      result.push({ ...item, defaultQuantity: recent.quantity })
+    }
+  }
+  if (result.length < 4) {
+    for (const item of consumables.value) {
+      if (result.length >= 6) break
+      if (item.current_stock > 0 && !result.some((entry) => entry.id === item.id)) {
+        result.push({ ...item, defaultQuantity: 1 })
+      }
+    }
+  }
+  return result.slice(0, 6)
+})
 
 function clearRowErrors() {
   Object.keys(rowErrors).forEach((key) => delete rowErrors[key])
@@ -480,6 +511,43 @@ function applyRecent() {
   draftNotice.value = '已填入最近明细，提交前请重新核对库存、业务时间与领用人。'
 }
 
+function toggleBreaktime() {
+  if (submitting.value) return
+  breaktimeMode.value = !breaktimeMode.value
+  writeBreaktimeMode(draftOwnerId.value, breaktimeMode.value)
+  announce(breaktimeMode.value ? '已进入课间模式' : '已退出课间模式')
+}
+
+function applyQuick(item) {
+  if (!item || locked.value || submitting.value || item.current_stock <= 0) return
+  const existingIndex = rows.value.findIndex((row) => row.consumableId === item.id)
+  if (existingIndex >= 0) {
+    focusRow(existingIndex, 'qty')
+    return
+  }
+  const quantity = Number.isInteger(item.defaultQuantity) && item.defaultQuantity > 0
+    ? item.defaultQuantity
+    : 1
+  const emptyIndex = rows.value.findIndex((row) => !row.consumableId)
+  if (emptyIndex >= 0) {
+    rows.value[emptyIndex].consumableId = item.id
+    rows.value[emptyIndex].quantity = quantity
+    clearRowErrors()
+    clearUncertain()
+    focusRow(emptyIndex, 'qty')
+    return
+  }
+  if (rows.value.length < MAX_ROWS) {
+    rows.value.push(createRow(item.id, quantity))
+    clearRowErrors()
+    clearUncertain()
+    const index = rows.value.length - 1
+    nextTick(() => rowQtyRefs.get(index)?.focus?.())
+    return
+  }
+  ElMessage.warning(`单次最多登记 ${MAX_ROWS} 种耗材，请先移除一行`)
+}
+
 function scheduleDraftSave() {
   if (!draftReady) return
   if (draftTimer) window.clearTimeout(draftTimer)
@@ -594,6 +662,69 @@ function clearPending() {
 function formatMoment(value) {
   if (!value) return '—'
   return String(value).replace('T', ' ').slice(0, 19)
+}
+
+function formatReceiptTime(value) {
+  if (!value) return ''
+  if (value instanceof Date) {
+    const pad = (part) => String(part).padStart(2, '0')
+    return `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())} ${pad(
+      value.getHours(),
+    )}:${pad(value.getMinutes())}`
+  }
+  return String(value).replace('T', ' ').slice(0, 16)
+}
+
+function resolveReceiptOwnerName() {
+  if (isStudent.value) return userStore.user?.name ?? ''
+  return (
+    userOptions.value.find((option) => option.id === form.userId)?.name
+    ?? userStore.user?.name
+    ?? ''
+  )
+}
+
+function storeReceipt(receipt, snapshot, fallback = null) {
+  const ownerId = draftOwnerId.value
+  if (!ownerId) return
+  const orderNo = receipt?.order_no ?? fallback?.orderNo ?? ''
+  const ownerName = receipt?.owner_name || resolveReceiptOwnerName()
+  const timeSource = receipt?.business_at || fallback?.businessAt || new Date()
+  const businessAt = formatReceiptTime(timeSource)
+  const lines = receipt?.lines?.length
+    ? receipt.lines.map((line) => ({
+        name: line.consumable_name,
+        quantity: line.quantity,
+        unit: line.unit ?? '',
+      }))
+    : snapshot.map((row) => ({ name: row.name, quantity: row.quantity, unit: row.unit }))
+  if (!lines.length) return
+  savedReceipts.value = appendReceipt(ownerId, {
+    orderNo,
+    ownerName,
+    businessAt,
+    createdAt: Date.now(),
+    lines,
+  })
+}
+
+async function clearSavedReceipts() {
+  if (!savedReceipts.value.length) return
+  const confirmed = await ElMessageBox.confirm(
+    '将清除本机保存的最近回执，不影响已登记记录。',
+    '清除最近回执？',
+    {
+      confirmButtonText: '清除',
+      cancelButtonText: '取消',
+      type: 'warning',
+    },
+  )
+    .then(() => true)
+    .catch(() => false)
+  if (!confirmed) return
+  clearReceipts(draftOwnerId.value)
+  savedReceipts.value = []
+  announce('已清除本机最近回执')
 }
 
 function applyReceiptErrors(errors) {
@@ -860,6 +991,7 @@ async function handleSubmit() {
     if (data.receipt) {
       showReceipt(data.receipt)
       result.value = { ...result.value, rows: snapshot }
+      storeReceipt(data.receipt, snapshot)
     } else {
       result.value = {
         count: data.count,
@@ -883,6 +1015,10 @@ async function handleSubmit() {
           result.value.orderNo ? `，领用单号 ${result.value.orderNo}` : ''
         }`,
       )
+      storeReceipt(null, snapshot, {
+        orderNo: data.order_no,
+        businessAt: form.timeMode === 'backfill' ? form.backfillAt : new Date(),
+      })
     }
     rememberRecent(snapshot)
     removeDraft()
@@ -1000,6 +1136,8 @@ onMounted(async () => {
   window.addEventListener('beforeunload', handleBeforeUnload)
   draftOwnerId.value = userStore.user?.id ?? null
   form.userId = userStore.user?.id ?? null
+  breaktimeMode.value = readBreaktimeMode(draftOwnerId.value)
+  savedReceipts.value = readReceipts(draftOwnerId.value)
   const pending = readPending()
   loadRecent()
 
@@ -1114,6 +1252,57 @@ onBeforeUnmount(() => {
     </section>
 
     <section v-else class="requisition__shell" :aria-busy="consumableLoading || submitting">
+      <div class="panel requisition__mode-bar">
+        <div class="requisition__mode-copy">
+          <span class="requisition__mode-title">课间模式</span>
+          <span class="requisition__mode-state">{{ breaktimeMode ? '已开启 · 优先最近领用' : '标准模式' }}</span>
+        </div>
+        <el-button
+          class="requisition__mode-toggle"
+          :type="breaktimeMode ? 'primary' : 'default'"
+          :aria-pressed="breaktimeMode ? 'true' : 'false'"
+          :disabled="submitting"
+          @click="toggleBreaktime"
+        >
+          {{ breaktimeMode ? '退出课间模式' : '进入课间模式' }}
+        </el-button>
+      </div>
+
+      <RequisitionReceiptCard
+        v-if="savedReceipts.length"
+        class="requisition__recent"
+        :receipts="savedReceipts"
+        :limit="breaktimeMode ? 2 : 3"
+        @clear="clearSavedReceipts"
+      />
+
+      <section
+        v-if="breaktimeMode && quickItems.length"
+        class="panel requisition__quick"
+        aria-labelledby="requisition-quick-title"
+      >
+        <h2 id="requisition-quick-title" class="requisition__quick-title">最近领用</h2>
+        <div class="requisition__quick-list">
+          <button
+            v-for="item in quickItems"
+            :key="item.id"
+            type="button"
+            class="requisition__quick-chip"
+            :disabled="submitting || locked || item.current_stock <= 0"
+            @click="applyQuick(item)"
+          >
+            <span class="requisition__quick-name">{{ item.name }}</span>
+            <span class="requisition__quick-meta">
+              {{
+                item.current_stock <= 0
+                  ? '缺货'
+                  : `库存 ${item.current_stock}${item.unit ? ` ${item.unit}` : ''}`
+              }}
+            </span>
+          </button>
+        </div>
+      </section>
+
       <div v-if="consumableLoading && !consumables.length" class="panel requisition__state">
         <el-skeleton :rows="5" animated />
       </div>
@@ -1428,7 +1617,20 @@ onBeforeUnmount(() => {
           </div>
 
           <div class="panel requisition__card">
-            <el-form-item label="备注" class="requisition__remark">
+            <button
+              v-if="breaktimeMode"
+              type="button"
+              class="requisition__quiet-toggle"
+              :aria-expanded="showCompactRemark ? 'true' : 'false'"
+              @click="showCompactRemark = !showCompactRemark"
+            >
+              {{ showCompactRemark ? '收起备注' : '添加备注' }}
+            </button>
+            <el-form-item
+              v-show="!breaktimeMode || showCompactRemark"
+              label="备注"
+              class="requisition__remark"
+            >
               <el-input
                 v-model="form.remark"
                 type="textarea"
@@ -1901,6 +2103,133 @@ onBeforeUnmount(() => {
   display: flex;
   justify-content: flex-end;
   gap: var(--space-2);
+}
+
+.requisition__mode-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-4);
+}
+
+.requisition__mode-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.requisition__mode-title {
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.requisition__mode-state {
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--text-muted);
+}
+
+.requisition__mode-toggle {
+  flex: 0 0 auto;
+  min-height: 44px;
+  margin-left: 0;
+}
+
+.requisition__recent {
+  margin-bottom: var(--space-4);
+}
+
+.requisition__quick {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  margin-bottom: var(--space-4);
+}
+
+.requisition__quick-title {
+  margin: 0;
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.requisition__quick-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.requisition__quick-chip {
+  display: flex;
+  flex: 1 1 140px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-control);
+  background: var(--surface-subtle);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.requisition__quick-chip:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.requisition__quick-chip:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.requisition__quick-name {
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 600;
+  word-break: break-word;
+}
+
+.requisition__quick-meta {
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.requisition__quiet-toggle {
+  min-height: 44px;
+  padding: 4px 0;
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-size: 13px;
+  line-height: 20px;
+  cursor: pointer;
+}
+
+@media (max-width: 767px) {
+  .requisition__mode-bar {
+    padding: var(--space-3);
+  }
+
+  .requisition__quick {
+    padding: var(--space-3);
+  }
+
+  .requisition__quick-chip {
+    flex: 1 1 calc(50% - var(--space-2));
+  }
 }
 
 @media (max-width: 1023px) {
