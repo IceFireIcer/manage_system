@@ -966,3 +966,64 @@ class SystemSetting(Base):
     value: Mapped[str] = mapped_column(Text, nullable=False)
     updated_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
+
+class Permission(Base):
+    __tablename__ = "permissions"
+    __table_args__ = (
+        CheckConstraint(
+            "scope IN ('system','class','personal')", name="ck_permissions_scope"
+        ),
+        Index("ix_permissions_category", "category", "sort_order"),
+    )
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    label: Mapped[str] = mapped_column(String(64), nullable=False)
+    category: Mapped[str] = mapped_column(String(32), nullable=False)
+    scope: Mapped[str] = mapped_column(String(16), nullable=False, default="class")
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+class RolePermission(Base):
+    __tablename__ = "role_permissions"
+    __table_args__ = (
+        UniqueConstraint("role", "permission_key", name="uq_role_permissions_role_key"),
+        Index("ix_role_permissions_role", "role"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    role: Mapped[str] = mapped_column(String(16), nullable=False)
+    permission_key: Mapped[str] = mapped_column(
+        ForeignKey("permissions.key", ondelete="CASCADE"), nullable=False
+    )
+    allowed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    default_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    toggleable_by_teacher: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+    locked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    updated_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
+
+
+class ClassRolePermission(Base):
+    __tablename__ = "class_role_permissions"
+    __table_args__ = (
+        UniqueConstraint(
+            "class_id", "role", "permission_key",
+            name="uq_class_role_permissions_class_role_key",
+        ),
+        Index("ix_class_role_permissions_class_role", "class_id", "role"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    class_id: Mapped[int] = mapped_column(
+        ForeignKey("classes.id"), nullable=False, index=True
+    )
+    role: Mapped[str] = mapped_column(String(16), nullable=False)
+    permission_key: Mapped[str] = mapped_column(
+        ForeignKey("permissions.key", ondelete="CASCADE"), nullable=False
+    )
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    updated_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id"), nullable=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)

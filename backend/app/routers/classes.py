@@ -1,7 +1,7 @@
 import json
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -15,7 +15,7 @@ from app.class_scope import (
     is_super_admin,
 )
 from app.database import get_db
-from app.deps import CurrentClassId, CurrentUser
+from app.deps import CurrentClassId, CurrentUser, require_permission
 from app.models import Class, ClassMembership, ClassTerm, User
 from app.operation_log import record_operation, user_label
 from app.schemas_classes import (
@@ -36,6 +36,7 @@ router = APIRouter(prefix="/api/v1/classes", tags=["classes"])
 
 CLASS_NOT_FOUND = "班级不存在或无权访问"
 TERM_NOT_FOUND = "学期不存在或无权访问"
+ActiveClassUser = Annotated[User, Depends(require_permission("dashboard.view"))]
 
 
 def _get_class(db: Session, class_id: int) -> Class:
@@ -130,7 +131,7 @@ def create_class(
 @router.get("/active")
 def get_active_class(
     db: Annotated[Session, Depends(get_db)],
-    current_user: CurrentUser,
+    current_user: ActiveClassUser,
     class_id: CurrentClassId,
 ) -> ActiveClassOut:
     return ActiveClassOut(

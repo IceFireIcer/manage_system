@@ -25,6 +25,7 @@ AUDIT_ACTIONS: Final = (
     "admin_handover_create",
     "admin_recover",
     "admin_recover_rejected",
+    "permission_override_update",
 )
 SENSITIVE_ACTIONS: Final = SESSION_ACTIONS + AUDIT_ACTIONS
 

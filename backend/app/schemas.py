@@ -38,6 +38,7 @@ class SessionOut(BaseModel):
     session_expires_at: datetime | None = None
     roles: list[str] = Field(default_factory=list)
     active_role: str | None = None
+    permissions: list[str] = Field(default_factory=list)
     available_classes: list[SessionClassOut] = Field(default_factory=list)
     active_class: SessionClassOut | None = None
     can_switch_class: bool = False
