@@ -32,6 +32,23 @@ const appliedStart = ref('')
 const appliedEnd = ref('')
 const unitFilter = ref('all')
 const chartRef = ref(null)
+const insight = ref(null)
+
+const INSIGHT_LABELS = {
+  training_growth: '实训上升',
+  non_training_growth: '异常攀升',
+  decline: '消耗下降',
+  stable: '运行平稳',
+  no_calendar: '暂无课次',
+}
+
+const INSIGHT_TONES = {
+  training_growth: 'status-tag--info',
+  non_training_growth: 'status-tag--warning',
+  decline: 'status-tag--info',
+  stable: 'status-tag--neutral',
+  no_calendar: 'status-tag--neutral',
+}
 
 const audit = reactive({
   visible: false,
@@ -41,6 +58,7 @@ const audit = reactive({
 
 let chart = null
 let requestSeq = 0
+let insightSeq = 0
 let active = true
 
 const unitOptions = computed(() => {
@@ -104,6 +122,28 @@ const rangeText = computed(() => {
 
 const failedWindowText = computed(() => `近 ${windowDays.value} 天`)
 
+const insightLabel = computed(() => {
+  if (!insight.value) return ''
+  return INSIGHT_LABELS[insight.value.state] || '教学解读'
+})
+
+const insightTone = computed(() => {
+  if (!insight.value) return 'status-tag--neutral'
+  return INSIGHT_TONES[insight.value.state] || 'status-tag--neutral'
+})
+
+const insightMeta = computed(() => {
+  const value = insight.value
+  if (!value) return ''
+  const parts = [`计划课次 ${value.training_session_count}`]
+  if (value.change_ratio !== null && value.change_ratio !== undefined) {
+    parts.push(`环比 ${formatChangePercent(value.change_ratio)}`)
+  } else if (value.previous_net_quantity === 0 && value.current_net_quantity > 0) {
+    parts.push('前一窗口无消耗')
+  }
+  return parts.join(' · ')
+})
+
 function rangeOf(windowSize) {
   return {
     start: businessDate(-(windowSize - 1)),
@@ -119,6 +159,27 @@ function formatRate(value) {
   const number = Number(value)
   if (!Number.isFinite(number)) return '—'
   return String(Math.round(number * 100) / 100)
+}
+
+function formatChangePercent(value) {
+  const number = Number(value)
+  if (!Number.isFinite(number)) return '—'
+  const percent = Math.round(number * 100)
+  return `${percent > 0 ? '+' : ''}${percent}%`
+}
+
+async function fetchInsight(requested) {
+  const seq = ++insightSeq
+  try {
+    const { data } = await api.get('/consumption/teaching-insight', {
+      params: { window: requested },
+    })
+    if (seq !== insightSeq || !active) return
+    insight.value = data ?? null
+  } catch {
+    if (seq !== insightSeq || !active) return
+    insight.value = null
+  }
 }
 
 function renderChart() {
@@ -200,6 +261,7 @@ async function fetchSummary() {
     if (unitFilter.value !== 'all' && !unitOptions.value.includes(unitFilter.value)) {
       unitFilter.value = 'all'
     }
+    fetchInsight(requested)
     await nextTick()
     renderChart()
   } catch {
@@ -264,6 +326,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   active = false
   requestSeq += 1
+  insightSeq += 1
   window.removeEventListener('resize', handleResize)
   chart?.dispose()
   chart = null
@@ -346,6 +409,22 @@ onBeforeUnmount(() => {
     </section>
 
     <div v-else class="consumption__body" :aria-busy="loading">
+
+      <section v-if="insight" class="panel consumption__insight">
+        <div class="consumption__insight-main">
+          <span class="status-tag" :class="insightTone">{{ insightLabel }}</span>
+          <p class="consumption__insight-text">{{ insight.message }}</p>
+        </div>
+        <div class="consumption__insight-meta">
+          <span class="consumption__block-meta">{{ insightMeta }}</span>
+          <template v-if="insight.positive_feedback?.eligible">
+            <span class="status-tag status-tag--success">正向反馈</span>
+            <span class="consumption__insight-feedback">
+              {{ insight.positive_feedback.message }}
+            </span>
+          </template>
+        </div>
+      </section>
 
       <section class="panel consumption__chart-block">
         <div class="consumption__block-head">
@@ -531,6 +610,42 @@ onBeforeUnmount(() => {
   gap: 24px;
 }
 
+.consumption__insight {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 20px;
+}
+
+.consumption__insight-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.consumption__insight-text {
+  margin: 0;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--text-secondary);
+}
+
+.consumption__insight-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.consumption__insight-feedback {
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--text-muted);
+}
+
 
 .consumption__unit-block,
 .consumption__chart-block,
@@ -661,6 +776,16 @@ onBeforeUnmount(() => {
   .consumption__chart-block,
   .consumption__table-block {
     padding: 16px;
+  }
+
+  .consumption__insight {
+    flex-direction: column;
+    align-items: flex-start;
+    padding: 12px 16px;
+  }
+
+  .consumption__insight-meta {
+    justify-content: flex-start;
   }
 
   .consumption__unit {
