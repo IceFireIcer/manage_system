@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.models import User
 from app.operation_log import record_operation
+from app.roles import ensure_grants
 from app.security import hash_password
 
 BootstrapState = Literal["ready", "needs_initialization", "needs_recovery"]
@@ -202,6 +203,7 @@ def _create_account(
     )
     db.add(user)
     db.flush()
+    ensure_grants(db, user)
     _write_log(
         db,
         action=action,
@@ -340,6 +342,7 @@ def handover_admin(
     )
     db.add(new_admin)
     db.flush()
+    ensure_grants(db, new_admin)
     before = _snapshot(previous)
     previous.status = "disabled"
     previous.session_version += 1

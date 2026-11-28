@@ -20,8 +20,8 @@ const userStore = useUserStore()
 const alertsStore = useAlertsStore()
 
 const isStudent = computed(() => userStore.user?.role === 'student')
-const isAdmin = computed(() => userStore.user?.role === 'admin')
-const isStaff = computed(() => ['teacher', 'admin'].includes(userStore.user?.role))
+const isAdmin = computed(() => ['super_admin', 'admin'].includes(userStore.user?.role))
+const isStaff = computed(() => ['super_admin', 'teacher', 'admin'].includes(userStore.user?.role))
 
 const loading = ref(true)
 const refreshing = ref(false)

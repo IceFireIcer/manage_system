@@ -18,9 +18,10 @@ from app.config import get_settings  # noqa: E402
 from app.consumption import window_flow  # noqa: E402
 from app.database import SessionLocal  # noqa: E402
 from app.models import Consumable, User  # noqa: E402
+from app.roles import ensure_grants  # noqa: E402
 from app.routers.requisitions import _create_requisition_impl  # noqa: E402
 from app.schemas_requisitions import RequisitionCreate, RequisitionItemIn  # noqa: E402
-from app.security import hash_password  # noqa: E402
+from app.security import hash_password
 
 ALLOWED_ENVS = {"demo", "dev"}
 DEMO_PASSWORD = "Demo@12345"
@@ -134,6 +135,7 @@ def _ensure_account(db, account: str, name: str, role: str) -> User:
     )
     db.add(user)
     db.flush()
+    ensure_grants(db, user)
     return user
 
 

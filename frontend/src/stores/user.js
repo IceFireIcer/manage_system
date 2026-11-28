@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import api from '../api'
 
 const ROLE_NAMES = {
+  super_admin: '超级管理员',
   teacher: '教师',
   admin: '班委',
   student: '学生',
@@ -35,10 +36,16 @@ export const useUserStore = defineStore('user', {
     mustChangePassword: false,
     sessionEpoch: null,
     identityLocked: false,
+    roles: [],
+    activeRole: null,
+    activeClass: null,
   }),
   getters: {
     isLoggedIn: (state) => state.user !== null,
-    roleName: (state) => ROLE_NAMES[state.user?.role] ?? '未知',
+    roleName: (state) =>
+      ROLE_NAMES[state.activeRole] ?? ROLE_NAMES[state.user?.role] ?? '未知',
+    hasMultipleRoles: (state) => state.roles.length > 1,
+    canSwitchRole: (state) => state.roles.length > 1,
   },
   actions: {
     ensureSessionSync() {
@@ -71,6 +78,9 @@ export const useUserStore = defineStore('user', {
     lockIdentity() {
       if (!this.user) return
       this.user = null
+      this.roles = []
+      this.activeRole = null
+      this.activeClass = null
       this.fetched = true
       this.status = 'ready'
       this.identityLocked = true
@@ -91,6 +101,12 @@ export const useUserStore = defineStore('user', {
     applySession(data) {
       if (!data) return
       this.user = data.user ?? null
+      this.roles = Array.isArray(data.roles) ? data.roles : []
+      this.activeRole = data.active_role ?? this.user?.role ?? null
+      this.activeClass = data.active_class ?? null
+      if (this.user && this.activeRole) {
+        this.user.role = this.activeRole
+      }
       this.mustChangePassword = Boolean(data.must_change_password)
       this.sessionExpiresAt = data.session_expires_at ?? null
     },
@@ -117,6 +133,9 @@ export const useUserStore = defineStore('user', {
           const status = error.response?.status
           if (status === 401 || status === 403) {
             this.user = null
+            this.roles = []
+            this.activeRole = null
+            this.activeClass = null
             this.fetched = true
             this.status = 'ready'
           } else {
@@ -155,6 +174,11 @@ export const useUserStore = defineStore('user', {
         this.mustChangePassword = false
         this.sessionExpiresAt = null
       }
+      return data
+    },
+    async switchRole(role) {
+      const { data } = await api.post('/auth/switch-role', { role })
+      this.applySession(data)
       return data
     },
     async changePassword(payload) {
@@ -196,6 +220,9 @@ export const useUserStore = defineStore('user', {
     },
     clearUser() {
       this.user = null
+      this.roles = []
+      this.activeRole = null
+      this.activeClass = null
       this.fetched = true
       this.status = 'ready'
       this.identityLocked = false

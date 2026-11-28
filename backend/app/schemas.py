@@ -22,7 +22,14 @@ class ChangePasswordRequest(BaseModel):
     new_password: str = Field(min_length=8, max_length=64)
 
 
+class SwitchRoleRequest(BaseModel):
+    role: str = Field(min_length=1, max_length=16)
+
+
 class SessionOut(BaseModel):
     user: UserOut
     must_change_password: bool
     session_expires_at: datetime | None = None
+    roles: list[str] = Field(default_factory=list)
+    active_role: str | None = None
+    active_class: int | None = None

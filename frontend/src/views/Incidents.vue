@@ -33,7 +33,7 @@ const PAGE_SIZE = 20
 
 const userStore = useUserStore()
 const isStudent = computed(() => userStore.user?.role === 'student')
-const isStaff = computed(() => ['teacher', 'admin'].includes(userStore.user?.role))
+const isStaff = computed(() => ['super_admin', 'teacher', 'admin'].includes(userStore.user?.role))
 
 const consumables = ref([])
 const consumablesLoading = ref(false)
