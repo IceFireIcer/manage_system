@@ -38,8 +38,9 @@ export const useUserStore = defineStore('user', {
     mustChangePassword: false,
     sessionEpoch: null,
     identityLocked: false,
-roles: [],
+    roles: [],
     activeRole: null,
+    permissions: [],
     availableClasses: [],
     activeClass: null,
     setupRequired: false,
@@ -54,6 +55,7 @@ roles: [],
     canSwitchClass: (state) =>
       ['teacher', 'super_admin'].includes(state.activeRole ?? state.user?.role) &&
       state.availableClasses.length > 1,
+    hasPermission: (state) => (key) => state.permissions.includes(key),
   },
   actions: {
     ensureSessionSync() {
@@ -111,6 +113,7 @@ roles: [],
       this.user = data.user ?? null
       this.roles = Array.isArray(data.roles) ? data.roles : []
       this.activeRole = data.active_role ?? this.user?.role ?? null
+      this.permissions = Array.isArray(data.permissions) ? data.permissions : []
       this.activeClass = data.active_class ?? null
       if (this.user && this.activeRole) {
         this.user.role = this.activeRole

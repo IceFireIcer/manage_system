@@ -26,7 +26,9 @@ from app.permissions import (
     effective_permissions,
     ensure_catalog_seeded,
     role_matrix,
+    role_state,
     update_class_overrides,
+    update_role_permission,
 )
 from app.roles import ROLE_LABELS
 from app.schemas_permissions import (
@@ -38,13 +40,29 @@ from app.schemas_permissions import (
     PermissionListOut,
     PermissionMatrixOut,
     RoleMatrixOut,
+    RolePermissionUpdateIn,
 )
 
 router = APIRouter(prefix="/api/v1/permissions", tags=["permissions"])
 
 TeacherUser = Annotated[User, Depends(require_role("teacher"))]
+SuperAdminUser = Annotated[User, Depends(require_role("super_admin"))]
 PermissionManager = Annotated[User, Depends(require_permission("permission.manage"))]
 UNKNOWN_ROLE_DETAIL = "只能查看班委或学生的班级覆盖"
+
+
+def _state_snapshot(state) -> str | None:
+    if state is None:
+        return None
+    return json.dumps(
+        {
+            "allowed": state.allowed,
+            "default_enabled": state.default_enabled,
+            "toggleable_by_teacher": state.toggleable_by_teacher,
+            "locked": state.locked,
+        },
+        ensure_ascii=False,
+    )
 
 
 def _role_matrix_out(db: Session, class_id: int, role: str) -> RoleMatrixOut:
@@ -166,3 +184,46 @@ def write_class_overrides(
         updated=updated,
         matrix=_role_matrix_out(db, class_id, payload.role),
     )
+
+@router.put("/roles")
+def update_role_matrix(
+    payload: RolePermissionUpdateIn,
+    manager: SuperAdminUser,
+    class_id: CurrentClassId,
+    db: Annotated[Session, Depends(get_db)],
+) -> RoleMatrixOut:
+    before = role_state(db, payload.role, payload.permission_key)
+    ensure_catalog_seeded(db)
+    try:
+        state = update_role_permission(
+            db,
+            payload.role,
+            payload.permission_key,
+            allowed=payload.allowed,
+            default_enabled=payload.default_enabled,
+            toggleable_by_teacher=payload.toggleable_by_teacher,
+            locked=payload.locked,
+        )
+    except PermissionUpdateError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=(
+                status.HTTP_403_FORBIDDEN if exc.forbidden else status.HTTP_400_BAD_REQUEST
+            ),
+            detail=exc.detail,
+        ) from exc
+
+    record_operation(
+        db,
+        action="permission_role_update",
+        operator=manager,
+        target_type="role",
+        target_label=payload.role,
+        before_value=_state_snapshot(before),
+        after_value=_state_snapshot(state),
+        remark=(
+            f"{user_label(manager)} 调整 {payload.role} 的 {payload.permission_key} 角色权限"
+        ),
+    )
+    db.commit()
+    return _role_matrix_out(db, class_id, payload.role)
