@@ -41,6 +41,11 @@ from app.operation_log import record_operation
 from app.schemas_consumables import STATUS_ENABLED
 from app.schemas_requisitions import (
     MAX_BACKFILL_DAYS,
+    ClassSignalItemOut,
+    ClassSignalSampleOut,
+    ClassSignalsOut,
+    ClassSignalThresholdOut,
+    ClassSignalUnitOut,
     ControlledBackfillCreate,
     CorrectionCreate,
     CorrectionHandle,
@@ -127,6 +132,10 @@ STATUS_NAMES = {"active": "有效", "reversed": "已撤销"}
 
 FOOTPRINT_WINDOWS = (7, 30, 90)
 DEFAULT_FOOTPRINT_WINDOW = 90
+
+CLASS_SIGNAL_WINDOWS = (7, 30)
+CLASS_SIGNAL_MIN_REQUESTERS = 5
+CLASS_SIGNAL_MIN_FLOWS = 3
 
 ManagerUser = Annotated[User, Depends(require_role("teacher", "admin"))]
 
@@ -1131,6 +1140,192 @@ def get_my_footprint(
         requisition_count=sum(item.requisition_count for item in items),
         items=items,
         unit_totals=unit_totals,
+    )
+
+
+def _class_signal_net_quantities(
+    db: Session,
+    class_id: int,
+    start: datetime,
+    end: datetime,
+    *,
+    end_inclusive: bool,
+) -> dict[int, int]:
+    issued = func.coalesce(
+        func.sum(case((Requisition.type == "normal", Requisition.quantity), else_=0)), 0
+    )
+    reversed_quantity = func.coalesce(
+        func.sum(
+            case(
+                (
+                    and_(
+                        Requisition.type == "reversal",
+                        Requisition.status == "active",
+                    ),
+                    Requisition.quantity,
+                ),
+                else_=0,
+            )
+        ),
+        0,
+    )
+    end_filter = (
+        Requisition.created_at <= end
+        if end_inclusive
+        else Requisition.created_at < end
+    )
+    rows = db.execute(
+        select(Requisition.consumable_id, issued, reversed_quantity)
+        .where(
+            Requisition.class_id == class_id,
+            Requisition.created_at >= start,
+            end_filter,
+        )
+        .group_by(Requisition.consumable_id)
+    ).all()
+    return {
+        int(consumable_id): max(int(issued_total) - int(reversed_sum), 0)
+        for consumable_id, issued_total, reversed_sum in rows
+    }
+
+
+def _class_signal_sample(
+    db: Session, class_id: int, start: datetime, end: datetime
+) -> tuple[int, int]:
+    requester_count, flow_count = db.execute(
+        select(func.count(func.distinct(Requisition.user_id)), func.count()).where(
+            Requisition.class_id == class_id,
+            Requisition.type == "normal",
+            Requisition.created_at >= start,
+            Requisition.created_at <= end,
+        )
+    ).one()
+    return int(requester_count), int(flow_count)
+
+
+def _class_signal_change_ratio(current: int, previous: int) -> float | None:
+    if previous <= 0:
+        return None
+    return round((current - previous) / previous, 2)
+
+
+@router.get("/class-signals")
+def get_class_signals(
+    db: Annotated[Session, Depends(get_db)],
+    current_user: CurrentUser,
+    window: Annotated[int, Query()] = consumption_core.DEFAULT_WINDOW,
+) -> ClassSignalsOut:
+    if window not in CLASS_SIGNAL_WINDOWS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="window 参数仅支持 7 或 30",
+        )
+    threshold = ClassSignalThresholdOut(
+        min_requesters=CLASS_SIGNAL_MIN_REQUESTERS,
+        min_flows=CLASS_SIGNAL_MIN_FLOWS,
+    )
+    start = consumption_core.window_start(window)
+    end = consumption_core.window_end()
+    requester_count, flow_count = _class_signal_sample(
+        db, current_user.class_id, start, end
+    )
+    if (
+        requester_count < CLASS_SIGNAL_MIN_REQUESTERS
+        or flow_count < CLASS_SIGNAL_MIN_FLOWS
+    ):
+        return ClassSignalsOut(
+            window=window,
+            generated_at=business_time.now(),
+            class_id=current_user.class_id,
+            insufficient=True,
+            threshold=threshold,
+        )
+
+    current = _class_signal_net_quantities(
+        db, current_user.class_id, start, end, end_inclusive=True
+    )
+    previous = _class_signal_net_quantities(
+        db,
+        current_user.class_id,
+        consumption_core.local_day_start(2 * window - 1),
+        start,
+        end_inclusive=False,
+    )
+
+    consumable_ids = sorted(set(current) | set(previous))
+    consumables = {
+        consumable.id: consumable
+        for consumable in db.scalars(
+            select(Consumable).where(Consumable.id.in_(consumable_ids))
+        ).all()
+    }
+
+    items: list[ClassSignalItemOut] = []
+    unit_rows: dict[str, dict[str, int]] = {}
+    for consumable_id in consumable_ids:
+        consumable = consumables.get(consumable_id)
+        if consumable is None:
+            continue
+        net_quantity = current.get(consumable_id, 0)
+        previous_net_quantity = previous.get(consumable_id, 0)
+        items.append(
+            ClassSignalItemOut(
+                consumable_id=consumable.id,
+                name=consumable.name,
+                unit=consumable.unit,
+                net_quantity=net_quantity,
+                previous_net_quantity=previous_net_quantity,
+                change_quantity=net_quantity - previous_net_quantity,
+                change_ratio=_class_signal_change_ratio(
+                    net_quantity, previous_net_quantity
+                ),
+            )
+        )
+        unit_row = unit_rows.setdefault(
+            consumable.unit,
+            {"net_quantity": 0, "previous_net_quantity": 0, "consumables": 0},
+        )
+        unit_row["net_quantity"] += net_quantity
+        unit_row["previous_net_quantity"] += previous_net_quantity
+        unit_row["consumables"] += 1
+
+    items.sort(key=lambda row: (-row.net_quantity, row.name, row.consumable_id))
+    unit_totals = [
+        ClassSignalUnitOut(
+            unit=unit,
+            net_quantity=values["net_quantity"],
+            previous_net_quantity=values["previous_net_quantity"],
+            change_quantity=values["net_quantity"]
+            - values["previous_net_quantity"],
+            change_ratio=_class_signal_change_ratio(
+                values["net_quantity"], values["previous_net_quantity"]
+            ),
+            consumables=values["consumables"],
+        )
+        for unit, values in sorted(
+            unit_rows.items(),
+            key=lambda entry: (-entry[1]["net_quantity"], entry[0]),
+        )
+    ]
+    total_net_quantity = sum(row.net_quantity for row in items)
+    previous_net_quantity = sum(row.previous_net_quantity for row in items)
+    return ClassSignalsOut(
+        window=window,
+        generated_at=business_time.now(),
+        class_id=current_user.class_id,
+        insufficient=False,
+        threshold=threshold,
+        sample=ClassSignalSampleOut(
+            requester_count=requester_count, flow_count=flow_count
+        ),
+        total_net_quantity=total_net_quantity,
+        previous_net_quantity=previous_net_quantity,
+        change_quantity=total_net_quantity - previous_net_quantity,
+        change_ratio=_class_signal_change_ratio(
+            total_net_quantity, previous_net_quantity
+        ),
+        units=unit_totals,
+        items=items,
     )
 
 
