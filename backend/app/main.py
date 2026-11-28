@@ -28,6 +28,7 @@ from app.routers import (
     inventory,
     logs,
     ops,
+    permissions,
     requisitions,
     setup,
     users,
@@ -156,6 +157,7 @@ def create_app() -> FastAPI:
     app.include_router(consumption.router)
     app.include_router(logs.router)
     app.include_router(ops.router)
+    app.include_router(permissions.router)
 
     @app.get("/api/v1/health")
     def health_check() -> dict[str, str]:

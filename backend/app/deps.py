@@ -4,9 +4,10 @@ from typing import Annotated
 from fastapi import Cookie, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
-from app.class_scope import ROLE_SUPER_ADMIN, resolve_active_class_id
+from app.class_scope import resolve_active_class_id
 from app.database import get_db
 from app.models import User
+from app.permissions import effective_permission_set
 from app.roles import granted_roles, resolve_active_role, role_passes
 from app.security import decode_access_token
 from app.setup_service import SETUP_INCOMPLETE_DETAIL, setup_is_completed
@@ -17,7 +18,9 @@ BOOTSTRAP_PATH_PREFIX = "/api/v1/bootstrap/"
 HEALTH_PATH = "/api/v1/health"
 SUPER_ADMIN_ROLE = "super_admin"
 CHANGE_PASSWORD_REQUIRED_DETAIL = "请先修改初始密码"
+PERMISSION_DENIED_DETAIL = "无权限访问"
 EFFECTIVE_ROLE_ATTR = "active_role"
+EFFECTIVE_PERMISSIONS_ATTR = "effective_permissions"
 
 
 def _allows_pending_password_change(path: str) -> bool:
@@ -99,6 +102,33 @@ def require_role(*allowed_roles: str) -> Callable:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="无权限访问",
+            )
+        return current_user
+
+    return checker
+
+
+def require_permission(permission_key: str) -> Callable:
+    """按 active_role 的有效权限校验；与旧 require_role 共存。"""
+
+    def checker(
+        request: Request,
+        current_user: CurrentUser,
+        db: Annotated[Session, Depends(get_db)],
+        class_id: Annotated[int, Depends(get_active_class_id)],
+    ) -> User:
+        role = effective_role(current_user)
+        if role == SUPER_ADMIN_ROLE:
+            return current_user
+        cache = getattr(request.state, EFFECTIVE_PERMISSIONS_ATTR, None)
+        scope = (role, class_id)
+        if cache is None or cache[0] != scope:
+            cache = (scope, effective_permission_set(db, role, class_id))
+            setattr(request.state, EFFECTIVE_PERMISSIONS_ATTR, cache)
+        if permission_key not in cache[1]:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=PERMISSION_DENIED_DETAIL,
             )
         return current_user
 

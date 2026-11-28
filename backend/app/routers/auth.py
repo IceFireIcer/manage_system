@@ -3,6 +3,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -20,6 +21,7 @@ from app.deps import CurrentUser
 from app.login_throttle import login_throttle
 from app.models import User
 from app.operation_log import record_operation, user_label
+from app.permissions import effective_permissions
 from app.roles import granted_roles, resolve_active_role
 from app.schemas import (
     ChangePasswordRequest,
@@ -37,7 +39,6 @@ from app.security import (
     resolve_client_source,
     verify_password,
 )
-from pydantic import BaseModel
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 LOGIN_THROTTLED_DETAIL = "登录尝试过于频繁，请稍后重试"
@@ -129,6 +130,7 @@ def _build_session(
         session_expires_at=session_expires_at,
         roles=roles,
         active_role=active_role,
+        permissions=effective_permissions(db, active_role, active_id),
         available_classes=[SessionClassOut.model_validate(brief) for brief in briefs],
         active_class=SessionClassOut(
             id=active_id,
