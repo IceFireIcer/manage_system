@@ -179,13 +179,15 @@ onMounted(() => {
 
 <template>
   <div class="login" @focusin="keepFocusedFieldVisible">
-    <div class="panel login__card" :aria-busy="checking">
-      <div class="login__brand">
+    <div class="login__ambient" aria-hidden="true" />
+    <main class="panel login__card" :aria-busy="checking">
+      <header class="login__brand">
         <span class="login__mark">
-          <el-icon :size="20"><Box /></el-icon>
+          <el-icon :size="24"><Box /></el-icon>
         </span>
         <h1 class="login__title">班级实训耗材智能管理系统</h1>
-      </div>
+
+      </header>
 
       <p v-if="checking" class="login__status" role="status">正在连接系统…</p>
 
@@ -281,9 +283,9 @@ onMounted(() => {
 
       <p class="login__footnote">账号由部署方或班委分配</p>
       <button type="button" class="login__help" @click="helpOpen = true">
-        首次使用、账号停用与故障联络
+        使用帮助
       </button>
-    </div>
+    </main>
 
     <HelpDrawer v-model="helpOpen" />
   </div>
@@ -291,48 +293,65 @@ onMounted(() => {
 
 <style scoped>
 .login {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
   min-height: 100vh;
-  padding: 24px;
+  padding: 32px 24px;
+  overflow: hidden;
   background: var(--page);
 }
 
+.login__ambient {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(720px 400px at 50% -6%, var(--brand-glow), transparent 68%);
+  pointer-events: none;
+}
+
 .login__card {
+  position: relative;
+  z-index: 1;
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: 22px;
   width: 400px;
   max-width: 100%;
   padding: 32px;
+  border-color: var(--line);
+  border-radius: 14px;
+  box-shadow: var(--shadow-md);
 }
 
 .login__brand {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 12px;
+  gap: 14px;
 }
 
 .login__mark {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 40px;
-  height: 40px;
-  border-radius: var(--radius-panel);
-  background: var(--primary-soft);
-  color: var(--primary);
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  background: var(--brand-mark-bg);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 14%);
+  color: #FFFFFF;
 }
 
 .login__title {
   margin: 0;
-  font-size: 24px;
-  line-height: 32px;
+  font-size: 22px;
+  line-height: 30px;
   font-weight: 600;
+  letter-spacing: -0.015em;
   color: var(--text);
   text-align: center;
+  text-wrap: balance;
 }
 
 .login__status {
@@ -352,14 +371,13 @@ onMounted(() => {
   border-radius: var(--radius-control);
   background: var(--danger-soft);
   color: var(--danger);
-  font-size: 14px;
-  line-height: 22px;
+  font-size: 13px;
+  line-height: 20px;
 }
 
 .login__form {
   display: flex;
   flex-direction: column;
-  gap: 8px;
 }
 
 .login__bootstrap {
@@ -370,13 +388,22 @@ onMounted(() => {
   margin-bottom: 16px;
 }
 
+.login__form :deep(.el-form-item:last-of-type) {
+  margin-bottom: 20px;
+}
+
 .login__form :deep(.el-form-item__label) {
   color: var(--text-secondary);
+  font-size: 13px;
   font-weight: 500;
 }
 
+.login__form :deep(.el-input__wrapper) {
+  min-height: 40px;
+}
+
 .login__error {
-  margin-bottom: 8px;
+  margin-bottom: 12px;
 }
 
 .login__error-trace {
@@ -387,17 +414,17 @@ onMounted(() => {
 
 .login__request-id {
   padding: 2px 6px;
-  border-radius: var(--radius-control);
+  border-radius: var(--radius-xs);
   background: var(--surface-muted);
   color: var(--text);
-  font-size: 13px;
-  line-height: 20px;
+  font-size: 12px;
+  line-height: 18px;
   word-break: break-all;
   user-select: all;
 }
 
 .login__password :deep(.el-input__inner) {
-  padding-right: 80px;
+  padding-right: 76px;
 }
 
 .login__password :deep(.el-input__suffix) {
@@ -414,8 +441,8 @@ onMounted(() => {
   background: transparent;
   color: var(--primary);
   font-family: inherit;
-  font-size: 13px;
-  line-height: 20px;
+  font-size: 12px;
+  line-height: 18px;
   cursor: pointer;
 }
 
@@ -425,13 +452,16 @@ onMounted(() => {
 
 .login__submit {
   width: 100%;
-  height: 40px;
+  height: 44px;
+  font-size: 15px;
 }
 
 .login__footnote {
   margin: 0;
-  font-size: 13px;
-  line-height: 20px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line-soft);
+  font-size: 12px;
+  line-height: 18px;
   color: var(--text-muted);
   text-align: center;
 }
@@ -440,31 +470,37 @@ onMounted(() => {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 44px;
+  min-height: 40px;
   padding: 8px 12px;
   border: 1px solid var(--line);
   border-radius: var(--radius-control);
-  background: var(--surface);
-  color: var(--primary);
+  background: var(--surface-subtle);
+  color: var(--text-secondary);
   font-family: inherit;
-  font-size: 14px;
-  line-height: 22px;
+  font-size: 13px;
+  line-height: 20px;
   cursor: pointer;
+  transition:
+    background-color var(--duration-hover) ease,
+    border-color var(--duration-hover) ease,
+    color var(--duration-hover) ease;
 }
 
 .login__help:hover {
-  background: var(--primary-soft);
+  border-color: var(--primary-200);
+  background: var(--primary-50);
+  color: var(--primary);
 }
 
 @media (max-width: 767px) {
   .login {
     align-items: flex-start;
-    padding: 32px 12px 96px;
+    padding: 24px 12px 48px;
   }
 
   .login__card {
-    gap: 20px;
-    padding: 24px;
+    gap: 18px;
+    padding: 24px 20px 20px;
   }
 
   .login__password-toggle {
@@ -473,6 +509,7 @@ onMounted(() => {
 
   .login__help {
     width: 100%;
+    min-height: 44px;
   }
 
   .login__submit {

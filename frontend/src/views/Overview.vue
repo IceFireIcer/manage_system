@@ -107,6 +107,8 @@ const safetyCoverage = computed(() => {
 
 const hasItems = computed(() => items.value.length > 0)
 
+const lowStockActive = computed(() => summaryReady.value && summary.value.low_stock_count > 0)
+
 const currentStatusLabel = computed(
   () => statusOptions.find((item) => item.value === statusFilter.value)?.label ?? '全部',
 )
@@ -122,14 +124,14 @@ const emptyState = computed(() => {
       if (setup.totalKinds === 0) {
         return {
           title: '还没有耗材档案',
-          description: '先建立耗材档案并填写期初数量，保存后这里会显示库存。',
+          description: '先建立耗材档案并填写期初数量。',
           actions: [{ label: '去建档', handler: goArchive }],
         }
       }
       if (setup.enabledKinds === 0) {
         return {
           title: '当前没有启用耗材',
-          description: '同类别的耗材档案已全部停用，启用后总览会重新显示库存。',
+          description: '启用后总览会重新显示库存。',
           actions: [{ label: '查看耗材档案', handler: goArchive }],
         }
       }
@@ -143,7 +145,7 @@ const emptyState = computed(() => {
     }
     return {
       title: '当前没有启用耗材',
-      description: '请联系班委确认是否有可领用的耗材。',
+      description: '',
       actions: [],
     }
   }
@@ -159,14 +161,14 @@ const emptyState = computed(() => {
   if (appliedSearch.value.trim()) {
     return {
       title: '没有找到匹配的耗材',
-      description: `没有名称、规格或位置包含「${appliedSearch.value.trim()}」的耗材。`,
+      description: `关键词「${appliedSearch.value.trim()}」。`,
       actions: [{ label: '清除筛选', handler: clearFilters }],
     }
   }
 
   return {
     title: '当前没有符合该状态的耗材',
-    description: '可以切回全部，继续查看其他库存。',
+    description: '',
     actions: [{ label: '查看全部', handler: clearFilters }],
   }
 })
@@ -314,6 +316,14 @@ async function actOnAlert(alert, action) {
   }
 }
 
+function handleAlertCommand(alert, command) {
+  if (command === 'suggestion') {
+    goAlertSuggestion(alert)
+    return
+  }
+  actOnAlert(alert, command)
+}
+
 function scrollToAlerts() {
   document
     .getElementById('stock-alerts')
@@ -386,6 +396,12 @@ function formatClock(value) {
 function formatQuantity(value, unit) {
   const amount = value ?? 0
   return unit ? `${amount} ${unit}` : String(amount)
+}
+
+function gapOf(row) {
+  const safety = Number(row.safety_stock ?? 0)
+  if (!safety) return null
+  return Math.max(0, safety - Number(row.current_stock ?? 0))
 }
 
 function statusClass(row) {
@@ -471,58 +487,61 @@ onBeforeUnmount(() => {
 
     <div
       v-if="!isStudent"
-      class="overview__metrics"
+      class="panel overview__stats"
       aria-label="班级库存指标"
       :aria-busy="initialLoading"
     >
       <component
         :is="isAdmin ? 'button' : 'div'"
         :type="isAdmin ? 'button' : undefined"
-        class="overview__metric overview__metric--kinds"
-        :class="{ 'overview__metric--clickable': isAdmin }"
+        class="overview__stat"
+        :class="{ 'overview__stat--action': isAdmin }"
         :aria-label="isAdmin ? '查看耗材档案' : undefined"
         @click="isAdmin && goArchive()"
       >
-        <span class="overview__metric-value">
-          {{ summaryReady ? summary.total_kinds : '—' }}
-        </span>
-        <span class="overview__metric-label">耗材总类数</span>
+        <span class="overview__stat-label">耗材总类数</span>
+        <span class="overview__stat-value">{{ summaryReady ? summary.total_kinds : '—' }}</span>
       </component>
 
       <button
         type="button"
-        class="overview__metric overview__metric--warning overview__metric--clickable"
+        class="overview__stat overview__stat--action"
         aria-label="查看低于安全库存线的耗材"
         @click="showLowStock"
       >
-        <span class="overview__metric-value">
+        <span class="overview__stat-label">
+          <span v-if="lowStockActive" class="overview__stat-dot" aria-hidden="true" />
+          低库存预警数
+        </span>
+        <span
+          class="overview__stat-value"
+          :class="{ 'overview__stat-value--warn': lowStockActive }"
+        >
           {{ summaryReady ? summary.low_stock_count : '—' }}
         </span>
-        <span class="overview__metric-label">低库存预警数</span>
       </button>
 
       <button
         type="button"
-        class="overview__metric overview__metric--clickable"
+        class="overview__stat overview__stat--action"
         aria-label="查看未设安全库存线的耗材"
         @click="showUncovered"
       >
-        <span class="overview__metric-value">
-          {{ summaryReady ? `${safetyCoverage.missing}/${safetyCoverage.total}` : '—' }}
+        <span class="overview__stat-label">未设预警线</span>
+        <span class="overview__stat-value">
+          {{ summaryReady ? safetyCoverage.missing : '—' }}
+          <span v-if="summaryReady" class="overview__stat-unit">/ {{ safetyCoverage.total }}</span>
         </span>
-        <span class="overview__metric-label">预警配置未覆盖 / 总类数</span>
       </button>
 
       <button
         type="button"
-        class="overview__metric overview__metric--clickable"
+        class="overview__stat overview__stat--action"
         aria-label="查看今天的领用记录"
         @click="goTodayRecords"
       >
-        <span class="overview__metric-value">
-          {{ summaryReady ? summary.today_requisitions : '—' }}
-        </span>
-        <span class="overview__metric-label">今日领用笔数</span>
+        <span class="overview__stat-label">今日领用笔数</span>
+        <span class="overview__stat-value">{{ summaryReady ? summary.today_requisitions : '—' }}</span>
       </button>
     </div>
 
@@ -532,96 +551,97 @@ onBeforeUnmount(() => {
       class="panel overview__alerts"
       aria-label="站内待办"
     >
-      <div class="overview__alerts-head">
-        <div>
-          <h2 class="overview__alerts-title">站内待办</h2>
-          <p class="overview__alerts-desc">
-            低库存提醒按耗材去重，持续缺货只累计巡检次数；部分到货保留待办，风险解除后自动完成。
-          </p>
+      <div class="overview__section-head">
+        <div class="overview__section-heading">
+          <h2 class="overview__section-title">站内待办</h2>
+          <span class="status-tag status-tag--warning">待处理 {{ alertsStore.activeCount }}</span>
         </div>
-        <div class="overview__alerts-tools">
-          <span class="status-tag status-tag--warning">
-            待处理 {{ alertsStore.activeCount }}
-          </span>
-          <label class="overview__alerts-switch">
-            <el-switch
-              :model-value="alertsStore.showCompleted"
-              size="small"
-              @change="alertsStore.setShowCompleted"
-            />
-            显示已完成
-          </label>
-        </div>
+        <label class="overview__switch">
+          <el-switch
+            :model-value="alertsStore.showCompleted"
+            size="small"
+            @change="alertsStore.setShowCompleted"
+          />
+          <span>显示已完成</span>
+        </label>
       </div>
 
-      <EmptyState
-        v-if="!alertsStore.visibleItems.length"
-        title="当前没有待处理提醒"
-        description="库存低于安全库存线时会自动生成站内待办。"
-      />
+      <EmptyState v-if="!alertsStore.visibleItems.length" title="当前没有待处理提醒" />
 
-      <div v-else class="overview__alert-list">
-        <article
+      <ul v-else class="overview__alert-list">
+        <li
           v-for="alert in alertsStore.visibleItems"
           :key="alert.consumable_id"
           class="overview__alert"
         >
-          <div class="overview__alert-head">
-            <span
-              class="status-tag"
-              :class="alert.risk_level === 'out' ? 'status-tag--out' : 'status-tag--low'"
-            >
-              {{ alert.risk_level === 'out' ? '缺货' : '低库存' }}
-            </span>
-            <strong class="overview__alert-name">{{ alert.consumable_name }}</strong>
-            <span class="status-tag" :class="alertStatusMeta(alert).tagClass">
-              {{ alertStatusMeta(alert).label }}
-            </span>
+          <div class="overview__alert-main">
+            <div class="overview__alert-head">
+              <span
+                class="status-tag"
+                :class="alert.risk_level === 'out' ? 'status-tag--out' : 'status-tag--low'"
+              >
+                {{ alert.risk_level === 'out' ? '缺货' : '低库存' }}
+              </span>
+              <span class="overview__alert-name">{{ alert.consumable_name }}</span>
+              <span class="status-tag" :class="alertStatusMeta(alert).tagClass">
+                {{ alertStatusMeta(alert).label }}
+              </span>
+            </div>
+            <div class="overview__alert-foot">
+              <span class="overview__alert-figures">
+                当前 <b>{{ formatQuantity(alert.current_stock, alert.unit) }}</b>
+                <span class="overview__alert-sep">/</span>
+                安全线 <b>{{ formatQuantity(alert.safety_stock, alert.unit) }}</b>
+                <span class="overview__alert-sep">/</span>
+                缺口 <b class="overview__alert-gap">{{ formatQuantity(alert.gap, alert.unit) }}</b>
+              </span>
+              <span class="overview__alert-meta">
+                第 {{ alert.occurrence }} 次触发 · 已巡检 {{ alert.detection_count }} 次 ·
+                {{ formatAlertTime(alert.last_detected_at) }}
+                <span v-if="alert.partial_arrival"> · 部分到货保留</span>
+                <span v-if="alert.last_order_no"> · 入库单 {{ alert.last_order_no }}</span>
+                <span v-if="alert.acknowledged_by_name"> · {{ alert.acknowledged_by_name }} 已确认</span>
+              </span>
+            </div>
           </div>
-          <p class="overview__alert-line">
-            当前 {{ formatQuantity(alert.current_stock, alert.unit) }} / 安全线
-            {{ formatQuantity(alert.safety_stock, alert.unit) }}，缺口
-            {{ formatQuantity(alert.gap, alert.unit) }}
-            <span v-if="alert.partial_arrival">· 部分到货保留待办</span>
-            <span v-if="alert.last_order_no">· 入库单 {{ alert.last_order_no }}</span>
-          </p>
-          <p class="overview__alert-meta">
-            第 {{ alert.occurrence }} 次触发 · 已巡检 {{ alert.detection_count }} 次 · 最近
-            {{ formatAlertTime(alert.last_detected_at) }}
-            <span v-if="alert.acknowledged_by_name">· {{ alert.acknowledged_by_name }} 已确认</span>
-          </p>
           <div class="overview__alert-actions">
             <el-button link type="primary" @click="goAlertRequisition(alert)">登记领用</el-button>
-            <el-button link type="primary" @click="goAlertSuggestion(alert)">补货建议</el-button>
-            <template v-if="canManageAlerts">
-              <el-button
-                v-if="alert.status === 'open'"
-                link
-                type="primary"
-                @click="actOnAlert(alert, 'acknowledge')"
-              >
-                确认
+            <el-dropdown
+              trigger="click"
+              placement="bottom-end"
+              @command="(command) => handleAlertCommand(alert, command)"
+            >
+              <el-button link class="overview__more" aria-label="更多操作">
+                更多
+                <el-icon :size="12" class="overview__more-icon"><ArrowDown /></el-icon>
               </el-button>
-              <el-button
-                v-if="alert.status !== 'completed'"
-                link
-                type="primary"
-                @click="actOnAlert(alert, 'complete')"
-              >
-                完成
-              </el-button>
-              <el-button
-                v-if="alert.status === 'completed'"
-                link
-                type="primary"
-                @click="actOnAlert(alert, 'retrigger')"
-              >
-                重新触发
-              </el-button>
-            </template>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item command="suggestion">补货建议</el-dropdown-item>
+                  <el-dropdown-item
+                    v-if="canManageAlerts && alert.status === 'open'"
+                    command="acknowledge"
+                  >
+                    确认
+                  </el-dropdown-item>
+                  <el-dropdown-item
+                    v-if="canManageAlerts && alert.status !== 'completed'"
+                    command="complete"
+                  >
+                    完成
+                  </el-dropdown-item>
+                  <el-dropdown-item
+                    v-if="canManageAlerts && alert.status === 'completed'"
+                    command="retrigger"
+                  >
+                    重新触发
+                  </el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
           </div>
-        </article>
-      </div>
+        </li>
+      </ul>
     </section>
 
     <section class="panel overview__inventory">
@@ -679,7 +699,7 @@ onBeforeUnmount(() => {
       <EmptyState
         v-else-if="loadError && !lastUpdated"
         title="暂时无法读取库存"
-        description="请检查网络连接后重试，库存数据以服务端返回为准。"
+        description="请检查网络连接后重试。"
       >
         <template #action>
           <el-button type="primary" @click="retry">重试</el-button>
@@ -727,14 +747,14 @@ onBeforeUnmount(() => {
             <template #default="{ row }">{{ formatQuantity(row.current_stock, row.unit) }}</template>
           </el-table-column>
 
-          <el-table-column label="安全库存线" width="160" align="right">
+          <el-table-column label="安全库存线" width="170" align="right">
             <template #default="{ row }">
               <div>{{ formatQuantity(row.safety_stock, row.unit) }}</div>
               <div v-if="safetyLabel(row)" class="overview__hint">{{ safetyLabel(row) }}</div>
             </template>
           </el-table-column>
 
-          <el-table-column label="操作" width="300" align="right">
+          <el-table-column label="操作" width="190" align="right">
             <template #default="{ row }">
               <div class="overview__row-actions">
                 <el-button
@@ -745,19 +765,36 @@ onBeforeUnmount(() => {
                 >
                   登记领用
                 </el-button>
-                <span v-if="row.is_out" class="overview__hint overview__hint--out">当前缺货</span>
-                <el-button v-if="isAdmin" link type="primary" @click="openReceive(row)">
-                  收货
-                </el-button>
-                <el-button v-if="row.is_out && canAudit" link type="primary" @click="goSuggestion(row)">
-                  补货建议
-                </el-button>
-                <el-button v-if="row.is_out && isAdmin" link type="primary" @click="goArchiveItem(row)">
-                  档案
-                </el-button>
-                <el-button v-if="canAudit" link type="primary" @click="openAudit(row)">
-                  查库存变动
-                </el-button>
+                <el-dropdown
+                  v-if="isAdmin || canAudit"
+                  trigger="click"
+                  placement="bottom-end"
+                >
+                  <el-button link class="overview__more" :aria-label="`${row.name} 更多操作`">
+                    更多
+                    <el-icon :size="12" class="overview__more-icon"><ArrowDown /></el-icon>
+                  </el-button>
+                  <template #dropdown>
+                    <el-dropdown-menu>
+                      <el-dropdown-item v-if="isAdmin" @click="openReceive(row)">收货</el-dropdown-item>
+                      <el-dropdown-item
+                        v-if="row.is_out && canAudit"
+                        @click="goSuggestion(row)"
+                      >
+                        补货建议
+                      </el-dropdown-item>
+                      <el-dropdown-item
+                        v-if="row.is_out && isAdmin"
+                        @click="goArchiveItem(row)"
+                      >
+                        档案
+                      </el-dropdown-item>
+                      <el-dropdown-item v-if="canAudit" @click="openAudit(row)">
+                        查库存变动
+                      </el-dropdown-item>
+                    </el-dropdown-menu>
+                  </template>
+                </el-dropdown>
               </div>
             </template>
           </el-table-column>
@@ -767,22 +804,41 @@ onBeforeUnmount(() => {
       <ul v-else class="overview__cards">
         <li v-for="row in filteredItems" :key="row.id" class="overview__card">
           <div class="overview__card-head">
-            <span class="status-tag" :class="statusClass(row)">{{ statusLabel(row) }}</span>
             <span class="overview__card-name">{{ row.name }}</span>
+            <span class="status-tag" :class="statusClass(row)">{{ statusLabel(row) }}</span>
           </div>
-          <div class="overview__card-spec">{{ row.spec || '—' }}</div>
-          <div class="overview__card-line">
-            <span class="overview__card-label">存放位置</span>
-            <span>{{ row.location || '—' }}</span>
+          <div class="overview__card-metrics">
+            <div class="overview__card-metric">
+              <span class="overview__card-metric-label">当前</span>
+              <span class="overview__card-metric-value">
+                {{ row.current_stock ?? 0 }}
+                <span v-if="row.unit" class="overview__card-metric-unit">{{ row.unit }}</span>
+              </span>
+            </div>
+            <div class="overview__card-metric">
+              <span class="overview__card-metric-label">安全线</span>
+              <span class="overview__card-metric-value">
+                {{ row.safety_stock ?? 0 }}
+                <span v-if="row.unit" class="overview__card-metric-unit">{{ row.unit }}</span>
+              </span>
+            </div>
+            <div class="overview__card-metric">
+              <span class="overview__card-metric-label">缺口</span>
+              <span
+                class="overview__card-metric-value"
+                :class="{ 'overview__card-metric-value--warn': gapOf(row) }"
+              >
+                {{ gapOf(row) === null ? '—' : gapOf(row) }}
+                <span v-if="row.unit && gapOf(row) !== null" class="overview__card-metric-unit">
+                  {{ row.unit }}
+                </span>
+              </span>
+            </div>
           </div>
-          <div class="overview__card-line">
-            <span class="overview__card-label">当前库存 · 安全库存线</span>
-            <span>
-              {{ formatQuantity(row.current_stock, row.unit) }} ·
-              {{ formatQuantity(row.safety_stock, row.unit) }}
-            </span>
-          </div>
-          <div v-if="safetyLabel(row)" class="overview__hint">{{ safetyLabel(row) }}</div>
+          <p class="overview__card-meta">
+            {{ row.spec || '—' }} · {{ row.location || '—' }}
+            <span v-if="safetyLabel(row)"> · {{ safetyLabel(row) }}</span>
+          </p>
           <div class="overview__card-actions">
             <el-button
               type="primary"
@@ -792,15 +848,23 @@ onBeforeUnmount(() => {
             >
               登记领用
             </el-button>
-            <span v-if="row.is_out" class="overview__hint overview__hint--out">当前缺货</span>
-            <el-button v-if="isAdmin" size="small" @click="openReceive(row)">收货</el-button>
-            <el-button v-if="row.is_out && canAudit" size="small" @click="goSuggestion(row)">
-              补货建议
-            </el-button>
-            <el-button v-if="row.is_out && isAdmin" size="small" @click="goArchiveItem(row)">
-              档案
-            </el-button>
-            <el-button v-if="canAudit" size="small" @click="openAudit(row)">查库存变动</el-button>
+            <el-dropdown v-if="isAdmin || canAudit" trigger="click" placement="bottom-end">
+              <el-button size="small" :aria-label="`${row.name} 更多操作`">更多</el-button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item v-if="isAdmin" @click="openReceive(row)">收货</el-dropdown-item>
+                  <el-dropdown-item v-if="row.is_out && canAudit" @click="goSuggestion(row)">
+                    补货建议
+                  </el-dropdown-item>
+                  <el-dropdown-item v-if="row.is_out && isAdmin" @click="goArchiveItem(row)">
+                    档案
+                  </el-dropdown-item>
+                  <el-dropdown-item v-if="canAudit" @click="openAudit(row)">
+                    查库存变动
+                  </el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
           </div>
         </li>
       </ul>
@@ -832,105 +896,149 @@ onBeforeUnmount(() => {
   margin-left: 4px;
 }
 
-.overview__metrics {
+/* ---------- 指标条 ---------- */
+.overview__stats {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 16px;
   margin-bottom: 24px;
+  overflow: hidden;
 }
 
-.overview__metric {
+.overview__stat {
   display: flex;
   flex-direction: column;
+  justify-content: center;
   gap: 4px;
-  padding: 16px 24px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-panel);
-  background: var(--surface);
-  text-align: left;
+  min-height: 92px;
+  padding: 20px 24px;
+  border: 0;
+  border-left: 1px solid var(--line-soft);
+  background: transparent;
+  color: inherit;
   font-family: inherit;
+  text-align: left;
 }
 
-.overview__metric--clickable {
+.overview__stat:first-child {
+  border-left: 0;
+}
+
+.overview__stat--action {
   cursor: pointer;
-  transition: background-color var(--duration-hover) ease;
+  transition: background-color var(--duration-hover) var(--ease-out);
 }
 
-.overview__metric--clickable:hover {
-  background: var(--primary-soft);
+.overview__stat--action:hover {
+  background: var(--primary-50);
 }
 
-.overview__metric-value {
-  font-size: 28px;
-  line-height: 36px;
-  font-weight: 700;
+.overview__stat--action:focus-visible {
+  outline-offset: -2px;
+}
+
+.overview__stat-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  line-height: 18px;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.overview__stat-dot {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--warning);
+}
+
+.overview__stat-value {
+  font-size: 30px;
+  line-height: 38px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
   color: var(--text);
   font-variant-numeric: tabular-nums;
 }
 
-.overview__metric--warning .overview__metric-value {
+.overview__stat-value--warn {
   color: var(--warning);
 }
 
-.overview__metric-label {
+.overview__stat-unit {
+  margin-left: 2px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+/* ---------- 区块标题 ---------- */
+.overview__section-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.overview__section-heading {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.overview__section-title {
+  font-size: 16px;
+  line-height: 24px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.overview__switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
   font-size: 13px;
   line-height: 20px;
   color: var(--text-muted);
 }
 
+/* ---------- 站内待办 ---------- */
 .overview__alerts {
   margin-bottom: 24px;
   padding: 20px 24px;
 }
 
-.overview__alerts-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 16px;
-}
-
-.overview__alerts-title {
-  margin: 0;
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--text);
-}
-
-.overview__alerts-desc {
-  margin: 4px 0 0;
-  font-size: 13px;
-  line-height: 20px;
-  color: var(--text-muted);
-}
-
-.overview__alerts-tools {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 12px;
-}
-
-.overview__alerts-switch {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 13px;
-  color: var(--text-muted);
-}
-
 .overview__alert-list {
-  display: grid;
-  gap: 12px;
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid var(--line-soft);
+  list-style: none;
 }
 
 .overview__alert {
-  padding: 14px 16px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-control);
-  background: var(--surface-muted);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.overview__alert:last-child {
+  border-bottom: 0;
+}
+
+.overview__alert-main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
 }
 
 .overview__alert-head {
@@ -942,18 +1050,40 @@ onBeforeUnmount(() => {
 
 .overview__alert-name {
   font-size: 14px;
+  line-height: 22px;
+  font-weight: 600;
   color: var(--text);
 }
 
-.overview__alert-line {
-  margin: 8px 0 0;
+.overview__alert-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+}
+
+.overview__alert-figures {
   font-size: 13px;
   line-height: 20px;
   color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.overview__alert-figures b {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.overview__alert-sep {
+  margin: 0 2px;
+  color: var(--line-strong);
+}
+
+.overview__alert-gap {
+  color: var(--warning);
 }
 
 .overview__alert-meta {
-  margin: 4px 0 0;
   font-size: 12px;
   line-height: 18px;
   color: var(--text-muted);
@@ -961,48 +1091,69 @@ onBeforeUnmount(() => {
 
 .overview__alert-actions {
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 10px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 12px;
 }
 
+.overview__alert-actions :deep(.el-button + .el-button),
+.overview__alert-actions :deep(.el-button + .el-dropdown) {
+  margin-left: 0;
+}
+
+.overview__more {
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.overview__more:hover,
+.overview__more:focus-visible {
+  color: var(--primary);
+}
+
+.overview__more-icon {
+  margin-left: 2px;
+}
+
+/* ---------- 库存区 ---------- */
 .overview__inventory {
   padding: 24px;
 }
 
 .overview__filters {
   align-items: center;
-  gap: 16px;
+  gap: 12px;
 }
 
 .overview__search {
-  width: 280px;
+  width: 240px;
   max-width: 100%;
 }
 
 .overview__segmented {
   display: inline-flex;
   flex-wrap: wrap;
-  gap: 4px;
+  gap: 2px;
   padding: 2px;
   border-radius: var(--radius-control);
   background: var(--surface-muted);
 }
 
 .overview__segment {
-  min-height: 36px;
+  min-height: 32px;
   padding: 4px 12px;
   border: none;
-  border-radius: var(--radius-control);
+  border-radius: 6px;
   background: transparent;
   color: var(--text-secondary);
   font-family: inherit;
-  font-size: 14px;
-  line-height: 22px;
+  font-size: 13px;
+  line-height: 20px;
+  font-weight: 500;
   cursor: pointer;
   transition:
-    background-color var(--duration-hover) ease,
-    color var(--duration-hover) ease;
+    background-color var(--duration-hover) var(--ease-out),
+    color var(--duration-hover) var(--ease-out);
 }
 
 .overview__segment:hover {
@@ -1010,9 +1161,10 @@ onBeforeUnmount(() => {
 }
 
 .overview__segment--active {
-  background: var(--primary-soft);
+  background: var(--surface);
   color: var(--primary);
   font-weight: 600;
+  box-shadow: var(--shadow-xs);
 }
 
 .overview__meta {
@@ -1020,10 +1172,10 @@ onBeforeUnmount(() => {
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-  min-height: 22px;
+  min-height: 18px;
   margin: 12px 0;
-  font-size: 13px;
-  line-height: 20px;
+  font-size: 12px;
+  line-height: 18px;
   color: var(--text-muted);
 }
 
@@ -1050,80 +1202,103 @@ onBeforeUnmount(() => {
 }
 
 .overview__spec {
-  font-size: 13px;
-  line-height: 20px;
+  font-size: 12px;
+  line-height: 18px;
   color: var(--text-muted);
 }
 
 .overview__hint {
-  font-size: 13px;
-  line-height: 20px;
+  font-size: 12px;
+  line-height: 18px;
   color: var(--text-muted);
-}
-
-.overview__hint--out {
-  color: var(--danger);
 }
 
 .overview__row-actions {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
   justify-content: flex-end;
-  gap: 8px;
+  gap: 12px;
 }
 
+.overview__row-actions :deep(.el-button + .el-dropdown) {
+  margin-left: 0;
+}
+
+/* ---------- 移动端卡片 ---------- */
 .overview__cards {
   display: flex;
   flex-direction: column;
-  gap: 12px;
   margin: 0;
   padding: 0;
+  border-top: 1px solid var(--line-soft);
   list-style: none;
 }
 
 .overview__card {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 16px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-panel);
+  gap: 12px;
+  padding: 16px 0;
+  border-bottom: 1px solid var(--line-soft);
 }
 
 .overview__card-head {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  justify-content: space-between;
+  gap: 12px;
 }
 
 .overview__card-name {
-  font-size: 16px;
-  line-height: 24px;
+  min-width: 0;
+  font-size: 15px;
+  line-height: 22px;
   font-weight: 600;
   color: var(--text);
 }
 
-.overview__card-spec {
-  font-size: 13px;
-  line-height: 20px;
+.overview__card-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.overview__card-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.overview__card-metric-label {
+  font-size: 12px;
+  line-height: 18px;
+  font-weight: 500;
   color: var(--text-muted);
 }
 
-.overview__card-line {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-  font-size: 14px;
-  line-height: 22px;
-  color: var(--text-secondary);
+.overview__card-metric-value {
+  font-size: 18px;
+  line-height: 26px;
+  font-weight: 650;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
 }
 
-.overview__card-label {
-  flex: 0 0 auto;
-  font-size: 13px;
+.overview__card-metric-value--warn {
+  color: var(--warning);
+}
+
+.overview__card-metric-unit {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.overview__card-meta {
+  margin: 0;
+  font-size: 12px;
+  line-height: 18px;
   color: var(--text-muted);
 }
 
@@ -1132,22 +1307,78 @@ onBeforeUnmount(() => {
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-  padding-top: 8px;
+}
+
+.overview__card-actions :deep(.el-button + .el-dropdown) {
+  margin-left: 0;
 }
 
 @media (max-width: 1279px) {
-  .overview__metrics {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  .overview__search {
+    width: 220px;
   }
 
-  .overview__search {
-    width: 240px;
+  .overview__alert {
+    flex-wrap: wrap;
   }
 }
 
 @media (max-width: 767px) {
-  .overview__metrics {
-    grid-template-columns: minmax(0, 1fr);
+  .overview__stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .overview__stat {
+    min-height: 84px;
+    padding: 14px 16px;
+    border-left: 0;
+    border-top: 1px solid var(--line-soft);
+  }
+
+  .overview__stat:nth-child(-n + 2) {
+    border-top: 0;
+  }
+
+  .overview__stat:nth-child(even) {
+    border-left: 1px solid var(--line-soft);
+  }
+
+  .overview__stat-value {
+    font-size: 26px;
+    line-height: 34px;
+  }
+
+  .overview__stat-label,
+  .overview__switch {
+    font-size: 13px;
+    line-height: 20px;
+  }
+
+  .overview__switch {
+    min-height: 44px;
+  }
+
+  .overview__alerts {
+    padding: 16px;
+  }
+
+  .overview__alert {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+    padding: 14px 0;
+  }
+
+  .overview__alert-actions {
+    gap: 16px;
+  }
+
+  .overview__alert-actions :deep(.el-button) {
+    min-height: 44px;
+  }
+
+  .overview__alerts .overview__alert-actions :deep(.el-button) {
+    padding: 0;
   }
 
   .overview__inventory {
@@ -1169,6 +1400,7 @@ onBeforeUnmount(() => {
 
   .overview__segment {
     flex: 1;
+    min-height: 44px;
   }
 }
 </style>

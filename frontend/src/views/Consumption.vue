@@ -99,7 +99,7 @@ const chartItems = computed(() =>
 
 const rangeText = computed(() => {
   if (!appliedStart.value || !appliedEnd.value) return '—'
-  return `${appliedStart.value} 至 ${appliedEnd.value}（含当天）`
+  return `${appliedStart.value} 至 ${appliedEnd.value}`
 })
 
 const failedWindowText = computed(() => `近 ${windowDays.value} 天`)
@@ -130,7 +130,7 @@ function renderChart() {
   if (!chart) chart = echarts.init(chartRef.value)
   chart.setOption(
     {
-      grid: { top: 44, right: 24, bottom: 72, left: 56 },
+      grid: { top: 36, right: 16, bottom: 64, left: 48 },
       tooltip: {
         trigger: 'axis',
         axisPointer: { type: 'shadow' },
@@ -142,6 +142,7 @@ function renderChart() {
       xAxis: {
         type: 'category',
         data: chartItems.value.map((item) => item.name),
+        axisTick: { show: false },
         axisLabel: {
           interval: 0,
           rotate: chartItems.value.length > 5 ? 30 : 0,
@@ -156,13 +157,15 @@ function renderChart() {
         name: chartUnit.value ? `净额（${chartUnit.value}）` : '净额',
         nameTextStyle: { color: cssVar('--text-muted') },
         axisLabel: { color: cssVar('--text-muted') },
-        splitLine: { lineStyle: { color: cssVar('--line') } },
+        axisLine: { show: false },
+        axisTick: { show: false },
+        splitLine: { lineStyle: { color: cssVar('--line-soft') } },
       },
       series: [
         {
           name: '净额',
           type: 'bar',
-          barMaxWidth: 40,
+          barMaxWidth: 36,
           itemStyle: {
             color: cssVar('--primary'),
             borderRadius: [4, 4, 0, 0],
@@ -271,7 +274,11 @@ onBeforeUnmount(() => {
   <div class="consumption">
     <PageHeader title="消耗汇总" :breadcrumb="['库存分析', '消耗汇总']">
       <template #actions>
-        <el-radio-group v-model="windowDays" @change="switchWindow">
+        <el-radio-group
+          v-model="windowDays"
+          class="consumption__segmented"
+          @change="switchWindow"
+        >
           <el-radio-button
             v-for="option in WINDOWS"
             :key="option.value"
@@ -281,6 +288,15 @@ onBeforeUnmount(() => {
           </el-radio-button>
         </el-radio-group>
         <span class="consumption__range">{{ rangeText }}</span>
+        <el-select v-model="unitFilter" class="consumption__unit" placeholder="全部单位">
+          <el-option label="全部单位" value="all" />
+          <el-option
+            v-for="unit in unitOptions"
+            :key="unit"
+            :label="`单位：${unit}`"
+            :value="unit"
+          />
+        </el-select>
       </template>
     </PageHeader>
 
@@ -301,7 +317,7 @@ onBeforeUnmount(() => {
 
     <section v-if="!items.length" class="panel consumption__state">
       <div v-if="loading" class="consumption__skeleton" aria-busy="true">
-        <p class="consumption__placeholder">正在汇总消耗数据…</p>
+        <p class="consumption__placeholder">正在汇总…</p>
         <el-skeleton :rows="6" animated />
       </div>
       <EmptyState
@@ -315,8 +331,8 @@ onBeforeUnmount(() => {
       </EmptyState>
       <EmptyState
         v-else
-        title="所选时间段暂无领用或红冲记录"
-        description="可切换时间窗口，或在产生领用与红冲流水后再查看。"
+        title="所选时间段暂无消耗记录"
+        description="可切换时间窗口后再查看。"
       >
         <template #action>
           <el-button
@@ -330,119 +346,93 @@ onBeforeUnmount(() => {
     </section>
 
     <div v-else class="consumption__body" :aria-busy="loading">
-      <div class="consumption__toolbar">
-        <p class="consumption__definition">
-          发出量＝窗口内正常领用；红冲量＝窗口内有效红冲；净额＝发出量 − 红冲量（小于 0 时取 0）；跨期纠错＝原领用早于窗口的红冲，单独列出；日均速率＝净额 ÷ 所选天数。
-        </p>
-        <el-select v-model="unitFilter" class="consumption__unit" placeholder="全部单位">
-          <el-option label="全部单位" value="all" />
-          <el-option
-            v-for="unit in unitOptions"
-            :key="unit"
-            :label="`单位：${unit}`"
-            :value="unit"
-          />
-        </el-select>
-      </div>
 
-      <p v-if="provisioningScope" class="consumption__scope">
-        <strong>备料口径：</strong>{{ provisioningScope }}
-      </p>
+      <section class="panel consumption__chart-block">
+        <div class="consumption__block-head">
+          <h2 class="consumption__block-title">净额对比</h2>
+          <span v-if="chartUnit" class="consumption__block-meta">单位 {{ chartUnit }}</span>
+        </div>
+        <div ref="chartRef" class="consumption__chart"></div>
+        <p v-if="!chartItems.length" class="consumption__placeholder">当前单位暂无消耗记录</p>
+      </section>
 
       <section v-if="visibleUnitTotals.length" class="panel consumption__unit-block">
         <div class="consumption__block-head">
           <h2 class="consumption__block-title">分单位合计</h2>
-          <span class="consumption__block-meta">按单位分别合计，不提供跨单位总量</span>
         </div>
         <div class="consumption__unit-grid">
           <div v-for="row in visibleUnitTotals" :key="row.unit" class="consumption__unit-card">
             <div class="consumption__unit-title">
               <span class="consumption__unit-name">{{ row.unit }}</span>
-              <span class="consumption__block-meta">共 {{ row.consumables }} 种耗材</span>
+              <span class="consumption__block-meta">{{ row.consumables }} 种</span>
             </div>
-            <dl class="consumption__unit-metrics">
+            <div class="consumption__unit-primary">
+              <span class="consumption__unit-value">{{ row.net_quantity }}</span>
+              <span class="consumption__unit-unit">{{ row.unit }}</span>
+            </div>
+            <dl class="consumption__unit-meta">
               <div>
-                <dt>发出量</dt>
+                <dt>日均</dt>
+                <dd>{{ formatRate(row.daily_rate) }}{{ row.unit }}/天</dd>
+              </div>
+              <div>
+                <dt>发出</dt>
                 <dd>{{ row.issued_quantity }}{{ row.unit }}</dd>
               </div>
               <div>
-                <dt>红冲量</dt>
+                <dt>红冲</dt>
                 <dd>{{ row.reversed_quantity }}{{ row.unit }}</dd>
               </div>
-              <div>
-                <dt>净额</dt>
-                <dd>{{ row.net_quantity }}{{ row.unit }}</dd>
-              </div>
-              <div>
-                <dt>其中跨期纠错</dt>
-                <dd>{{ row.cross_period_reversed_quantity }}{{ row.unit }}</dd>
-              </div>
-              <div>
-                <dt>日均速率</dt>
-                <dd>{{ formatRate(row.daily_rate) }}{{ row.unit }}/天</dd>
-              </div>
             </dl>
+            <p v-if="row.cross_period_reversed_quantity" class="consumption__unit-note">
+              跨期纠错 {{ row.cross_period_reversed_quantity }}{{ row.unit }}
+            </p>
           </div>
         </div>
       </section>
 
-      <div class="consumption__layout">
-        <section class="panel consumption__table-block">
-          <div class="consumption__block-head">
-            <h2 class="consumption__block-title">消耗汇总</h2>
-            <span class="consumption__block-meta">
-              净额 {{ appliedWindow }} 天窗口 · 共 {{ tableItems.length }} 种耗材
-            </span>
-          </div>
-          <el-table
-            :data="tableItems"
-            class="table-dense consumption__table"
-            :row-class-name="rowClassName"
-          >
-            <el-table-column prop="name" label="耗材" min-width="140" />
-            <el-table-column prop="spec" label="规格" min-width="120" />
-            <el-table-column prop="unit" label="单位" width="80" align="center" />
-            <el-table-column label="发出量" width="100" align="right">
-              <template #default="{ row }">{{ row.issued_quantity }}</template>
-            </el-table-column>
-            <el-table-column label="红冲量" width="100" align="right">
-              <template #default="{ row }">{{ row.reversed_quantity }}</template>
-            </el-table-column>
-            <el-table-column label="净额" width="100" align="right">
-              <template #default="{ row }">{{ row.net_quantity }}</template>
-            </el-table-column>
-            <el-table-column label="跨期纠错" width="110" align="right">
-              <template #default="{ row }">
-                {{ row.cross_period_reversed_quantity || '—' }}
-              </template>
-            </el-table-column>
-            <el-table-column label="日均速率" width="120" align="right">
-              <template #default="{ row }">
-                {{ formatRate(row.daily_rate) }}{{ row.unit }}/天
-              </template>
-            </el-table-column>
-            <el-table-column label="操作" width="190" fixed="right">
-              <template #default="{ row }">
-                <el-button link type="primary" @click="goRecords(row)">查领用记录</el-button>
-                <el-button link type="primary" @click="openAudit(row)">查库存变动</el-button>
-              </template>
-            </el-table-column>
-          </el-table>
-        </section>
-
-        <section class="panel consumption__chart-block">
-          <div class="consumption__block-head">
-            <h2 class="consumption__block-title">净额对比</h2>
-            <span v-if="chartUnit" class="consumption__block-meta">
-              单位：{{ chartUnit }}
-            </span>
-          </div>
-          <div ref="chartRef" class="consumption__chart"></div>
-          <p v-if="!chartItems.length" class="consumption__placeholder">
-            当前单位暂无消耗记录
-          </p>
-        </section>
-      </div>
+      <section class="panel consumption__table-block">
+        <div class="consumption__block-head">
+          <h2 class="consumption__block-title">消耗汇总</h2>
+          <span class="consumption__block-meta">
+            {{ appliedWindow }} 天 · {{ tableItems.length }} 种耗材
+          </span>
+        </div>
+        <el-table
+          :data="tableItems"
+          class="table-dense consumption__table"
+          :row-class-name="rowClassName"
+        >
+          <el-table-column prop="name" label="耗材" min-width="140" />
+          <el-table-column prop="spec" label="规格" min-width="120" />
+          <el-table-column prop="unit" label="单位" width="80" align="center" />
+          <el-table-column label="发出量" width="100" align="right">
+            <template #default="{ row }">{{ row.issued_quantity }}</template>
+          </el-table-column>
+          <el-table-column label="红冲量" width="100" align="right">
+            <template #default="{ row }">{{ row.reversed_quantity }}</template>
+          </el-table-column>
+          <el-table-column label="净额" width="100" align="right">
+            <template #default="{ row }">{{ row.net_quantity }}</template>
+          </el-table-column>
+          <el-table-column label="跨期纠错" width="110" align="right">
+            <template #default="{ row }">
+              {{ row.cross_period_reversed_quantity || '—' }}
+            </template>
+          </el-table-column>
+          <el-table-column label="日均速率" width="120" align="right">
+            <template #default="{ row }">
+              {{ formatRate(row.daily_rate) }}{{ row.unit }}/天
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" width="190" fixed="right">
+            <template #default="{ row }">
+              <el-button link type="primary" @click="goRecords(row)">查领用记录</el-button>
+              <el-button link type="primary" @click="openAudit(row)">查库存变动</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+      </section>
     </div>
 
     <InventoryAuditDrawer
@@ -456,10 +446,54 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .consumption__range {
-  font-size: 14px;
-  line-height: 22px;
+  font-size: 12px;
+  line-height: 18px;
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
+}
+
+.consumption__segmented {
+  display: inline-flex;
+}
+
+.consumption__segmented :deep(.el-radio-button__inner) {
+  height: 32px;
+  padding: 0 14px;
+  border-color: var(--line);
+  border-radius: 0;
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  box-shadow: none;
+  transition:
+    background-color var(--duration-hover) ease,
+    color var(--duration-hover) ease,
+    border-color var(--duration-hover) ease;
+}
+
+.consumption__segmented :deep(.el-radio-button:first-child .el-radio-button__inner) {
+  border-radius: var(--radius-control) 0 0 var(--radius-control);
+}
+
+.consumption__segmented :deep(.el-radio-button:last-child .el-radio-button__inner) {
+  border-radius: 0 var(--radius-control) var(--radius-control) 0;
+}
+
+.consumption__segmented :deep(.el-radio-button__inner:hover) {
+  background: var(--surface-subtle);
+  color: var(--text);
+}
+
+.consumption__segmented :deep(.el-radio-button.is-active .el-radio-button__inner) {
+  border-color: var(--primary-200);
+  background: var(--primary-soft);
+  color: var(--primary);
+  box-shadow: none;
+}
+
+.consumption__unit {
+  width: 148px;
 }
 
 .consumption__notice {
@@ -486,107 +520,21 @@ onBeforeUnmount(() => {
 
 .consumption__placeholder {
   margin: 0;
-  font-size: 14px;
-  line-height: 22px;
+  font-size: 13px;
+  line-height: 20px;
   color: var(--text-muted);
 }
 
 .consumption__body {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 24px;
 }
 
-.consumption__toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
 
-.consumption__definition {
-  margin: 0;
-  font-size: 14px;
-  line-height: 22px;
-  color: var(--text-muted);
-}
-
-.consumption__scope {
-  margin: 0;
-  font-size: 13px;
-  line-height: 20px;
-  color: var(--text-muted);
-}
-
-.consumption__unit-block {
-  padding: 20px;
-}
-
-.consumption__unit-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-  gap: 16px;
-}
-
-.consumption__unit-card {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 16px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-}
-
-.consumption__unit-title {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.consumption__unit-name {
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--text);
-}
-
-.consumption__unit-metrics {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px 12px;
-  margin: 0;
-}
-
-.consumption__unit-metrics dt {
-  font-size: 12px;
-  color: var(--text-muted);
-}
-
-.consumption__unit-metrics dd {
-  margin: 2px 0 0;
-  font-size: 14px;
-  font-variant-numeric: tabular-nums;
-  color: var(--text);
-}
-
-.consumption__unit {
-  width: 160px;
-}
-
-.consumption__layout {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
+.consumption__unit-block,
+.consumption__chart-block,
 .consumption__table-block {
-  order: 1;
-  padding: 20px;
-}
-
-.consumption__chart-block {
-  order: 2;
   padding: 20px;
 }
 
@@ -608,10 +556,91 @@ onBeforeUnmount(() => {
 }
 
 .consumption__block-meta {
-  font-size: 13px;
-  line-height: 20px;
+  font-size: 12px;
+  line-height: 18px;
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
+}
+
+.consumption__unit-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.consumption__unit-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-control);
+  background: var(--surface-subtle);
+}
+
+.consumption__unit-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.consumption__unit-name {
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.consumption__unit-primary {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+}
+
+.consumption__unit-value {
+  font-size: 24px;
+  line-height: 30px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+.consumption__unit-unit {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--text-muted);
+}
+
+.consumption__unit-meta {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.consumption__unit-meta dt {
+  margin: 0;
+  font-size: 11px;
+  line-height: 15px;
+  color: var(--text-muted);
+}
+
+.consumption__unit-meta dd {
+  margin: 2px 0 0;
+  font-size: 12px;
+  line-height: 18px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+}
+
+.consumption__unit-note {
+  margin: 0;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--warning);
 }
 
 .consumption__table {
@@ -624,17 +653,22 @@ onBeforeUnmount(() => {
 }
 
 .consumption__table :deep(.consumption__group-start td.el-table__cell) {
-  border-top: 2px solid var(--line);
+  border-top: 1px solid var(--line);
 }
 
 @media (max-width: 767px) {
-  .consumption__chart-block {
-    order: 0;
+  .consumption__unit-block,
+  .consumption__chart-block,
+  .consumption__table-block {
+    padding: 16px;
   }
 
-  .consumption__table-block,
-  .consumption__chart-block {
-    padding: 16px;
+  .consumption__unit {
+    width: 100%;
+  }
+
+  .consumption__unit-meta {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 </style>

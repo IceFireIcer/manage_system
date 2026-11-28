@@ -119,13 +119,13 @@ const emptyTitle = computed(() =>
 
 const emptyDescription = computed(() => {
   if (!users.value.length && isDefaultView.value) {
-    return '创建学生账号后，学生即可使用分配的账号登记本人领用。'
+    return '创建后学生可用该账号登记领用。'
   }
   const parts = []
   if (filters.role) parts.push(`角色：${ROLE_NAMES[filters.role] ?? filters.role}`)
   if (filters.status) parts.push(`状态：${filters.status === 'enabled' ? '启用' : '停用'}`)
   if (appliedKeyword.value) parts.push(`关键词：${keyword.value.trim()}`)
-  return parts.length ? `当前条件为 ${parts.join('，')}，没有符合条件的账号。` : '没有符合条件的账号。'
+  return parts.length ? `当前条件：${parts.join('，')}。` : '没有符合条件的账号。'
 })
 
 function textValidator(message, maxLength) {
@@ -362,6 +362,16 @@ function handleEnable(row) {
   changeStatus(row, 'enabled')
 }
 
+function handleRowCommand(command, row) {
+  if (command === 'reset') {
+    handleResetPassword(row)
+  } else if (command === 'disable') {
+    handleDisable(row)
+  } else if (command === 'enable') {
+    handleEnable(row)
+  }
+}
+
 function openEditDialog(row) {
   editForm.id = row.id
   editForm.account = row.account
@@ -583,7 +593,11 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
         <el-option label="教师" value="teacher" />
         <el-option label="班委" value="admin" />
       </el-select>
-      <el-radio-group v-model="filters.status" @change="handleFilterChange">
+      <el-radio-group
+        v-model="filters.status"
+        class="users__segmented"
+        @change="handleFilterChange"
+      >
         <el-radio-button value="">全部</el-radio-button>
         <el-radio-button value="enabled">启用</el-radio-button>
         <el-radio-button value="disabled">停用</el-radio-button>
@@ -616,7 +630,7 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
       <el-skeleton v-if="!failed" :rows="5" animated />
       <div v-else class="users__error" role="alert">
         <p class="users__error-title">用户列表读取失败</p>
-        <p class="users__error-desc">请检查网络连接后重试；重新读取成功后会展示最新名单。</p>
+        <p class="users__error-desc">请检查网络后重试。</p>
         <el-button type="primary" @click="fetchUsers()">重试</el-button>
       </div>
     </div>
@@ -647,7 +661,7 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
           <el-table-column label="创建时间" min-width="150">
             <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
           </el-table-column>
-          <el-table-column label="操作" width="210" fixed="right">
+          <el-table-column label="操作" width="140" fixed="right">
             <template #default="{ row }">
               <span v-if="row.id === userStore.user?.id" class="users__readonly">当前账号</span>
               <span v-else-if="row.role !== 'student'" class="users__readonly">只读</span>
@@ -661,35 +675,25 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
                 >
                   更正
                 </el-button>
-                <el-button
-                  link
-                  type="primary"
-                  size="small"
-                  :aria-label="`重置 ${row.name} 的密码`"
-                  @click="handleResetPassword(row)"
-                >
-                  重置密码
-                </el-button>
-                <el-button
-                  v-if="row.status === 'enabled'"
-                  link
-                  type="danger"
-                  size="small"
-                  :aria-label="`停用 ${row.name}`"
-                  @click="handleDisable(row)"
-                >
-                  停用
-                </el-button>
-                <el-button
-                  v-else
-                  link
-                  type="primary"
-                  size="small"
-                  :aria-label="`启用 ${row.name}`"
-                  @click="handleEnable(row)"
-                >
-                  启用
-                </el-button>
+                <el-dropdown trigger="click" @command="(command) => handleRowCommand(command, row)">
+                  <el-button link type="primary" size="small" :aria-label="`更多操作：${row.name}`">
+                    更多
+                  </el-button>
+                  <template #dropdown>
+                    <el-dropdown-menu>
+                      <el-dropdown-item command="reset">重置密码</el-dropdown-item>
+                      <el-dropdown-item
+                        v-if="row.status === 'enabled'"
+                        command="disable"
+                        divided
+                        class="users__danger-item"
+                      >
+                        停用
+                      </el-dropdown-item>
+                      <el-dropdown-item v-else command="enable" divided>启用</el-dropdown-item>
+                    </el-dropdown-menu>
+                  </template>
+                </el-dropdown>
               </template>
             </template>
           </el-table-column>
@@ -733,12 +737,14 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
         label-position="top"
         scroll-to-error
       >
+        <p class="users__group">账号信息</p>
         <el-form-item label="账号" prop="account">
           <el-input v-model="form.account" maxlength="64" placeholder="请输入账号" autocomplete="off" />
         </el-form-item>
         <el-form-item label="姓名" prop="name">
           <el-input v-model="form.name" maxlength="64" placeholder="请输入姓名" />
         </el-form-item>
+        <p class="users__group">初始凭据</p>
         <el-form-item label="初始密码" prop="password">
           <el-input
             v-model="form.password"
@@ -753,7 +759,7 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
           <span class="users__readonly">学生</span>
         </el-form-item>
       </el-form>
-      <p class="users__form-hint">请将账号和初始密码交给该学生；初始密码不做保存，关闭后无法再次查看。</p>
+      <p class="users__form-hint">初始密码仅本次显示，请交给学生。</p>
       <template #footer>
         <div class="users__dialog-footer">
           <el-button :disabled="creating" @click="createVisible = false">取消</el-button>
@@ -793,9 +799,7 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
           />
         </el-form-item>
       </el-form>
-      <p class="users__form-hint">
-        按稳定用户 ID 更正，历史领用与日志仍归属该人员；同名人员请以学号区分。
-      </p>
+      <p class="users__form-hint">按用户 ID 更正，历史记录归属不变。</p>
       <template #footer>
         <div class="users__dialog-footer">
           <el-button :disabled="editSaving" @click="editVisible = false">取消</el-button>
@@ -814,12 +818,10 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
     >
       <template v-if="resetResult">
         <p class="users__reset-title">
-          已重置 {{ resetResult.user.name }}（{{ resetResult.user.account }}）的密码。
+          {{ resetResult.user.name }}（{{ resetResult.user.account }}）
         </p>
         <div class="users__temp-password">{{ resetResult.temporary_password }}</div>
-        <p class="users__form-hint">
-          临时密码仅本次显示，关闭后无法再次查看；该学生下次登录须立即修改密码，旧密码与旧会话已失效。
-        </p>
+        <p class="users__form-hint">临时密码仅本次显示，旧会话已失效。</p>
       </template>
       <template #footer>
         <el-button type="primary" @click="closeResetResult">我已记录</el-button>
@@ -904,7 +906,7 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
       </template>
       <template v-else>
         <p class="users__import-receipt">
-          批次 #{{ importReceipt.batch_id }} 已处理：创建
+          批次 #{{ importReceipt.batch_id }}：创建
           {{ importReceipt.summary.ready_rows }} 人，更正
           {{ importReceipt.summary.update_rows }} 人，跳过
           {{ importReceipt.summary.existing_rows }} 人。
@@ -925,8 +927,7 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
           </el-table-column>
         </el-table>
         <p class="users__form-hint">
-          临时密码仅本次显示，关闭后无法再次查看；批次 #{{ importReceipt.batch_id }}
-          的回执可再次查询，但不包含临时密码。学生首次登录须立即修改密码。
+          临时密码仅本次显示；批次 #{{ importReceipt.batch_id }} 回执可再查询。
         </p>
       </template>
       <template #footer>
@@ -968,6 +969,46 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
   width: 140px;
 }
 
+.users__segmented {
+  display: inline-flex;
+}
+
+.users__segmented :deep(.el-radio-button__inner) {
+  height: 32px;
+  padding: 0 14px;
+  border-color: var(--line);
+  border-radius: 0;
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  box-shadow: none;
+  transition:
+    background-color var(--duration-hover) ease,
+    color var(--duration-hover) ease,
+    border-color var(--duration-hover) ease;
+}
+
+.users__segmented :deep(.el-radio-button:first-child .el-radio-button__inner) {
+  border-radius: var(--radius-control) 0 0 var(--radius-control);
+}
+
+.users__segmented :deep(.el-radio-button:last-child .el-radio-button__inner) {
+  border-radius: 0 var(--radius-control) var(--radius-control) 0;
+}
+
+.users__segmented :deep(.el-radio-button__inner:hover) {
+  background: var(--surface-subtle);
+  color: var(--text);
+}
+
+.users__segmented :deep(.el-radio-button.is-active .el-radio-button__inner) {
+  border-color: var(--primary-200);
+  background: var(--primary-soft);
+  color: var(--primary);
+  box-shadow: none;
+}
+
 .users__search {
   display: flex;
   flex: 1 1 220px;
@@ -993,12 +1034,12 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
   margin-bottom: 12px;
   border: 1px solid var(--line);
   border-radius: var(--radius-panel);
-  font-size: 14px;
-  line-height: 22px;
+  font-size: 13px;
+  line-height: 20px;
 }
 
 .users__banner--warning {
-  border-color: var(--warning);
+  border-color: var(--warning-line);
   background: var(--warning-soft);
   color: var(--warning);
 }
@@ -1032,8 +1073,8 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
 
 .users__refreshing {
   margin: 0 0 8px;
-  font-size: 13px;
-  line-height: 20px;
+  font-size: 12px;
+  line-height: 18px;
   color: var(--text-muted);
 }
 
@@ -1049,6 +1090,19 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
 
 .users__form-error {
   margin-bottom: 16px;
+}
+
+.users__group {
+  margin: 16px 0 6px;
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-muted);
+}
+
+.users__group:first-child {
+  margin-top: 0;
 }
 
 .users__form-hint {
@@ -1073,8 +1127,8 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
 }
 
 .users__import-file {
-  font-size: 13px;
-  line-height: 20px;
+  font-size: 12px;
+  line-height: 18px;
   color: var(--text-muted);
   word-break: break-all;
 }
@@ -1091,24 +1145,26 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
 
 .users__import-summary {
   margin: 12px 0 8px;
-  font-size: 13px;
-  line-height: 20px;
+  font-size: 12px;
+  line-height: 18px;
   color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
 }
 
 .users__import-error {
-  color: var(--danger, #f56c6c);
+  color: var(--danger);
 }
 
 .users__import-receipt {
   margin: 0 0 8px;
-  font-size: 13px;
-  line-height: 20px;
+  font-size: 12px;
+  line-height: 18px;
   color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
 }
 
 .users__receipt-password {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   word-break: break-all;
 }
 
@@ -1116,17 +1172,65 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
   margin: 0;
   font-size: 14px;
   line-height: 22px;
+  color: var(--text);
 }
 
 .users__temp-password {
   padding: 12px 16px;
   margin: 12px 0;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 18px;
   line-height: 26px;
   letter-spacing: 0.04em;
+  color: var(--text);
   background: var(--surface-muted);
-  border-radius: var(--radius-panel);
+  border-radius: var(--radius-control);
   word-break: break-all;
+}
+
+@media (max-width: 767px) {
+  .users__toolbar {
+    padding: 12px;
+  }
+
+  .users__role,
+  .users__segmented {
+    width: 100%;
+  }
+
+  .users__segmented :deep(.el-radio-button) {
+    flex: 1;
+  }
+
+  .users__segmented :deep(.el-radio-button__inner) {
+    width: 100%;
+    height: 36px;
+  }
+
+  .users__search {
+    flex: 1 1 100%;
+  }
+
+  .users__search-input {
+    max-width: none;
+  }
+
+  .users__reset {
+    margin-left: 0;
+  }
+
+  .users__dialog-footer .el-button {
+    min-height: 44px;
+  }
+}
+</style>
+<style>
+.el-dropdown-menu__item.users__danger-item {
+  color: var(--danger);
+}
+
+.el-dropdown-menu__item.users__danger-item:not(.is-disabled):hover {
+  background: var(--danger-soft);
+  color: var(--danger);
 }
 </style>

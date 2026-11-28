@@ -210,7 +210,7 @@ onBeforeUnmount(() => {
         <p class="record-drawer__error-text">{{ error }}</p>
         <div class="record-drawer__error-actions">
           <el-button v-if="notFound" @click="visible = false">返回列表</el-button>
-          <el-button v-else type="primary" plain @click="loadRecord(activeId)">重试</el-button>
+          <el-button v-else @click="loadRecord(activeId)">重试</el-button>
         </div>
       </div>
 
@@ -221,87 +221,90 @@ onBeforeUnmount(() => {
           <span class="status-tag" :class="statusMeta.className">{{ statusMeta.label }}</span>
         </div>
 
-        <dl class="record-drawer__grid">
-          <div class="record-drawer__field">
-            <dt>业务时间</dt>
-            <dd>{{ formatTime(detail.created_at) }}</dd>
-          </div>
-          <div class="record-drawer__field">
-            <dt>入账时间</dt>
-            <dd>{{ formatTime(detail.posted_at) }}</dd>
-          </div>
-          <div class="record-drawer__field">
-            <dt>领用人</dt>
-            <dd>{{ detail.user_name }}</dd>
-          </div>
-          <div class="record-drawer__field">
-            <dt>耗材</dt>
-            <dd>{{ detail.consumable_name }}<span class="record-drawer__unit">（{{ unitLabel(detail) }}）</span></dd>
-          </div>
-          <div class="record-drawer__field">
-            <dt>数量</dt>
-            <dd>{{ quantityText(detail) }}</dd>
-          </div>
-          <div class="record-drawer__field">
-            <dt>变动后库存</dt>
-            <dd>
-              {{ stockText(detail) }}
-              <span class="record-drawer__hint">历史快照</span>
-            </dd>
-          </div>
-          <div class="record-drawer__field">
-            <dt>备注</dt>
-            <dd>{{ detail.remark || '—' }}</dd>
-          </div>
-          <div v-if="detail.order_no" class="record-drawer__field">
-            <dt>单据编号</dt>
-            <dd>{{ detail.order_no }}</dd>
-          </div>
-          <div v-if="detail.operator_name" class="record-drawer__field">
-            <dt>经办人</dt>
-            <dd>{{ detail.operator_name }}</dd>
-          </div>
-          <div v-if="detail.handler_name" class="record-drawer__field">
-            <dt>处理人</dt>
-            <dd>{{ detail.handler_name }}</dd>
-          </div>
-          <div v-if="detail.backfill_mode" class="record-drawer__field">
-            <dt>入账口径</dt>
-            <dd>{{ backfillModeLabel(detail.backfill_mode) }}</dd>
-          </div>
-          <div v-if="detail.linked_count_order_no" class="record-drawer__field">
-            <dt>关联盘点单</dt>
-            <dd>{{ detail.linked_count_order_no }}</dd>
-          </div>
-          <div
-            v-else-if="detail.linked_event_id && detail.backfill_mode === 'opening'"
-            class="record-drawer__field"
-          >
-            <dt>关联期初事件</dt>
-            <dd>#{{ detail.linked_event_id }}</dd>
-          </div>
-          <div v-if="detail.backfill_reason" class="record-drawer__field record-drawer__field--full">
-            <dt>补录原因</dt>
-            <dd>{{ detail.backfill_reason }}</dd>
-          </div>
-          <div v-if="detail.reversal_reason" class="record-drawer__field record-drawer__field--full">
-            <dt>红冲原因</dt>
-            <dd>{{ detail.reversal_reason }}</dd>
-          </div>
-          <div v-if="detail.type === 'normal'" class="record-drawer__field record-drawer__field--full">
-            <dt>可退 / 可报损数量</dt>
-            <dd>
-              {{ detail.returnable_quantity }}<span> {{ unitLabel(detail) }}</span>
-              <span class="record-drawer__hint">
-                已退 {{ detail.returned_quantity }} · 已报损 {{ detail.scrapped_quantity }}
-              </span>
-            </dd>
-          </div>
-        </dl>
+        <section class="record-drawer__section">
+          <h3 class="record-drawer__section-title">流水信息</h3>
+          <dl class="record-drawer__grid">
+            <div class="record-drawer__field">
+              <dt>业务时间</dt>
+              <dd>{{ formatTime(detail.created_at) }}</dd>
+            </div>
+            <div class="record-drawer__field">
+              <dt>入账时间</dt>
+              <dd>{{ formatTime(detail.posted_at) }}</dd>
+            </div>
+            <div class="record-drawer__field">
+              <dt>领用人</dt>
+              <dd>{{ detail.user_name }}</dd>
+            </div>
+            <div class="record-drawer__field">
+              <dt>耗材</dt>
+              <dd>{{ detail.consumable_name }}<span class="record-drawer__unit">（{{ unitLabel(detail) }}）</span></dd>
+            </div>
+            <div class="record-drawer__field">
+              <dt>数量</dt>
+              <dd>{{ quantityText(detail) }}</dd>
+            </div>
+            <div class="record-drawer__field">
+              <dt>变动后库存</dt>
+              <dd>
+                {{ stockText(detail) }}
+                <span class="record-drawer__hint">历史快照</span>
+              </dd>
+            </div>
+            <div class="record-drawer__field">
+              <dt>备注</dt>
+              <dd>{{ detail.remark || '—' }}</dd>
+            </div>
+            <div v-if="detail.order_no" class="record-drawer__field">
+              <dt>单据编号</dt>
+              <dd>{{ detail.order_no }}</dd>
+            </div>
+            <div v-if="detail.operator_name" class="record-drawer__field">
+              <dt>经办人</dt>
+              <dd>{{ detail.operator_name }}</dd>
+            </div>
+            <div v-if="detail.handler_name" class="record-drawer__field">
+              <dt>处理人</dt>
+              <dd>{{ detail.handler_name }}</dd>
+            </div>
+            <div v-if="detail.backfill_mode" class="record-drawer__field">
+              <dt>入账口径</dt>
+              <dd>{{ backfillModeLabel(detail.backfill_mode) }}</dd>
+            </div>
+            <div v-if="detail.linked_count_order_no" class="record-drawer__field">
+              <dt>关联盘点单</dt>
+              <dd>{{ detail.linked_count_order_no }}</dd>
+            </div>
+            <div
+              v-else-if="detail.linked_event_id && detail.backfill_mode === 'opening'"
+              class="record-drawer__field"
+            >
+              <dt>关联期初事件</dt>
+              <dd>#{{ detail.linked_event_id }}</dd>
+            </div>
+            <div v-if="detail.backfill_reason" class="record-drawer__field record-drawer__field--full">
+              <dt>补录原因</dt>
+              <dd>{{ detail.backfill_reason }}</dd>
+            </div>
+            <div v-if="detail.reversal_reason" class="record-drawer__field record-drawer__field--full">
+              <dt>红冲原因</dt>
+              <dd>{{ detail.reversal_reason }}</dd>
+            </div>
+            <div v-if="detail.type === 'normal'" class="record-drawer__field record-drawer__field--full">
+              <dt>可退 / 可报损数量</dt>
+              <dd>
+                {{ detail.returnable_quantity }}<span> {{ unitLabel(detail) }}</span>
+                <span class="record-drawer__hint">
+                  已退 {{ detail.returned_quantity }} · 已报损 {{ detail.scrapped_quantity }}
+                </span>
+              </dd>
+            </div>
+          </dl>
+        </section>
 
-        <div v-if="detail.correction" class="record-drawer__correction">
+        <section v-if="detail.correction" class="record-drawer__correction">
           <div class="record-drawer__correction-head">
-            <h3 class="record-drawer__related-title">纠错申请 #{{ detail.correction.id }}</h3>
+            <h3 class="record-drawer__section-title">纠错申请 #{{ detail.correction.id }}</h3>
             <span class="status-tag" :class="correctionMeta.className">{{ correctionMeta.label }}</span>
           </div>
           <dl class="record-drawer__grid">
@@ -344,10 +347,10 @@ onBeforeUnmount(() => {
               </div>
             </template>
           </dl>
-        </div>
+        </section>
 
-        <div v-if="detail.origin || detail.reversal || detail.reentry" class="record-drawer__related">
-          <h3 class="record-drawer__related-title">关联流水</h3>
+        <section v-if="detail.origin || detail.reversal || detail.reentry" class="record-drawer__related">
+          <h3 class="record-drawer__section-title">关联流水</h3>
           <div v-if="detail.origin" class="record-drawer__related-row">
             <div>
               <span class="record-drawer__related-label">原领用 #{{ detail.origin.id }}</span>
@@ -378,10 +381,10 @@ onBeforeUnmount(() => {
             </div>
             <el-button link type="primary" @click="loadRecord(detail.reentry.id)">查看重登流水</el-button>
           </div>
-        </div>
+        </section>
 
-        <div v-if="detail.returns?.length || detail.scraps?.length" class="record-drawer__related">
-          <h3 class="record-drawer__related-title">实物退库与报损</h3>
+        <section v-if="detail.returns?.length || detail.scraps?.length" class="record-drawer__related">
+          <h3 class="record-drawer__section-title">实物退库与报损</h3>
           <div
             v-for="item in detail.returns"
             :key="`return-${item.id}`"
@@ -416,7 +419,7 @@ onBeforeUnmount(() => {
             </div>
             <span class="status-tag status-tag--neutral">不改变可用库存</span>
           </div>
-        </div>
+        </section>
       </template>
     </div>
 
@@ -424,8 +427,6 @@ onBeforeUnmount(() => {
       <div class="record-drawer__footer">
         <el-button
           v-if="canOperate && detail.returnable_quantity > 0"
-          type="primary"
-          plain
           @click="handleReturn"
         >
           实物退库
@@ -438,7 +439,7 @@ onBeforeUnmount(() => {
         >
           登记报损
         </el-button>
-        <el-button v-if="isStudent && canOperate" type="primary" plain @click="handleCorrect">
+        <el-button v-if="isStudent && canOperate" @click="handleCorrect">
           申请纠错
         </el-button>
         <el-button v-if="isStaff && canOperate" type="danger" @click="handleReverse">
@@ -454,18 +455,18 @@ onBeforeUnmount(() => {
 .record-drawer__body {
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: var(--space-5);
 }
 
 .record-drawer__summary {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 12px;
-  padding: 16px;
-  border: 1px solid var(--line);
+  gap: var(--space-3);
+  padding: 14px 16px;
+  border: 1px solid var(--line-soft);
   border-radius: var(--radius-panel);
-  background: var(--surface-muted);
+  background: var(--surface-subtle);
 }
 
 .record-drawer__id {
@@ -476,10 +477,25 @@ onBeforeUnmount(() => {
   font-variant-numeric: tabular-nums;
 }
 
+.record-drawer__section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.record-drawer__section-title {
+  margin: 0;
+  font-size: 15px;
+  line-height: 22px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+
 .record-drawer__grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px 24px;
+  gap: var(--space-4) var(--space-5);
   margin: 0;
 }
 
@@ -496,6 +512,7 @@ onBeforeUnmount(() => {
   margin-bottom: 4px;
   font-size: 13px;
   line-height: 20px;
+  font-weight: 500;
   color: var(--text-muted);
 }
 
@@ -503,6 +520,7 @@ onBeforeUnmount(() => {
   margin: 0;
   font-size: 14px;
   line-height: 22px;
+  font-weight: 500;
   color: var(--text);
   word-break: break-word;
   font-variant-numeric: tabular-nums;
@@ -510,24 +528,33 @@ onBeforeUnmount(() => {
 
 .record-drawer__hint {
   margin-left: 8px;
-  font-size: 13px;
+  font-size: 12px;
+  font-weight: 400;
   color: var(--text-muted);
 }
 
 .record-drawer__unit {
   font-size: 13px;
+  font-weight: 400;
   color: var(--text-muted);
 }
 
 .record-drawer__related {
-  padding-top: 16px;
-  border-top: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--line-soft);
 }
 
 .record-drawer__correction {
-  padding: 16px;
-  border: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: 1px solid var(--line-soft);
   border-radius: var(--radius-panel);
+  background: var(--surface-subtle);
 }
 
 .record-drawer__correction-head {
@@ -535,16 +562,7 @@ onBeforeUnmount(() => {
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 12px;
-}
-
-.record-drawer__correction-head .record-drawer__related-title {
-  margin-bottom: 0;
-}
-
-.record-drawer__related-title {
-  margin: 0 0 12px;
+  gap: var(--space-2);
 }
 
 .record-drawer__related-row {
@@ -552,14 +570,11 @@ onBeforeUnmount(() => {
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  padding: 12px 16px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-panel);
-}
-
-.record-drawer__related-row + .record-drawer__related-row {
-  margin-top: 8px;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-control);
+  background: var(--surface-subtle);
 }
 
 .record-drawer__related-label {
@@ -582,9 +597,9 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 16px;
-  padding: 24px;
-  border: 1px solid var(--line);
+  gap: var(--space-4);
+  padding: var(--space-5);
+  border: 1px solid var(--line-soft);
   border-radius: var(--radius-panel);
 }
 
@@ -602,19 +617,23 @@ onBeforeUnmount(() => {
 
 .record-drawer__footer {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
+}
+
+.record-drawer__footer .el-button + .el-button {
+  margin-left: 0;
 }
 
 @media (max-width: 767px) {
   .record-drawer__grid {
     grid-template-columns: minmax(0, 1fr);
   }
-}
-</style>
 
-<style>
-.record-drawer .el-drawer__body {
-  padding: 0 20px 20px;
+  .record-drawer__footer .el-button {
+    flex: 1 1 auto;
+    min-height: 44px;
+  }
 }
 </style>

@@ -30,6 +30,26 @@ const ROLE_TAG_CLASS = {
   student: 'role-tag--student',
 }
 
+const ROLE_LABEL = {
+  teacher: '教师',
+  admin: '班委',
+  student: '学生',
+}
+
+const userInitial = computed(() => {
+  const name = userStore.user?.name?.trim()
+  return name ? name.slice(0, 1) : '·'
+})
+
+const avatarClass = computed(() => {
+  const role = userStore.user?.role
+  return role ? `layout__avatar--${role}` : ''
+})
+
+const accountRole = computed(
+  () => ROLE_LABEL[userStore.user?.role] ?? userStore.roleName ?? '',
+)
+
 const route = useRoute()
 const router = useRouter()
 const userStore = useUserStore()
@@ -362,7 +382,7 @@ onBeforeUnmount(() => {
     <header class="layout__header">
       <button
         ref="toggleButtonRef"
-        class="layout__toggle"
+        class="layout__icon-button"
         type="button"
         :aria-label="toggleLabel"
         @click="toggleSidebar"
@@ -371,7 +391,9 @@ onBeforeUnmount(() => {
       </button>
 
       <div class="layout__brand">
-        <el-icon :size="18" class="layout__brand-icon"><Box /></el-icon>
+        <span class="layout__brand-mark" aria-hidden="true">
+          <el-icon :size="16"><Box /></el-icon>
+        </span>
         <span class="layout__brand-name">班级实训耗材智能管理系统</span>
       </div>
 
@@ -379,48 +401,54 @@ onBeforeUnmount(() => {
 
       <div class="layout__spacer" />
 
-      <el-badge
-        v-if="canSeeAlerts"
-        :value="alertsStore.activeCount"
-        :max="99"
-        :hidden="!alertsStore.activeCount"
-        class="layout__alert"
-      >
-        <button
-          class="layout__toggle"
-          type="button"
-          aria-label="站内待办"
-          @click="goAlerts"
+      <div class="layout__tools">
+        <el-badge
+          v-if="canSeeAlerts"
+          :value="alertsStore.activeCount"
+          :max="99"
+          :hidden="!alertsStore.activeCount"
+          class="layout__alert"
         >
-          <el-icon :size="18"><Bell /></el-icon>
+          <button
+            class="layout__icon-button"
+            type="button"
+            aria-label="站内待办"
+            @click="goAlerts"
+          >
+            <el-icon :size="18"><Bell /></el-icon>
+          </button>
+        </el-badge>
+
+        <button
+          class="layout__icon-button layout__help"
+          type="button"
+          aria-label="使用帮助与故障联络"
+          @click="helpOpen = true"
+        >
+          <el-icon :size="18"><QuestionFilled /></el-icon>
+          <span class="layout__help-text">帮助</span>
         </button>
-      </el-badge>
 
-      <button
-        class="layout__help"
-        type="button"
-        aria-label="使用帮助与故障联络"
-        @click="helpOpen = true"
-      >
-        <el-icon :size="18"><QuestionFilled /></el-icon>
-        <span class="layout__help-text">帮助</span>
-      </button>
+        <span class="layout__divider" aria-hidden="true" />
 
-      <div class="layout__account">
-        <span class="layout__user-name" :title="userStore.user?.name">
-          {{ userStore.user?.name }}
-        </span>
-        <span class="status-tag" :class="ROLE_TAG_CLASS[userStore.user?.role]">
-          {{ userStore.roleName }}
-        </span>
         <el-dropdown trigger="click" @command="handleUserCommand">
           <button
             ref="userTriggerRef"
-            class="layout__user-trigger"
+            class="layout__account"
             type="button"
             aria-label="账号菜单"
+            aria-haspopup="menu"
           >
-            <el-icon :size="16"><ArrowDown /></el-icon>
+            <span class="layout__avatar" :class="avatarClass" aria-hidden="true">
+              {{ userInitial }}
+            </span>
+            <span class="layout__account-text">
+              <span class="layout__user-name" :title="userStore.user?.name">
+                {{ userStore.user?.name }}
+              </span>
+              <span class="layout__user-role">{{ accountRole }}</span>
+            </span>
+            <el-icon :size="14" class="layout__chevron"><ArrowDown /></el-icon>
           </button>
           <template #dropdown>
             <el-dropdown-menu>
@@ -474,11 +502,17 @@ onBeforeUnmount(() => {
         v-model="drawerOpen"
         direction="ltr"
         :with-header="false"
-        size="208px"
+        size="248px"
         class="layout__drawer"
         @closed="handleDrawerClosed"
       >
         <nav class="layout__drawer-nav" aria-label="主导航">
+          <div class="layout__drawer-head">
+            <span class="layout__brand-mark" aria-hidden="true">
+              <el-icon :size="16"><Box /></el-icon>
+            </span>
+            <span>班级实训耗材智能管理系统</span>
+          </div>
           <el-menu
             class="layout__menu"
             :default-active="route.path"
@@ -626,74 +660,95 @@ onBeforeUnmount(() => {
   z-index: 30;
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   height: var(--topbar-height);
-  padding: 0 16px;
+  padding: 0 16px 0 12px;
   background: var(--surface);
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid var(--line-soft);
+  box-shadow: 0 1px 2px rgb(23 38 60 / 3%);
 }
 
-.layout__toggle,
-.layout__user-trigger {
+.layout__icon-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 40px;
-  height: 40px;
+  gap: 6px;
+  width: 36px;
+  height: 36px;
   padding: 0;
   border: 1px solid transparent;
   border-radius: var(--radius-control);
   background: transparent;
   color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 13px;
   cursor: pointer;
   transition:
     background-color var(--duration-hover) ease,
-    color var(--duration-hover) ease;
+    color var(--duration-hover) ease,
+    border-color var(--duration-hover) ease;
 }
 
-.layout__toggle:hover,
-.layout__user-trigger:hover {
+.layout__icon-button:hover {
   background: var(--surface-muted);
   color: var(--text);
+}
+
+.layout__icon-button:active {
+  background: var(--surface-sunken);
 }
 
 .layout__help {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  height: 40px;
+  width: auto;
   padding: 0 10px;
-  border: 1px solid transparent;
-  border-radius: var(--radius-control);
-  background: transparent;
-  color: var(--text-secondary);
-  font-family: inherit;
-  font-size: 14px;
-  line-height: 22px;
-  cursor: pointer;
-  transition:
-    background-color var(--duration-hover) ease,
-    color var(--duration-hover) ease;
-}
-
-.layout__help:hover {
-  background: var(--surface-muted);
-  color: var(--text);
 }
 
 .layout__brand {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 9px;
   min-width: 0;
   color: var(--text);
-  font-size: 14px;
-  font-weight: 600;
 }
 
-.layout__brand-icon {
-  color: var(--primary);
+.layout__brand-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  background: var(--brand-mark-bg);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 14%);
+  color: #FFFFFF;
+}
+
+.layout__brand-name {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.layout__tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.layout__divider {
+  width: 1px;
+  height: 20px;
+  margin: 0 4px;
+  background: var(--line);
+}
+
+.layout__alert :deep(.el-badge__content) {
+  font-size: 11px;
+  font-weight: 600;
 }
 
 .layout__spacer {
@@ -701,19 +756,83 @@ onBeforeUnmount(() => {
 }
 
 .layout__account {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 8px;
+  max-width: 260px;
+  height: 38px;
+  padding: 4px 6px 4px 4px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  background: transparent;
+  font-family: inherit;
+  cursor: pointer;
+  transition:
+    background-color var(--duration-hover) ease,
+    border-color var(--duration-hover) ease;
+}
+
+.layout__account:hover {
+  background: var(--surface-muted);
+}
+
+.layout__avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: var(--surface-muted);
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.layout__avatar--admin {
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.layout__avatar--teacher {
+  background: var(--info-soft);
+  color: var(--info);
+}
+
+.layout__avatar--student {
+  background: var(--surface-muted);
+  color: var(--text-secondary);
+}
+
+.layout__account-text {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
   min-width: 0;
 }
 
 .layout__user-name {
-  max-width: 160px;
+  max-width: 150px;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-  font-size: 14px;
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 600;
   color: var(--text);
+}
+
+.layout__user-role {
+  font-size: 11px;
+  line-height: 15px;
+  letter-spacing: 0.02em;
+  color: var(--text-muted);
+}
+
+.layout__chevron {
+  flex: 0 0 auto;
+  color: var(--text-muted);
 }
 
 .layout__dropdown-name {
@@ -740,7 +859,7 @@ onBeforeUnmount(() => {
   height: calc(100vh - var(--topbar-height));
   overflow-y: auto;
   background: var(--nav);
-  border-right: 1px solid var(--line);
+  border-right: 1px solid var(--line-soft);
   transition:
     width var(--duration-hover) ease,
     flex-basis var(--duration-hover) ease;
@@ -763,18 +882,25 @@ onBeforeUnmount(() => {
 .layout__menu {
   border-right: none;
   background: var(--nav);
-  padding: 8px 0;
+  padding: 10px 0 16px;
 }
 
 .layout__menu :deep(.el-menu-item),
 .layout__menu :deep(.el-sub-menu__title) {
   position: relative;
-  height: 40px;
-  line-height: 40px;
+  height: 38px;
+  line-height: 38px;
   margin: 2px 8px;
-  border-radius: var(--radius-control);
+  border-radius: 6px;
   color: var(--text-secondary);
-  font-size: 14px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.layout__menu :deep(.el-sub-menu__title) {
+  margin-bottom: 4px;
+  color: var(--text);
+  font-weight: 600;
 }
 
 .layout__menu :deep(.el-menu-item:hover),
@@ -789,11 +915,15 @@ onBeforeUnmount(() => {
   font-weight: 600;
 }
 
+.layout__menu :deep(.el-sub-menu.is-active > .el-sub-menu__title) {
+  color: var(--primary);
+}
+
 .layout__menu :deep(.el-menu-item.is-active)::before {
   position: absolute;
   left: -8px;
-  top: 6px;
-  bottom: 6px;
+  top: 8px;
+  bottom: 8px;
   width: 3px;
   border-radius: 0 2px 2px 0;
   background: var(--primary);
@@ -801,20 +931,54 @@ onBeforeUnmount(() => {
 }
 
 .layout__menu :deep(.el-sub-menu__title .el-icon) {
-  margin-right: 8px;
-  font-size: 18px;
+  margin-right: 9px;
+  font-size: 17px;
 }
 
 .layout__menu :deep(.el-menu--inline) {
-  background: var(--nav);
+  background: transparent;
 }
 
 .layout__menu :deep(.el-menu--inline .el-menu-item) {
-  padding-left: 44px;
+  padding-left: 40px;
+  font-size: 13px;
+}
+
+.layout__aside--collapsed .layout__menu :deep(.el-sub-menu__title) {
+  justify-content: center;
+  padding: 0;
+}
+
+.layout__aside--collapsed .layout__menu :deep(.el-sub-menu__title .el-icon) {
+  margin-right: 0;
+}
+
+.layout__aside--collapsed .layout__menu :deep(.el-menu-item) {
+  justify-content: center;
+  padding: 0;
+}
+
+.layout__drawer-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: var(--topbar-height);
+  padding: 0 16px;
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
 }
 
 .layout__drawer-nav {
   padding: 0;
+}
+
+.layout__drawer-nav .layout__menu {
+  background: var(--nav);
+  min-height: calc(100vh - var(--topbar-height));
 }
 
 .layout__current {
@@ -823,22 +987,25 @@ onBeforeUnmount(() => {
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--text);
 }
 
 .route-fade-enter-active {
-  transition: opacity var(--duration-route) ease;
+  transition:
+    opacity var(--duration-route) var(--ease-out),
+    transform var(--duration-route) var(--ease-out);
 }
 
 .route-fade-enter-from {
   opacity: 0;
+  transform: translateY(4px);
 }
 
 @media (max-width: 767px) {
   .layout__header {
-    gap: 8px;
+    gap: 6px;
     padding: 0 8px;
   }
 
@@ -846,26 +1013,31 @@ onBeforeUnmount(() => {
     display: none;
   }
 
-  .layout__user-name {
-    max-width: 96px;
-  }
-
-  .layout__account .status-tag {
-    display: none;
+  .layout__icon-button {
+    width: 44px;
+    height: 44px;
   }
 
   .layout__help {
-    width: 40px;
+    width: 44px;
     padding: 0;
   }
 
   .layout__help-text {
     display: none;
   }
-}
 
-@media (max-width: 480px) {
-  .layout__user-name {
+  .layout__divider {
+    margin: 0;
+  }
+
+  .layout__account {
+    height: 44px;
+    padding: 4px;
+  }
+
+  .layout__account-text,
+  .layout__chevron {
     display: none;
   }
 }
@@ -874,5 +1046,20 @@ onBeforeUnmount(() => {
 <style>
 .layout__drawer .el-drawer__body {
   padding: 0;
+}
+
+.el-menu--popup {
+  min-width: 168px;
+  padding: 6px;
+  border-radius: 10px;
+  box-shadow: var(--shadow-popover);
+}
+
+.el-menu--popup .el-menu-item {
+  height: 34px;
+  line-height: 34px;
+  margin: 2px 0;
+  border-radius: 6px;
+  font-size: 13px;
 }
 </style>

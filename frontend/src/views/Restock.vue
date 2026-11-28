@@ -128,8 +128,8 @@ const emptyTitle = computed(() => {
 
 const emptyDescription = computed(() => {
   if (requestError.value) return requestError.value
-  if (handledAll.value) return '所有建议均已完成入库，可重新巡检查看最新结果。'
-  return '当前没有触发补货规则的耗材；无启用档案、未设安全库存线时也不会产生建议。'
+  if (handledAll.value) return '所有建议均已完成入库。'
+  return '当前没有触发补货规则的耗材。'
 })
 
 const expectedStock = computed(() => {
@@ -409,20 +409,21 @@ onBeforeUnmount(() => {
     <PageHeader title="补货建议" :breadcrumb="['库存分析', '补货建议']">
       <template #actions>
         <span class="restock__patrol">巡检时间 {{ generatedAtText }}</span>
-        <el-button type="primary" :loading="loading" @click="fetchSuggestions(true)">
+        <el-button :loading="loading" @click="fetchSuggestions(true)">
           {{ loading ? '巡检中…' : '重新巡检' }}
         </el-button>
       </template>
     </PageHeader>
 
     <div class="restock__filters" role="group" aria-label="按等级筛选补货建议">
-      <el-radio-group v-model="tierFilter">
+      <el-radio-group v-model="tierFilter" class="restock__segmented">
         <el-radio-button
           v-for="option in TIER_FILTERS"
           :key="option.value"
           :value="option.value"
         >
-          {{ option.label }} {{ counts[option.value] }}
+          <span>{{ option.label }}</span>
+          <span class="restock__seg-count">{{ counts[option.value] }}</span>
         </el-radio-button>
       </el-radio-group>
     </div>
@@ -433,40 +434,13 @@ onBeforeUnmount(() => {
         :closable="false"
         show-icon
         title="该耗材当前没有补货建议"
-        description="库存已补足，或安全库存线为 0（未设预警线）而不进入补货巡检。"
+        description="库存已补足，或未设安全库存线。"
       />
       <el-button v-if="isAdmin" link type="primary" @click="goArchiveItem">
         查看档案
       </el-button>
       <el-button v-else link type="primary" @click="goOverview">返回库存总览</el-button>
     </div>
-
-    <details v-if="ruleSpec" class="panel restock__rules">
-      <summary class="restock__rules-summary">
-        补货规则说明 · 规则版本 {{ ruleSpec.version }}
-      </summary>
-      <div class="restock__rules-body">
-        <p class="restock__rules-text">{{ ruleSpec.window_rule }}</p>
-        <ul class="restock__rules-list">
-          <li v-for="tier in ruleSpec.tiers" :key="tier.code">
-            <span
-              class="status-tag"
-              :class="TIER_META[tier.code]?.tagClass"
-            >
-              {{ tier.label }}
-            </span>
-            {{ tier.condition }}
-          </li>
-        </ul>
-        <p class="restock__rules-text"><strong>计算：</strong>{{ ruleSpec.formula }}</p>
-        <p v-if="ruleSpec.sort_rule" class="restock__rules-text">
-          <strong>排序：</strong>{{ ruleSpec.sort_rule }}
-        </p>
-        <p class="restock__rules-text">
-          <strong>跳过条件：</strong>{{ ruleSpec.skip_conditions.join('；') }}
-        </p>
-      </div>
-    </details>
 
     <div v-if="loading && items.length" class="restock__notice">
       <el-alert
@@ -510,7 +484,7 @@ onBeforeUnmount(() => {
     <EmptyState
       v-else-if="!visibleItems.length"
       :title="`暂无${currentTierLabel}建议`"
-      description="当前巡检结果中该等级没有补货建议。"
+      description="该等级当前没有建议。"
     >
       <template #action>
         <el-button @click="tierFilter = 'all'">查看全部</el-button>
@@ -529,7 +503,7 @@ onBeforeUnmount(() => {
         ]"
       >
         <header class="restock__card-head">
-          <div class="restock__card-heading">
+          <div class="restock__identity">
             <span class="status-tag" :class="TIER_META[item.tier]?.tagClass">
               {{ TIER_META[item.tier]?.label ?? item.tier }}
             </span>
@@ -548,13 +522,13 @@ onBeforeUnmount(() => {
             <span class="restock__amount">
               {{ item.recommended_quantity }}<span class="restock__amount-unit">{{ item.unit }}</span>
             </span>
-            <el-button v-if="isAdmin" type="primary" @click="openRestock(item, $event)">
-              处置入库
-            </el-button>
           </div>
         </header>
 
-        <div v-if="item.disposition_status" class="restock__disposition">
+        <div
+          v-if="item.disposition_status && item.disposition_status !== 'pending'"
+          class="restock__disposition"
+        >
           <span
             class="status-tag"
             :class="DISPOSITION_META[item.disposition_status]?.tagClass"
@@ -580,51 +554,48 @@ onBeforeUnmount(() => {
             <dt>库存缺口</dt>
             <dd>{{ item.gap }}{{ item.unit }}</dd>
           </div>
-          <div class="restock__metric">
-            <dt>近 7 天净消耗</dt>
-            <dd>{{ item.q7 }}{{ item.unit }}</dd>
-          </div>
-          <div class="restock__metric">
-            <dt>日均速率</dt>
-            <dd>{{ formatRate(item) }}</dd>
-          </div>
-          <div class="restock__metric">
-            <dt>可支撑天数</dt>
-            <dd>{{ formatDays(item.days_of_supply) }}</dd>
-          </div>
         </dl>
 
         <div v-if="item.reasons?.length" class="restock__reasons">
-          <span class="restock__reasons-title">命中原因</span>
-          <span
-            v-for="reason in item.reasons"
-            :key="reason"
-            class="status-tag status-tag--info"
-          >
+          <span v-for="reason in item.reasons" :key="reason" class="restock__reason">
             {{ reason }}
           </span>
         </div>
 
-        <p v-if="item.consumption_note" class="restock__hint">
+        <p v-if="item.consumption_note" class="restock__note">
           {{ item.consumption_note }}
         </p>
+
+        <footer class="restock__foot">
+          <dl class="restock__meta">
+            <div class="restock__meta-item">
+              <dt>近 7 天净消耗</dt>
+              <dd>{{ item.q7 }}{{ item.unit }}</dd>
+            </div>
+            <div class="restock__meta-item">
+              <dt>日均速率</dt>
+              <dd>{{ formatRate(item) }}</dd>
+            </div>
+            <div class="restock__meta-item">
+              <dt>可支撑</dt>
+              <dd>{{ formatDays(item.days_of_supply) }}</dd>
+            </div>
+          </dl>
+          <el-button v-if="isAdmin" type="primary" @click="openRestock(item, $event)">
+            处置入库
+          </el-button>
+        </footer>
 
         <div class="restock__rationale">
           <div class="restock__rationale-head">
             <span class="restock__rationale-title">判断依据</span>
-            <span
-              class="status-tag"
-              :class="RATIONALE_SOURCE_META[item.rationale_source]?.tagClass"
-            >
+            <span class="status-tag" :class="RATIONALE_SOURCE_META[item.rationale_source]?.tagClass">
               {{ RATIONALE_SOURCE_META[item.rationale_source]?.label ?? item.rationale_source }}
             </span>
-            <span
-              v-if="item.rationale_degraded"
-              class="status-tag status-tag--warning"
-            >
+            <span v-if="item.rationale_degraded" class="status-tag status-tag--warning">
               已降级
             </span>
-            <span class="restock__rationale-time">
+            <span v-if="item.computed_at" class="restock__rationale-time">
               数据时点 {{ formatGeneratedAt(item.computed_at) }}
             </span>
           </div>
@@ -632,6 +603,33 @@ onBeforeUnmount(() => {
         </div>
       </article>
     </div>
+
+    <details v-if="ruleSpec" class="panel restock__rules">
+      <summary class="restock__rules-summary">
+        补货规则说明 · 规则版本 {{ ruleSpec.version }}
+      </summary>
+      <div class="restock__rules-body">
+        <p class="restock__rules-text">{{ ruleSpec.window_rule }}</p>
+        <ul class="restock__rules-list">
+          <li v-for="tier in ruleSpec.tiers" :key="tier.code">
+            <span
+              class="status-tag"
+              :class="TIER_META[tier.code]?.tagClass"
+            >
+              {{ tier.label }}
+            </span>
+            {{ tier.condition }}
+          </li>
+        </ul>
+        <p class="restock__rules-text"><strong>计算：</strong>{{ ruleSpec.formula }}</p>
+        <p v-if="ruleSpec.sort_rule" class="restock__rules-text">
+          <strong>排序：</strong>{{ ruleSpec.sort_rule }}
+        </p>
+        <p class="restock__rules-text">
+          <strong>跳过条件：</strong>{{ ruleSpec.skip_conditions.join('；') }}
+        </p>
+      </div>
+    </details>
 
     <el-dialog
       v-model="restockDialog.visible"
@@ -648,32 +646,24 @@ onBeforeUnmount(() => {
         class="restock__dialog"
         @focusin="keepFocusedFieldVisible"
       >
-        <div class="restock__summary">
+        <dl class="restock__summary">
           <div class="restock__summary-row">
-            <span class="restock__summary-label">耗材</span>
-            <span class="restock__summary-value">
-              {{ consumableLabel(restockDialog.item) }}
-            </span>
+            <dt>耗材</dt>
+            <dd>{{ consumableLabel(restockDialog.item) }}</dd>
           </div>
           <div class="restock__summary-row">
-            <span class="restock__summary-label">当前库存</span>
-            <span class="restock__summary-value">
-              {{ restockDialog.item.current_stock }}{{ restockDialog.item.unit }}
-            </span>
+            <dt>当前库存</dt>
+            <dd>{{ restockDialog.item.current_stock }}{{ restockDialog.item.unit }}</dd>
           </div>
           <div class="restock__summary-row">
-            <span class="restock__summary-label">安全库存线</span>
-            <span class="restock__summary-value">
-              {{ restockDialog.item.safety_stock }}{{ restockDialog.item.unit }}
-            </span>
+            <dt>安全库存线</dt>
+            <dd>{{ restockDialog.item.safety_stock }}{{ restockDialog.item.unit }}</dd>
           </div>
           <div class="restock__summary-row">
-            <span class="restock__summary-label">建议补货量</span>
-            <span class="restock__summary-value">
-              {{ restockDialog.item.recommended_quantity }}{{ restockDialog.item.unit }}
-            </span>
+            <dt>建议补货量</dt>
+            <dd>{{ restockDialog.item.recommended_quantity }}{{ restockDialog.item.unit }}</dd>
           </div>
-        </div>
+        </dl>
 
         <el-form label-position="top" @submit.prevent>
           <el-form-item label="实际入库数量" required :error="restockDialog.fieldError">
@@ -777,7 +767,7 @@ onBeforeUnmount(() => {
     <el-dialog
       v-model="receiptDialog.visible"
       :title="receiptDialog.data ? `入库单 ${receiptDialog.data.order_no}` : '入库单详情'"
-      width="680px"
+      width="640px"
     >
       <div v-if="receiptDialog.loading" class="restock__receipt">
         <el-skeleton :rows="4" animated />
@@ -792,38 +782,32 @@ onBeforeUnmount(() => {
         />
       </div>
       <div v-else-if="receiptDialog.data" class="restock__receipt">
-        <div class="restock__summary">
+        <dl class="restock__summary">
           <div class="restock__summary-row">
-            <span class="restock__summary-label">状态</span>
-            <span class="restock__summary-value">
-              {{ receiptStatusLabel(receiptDialog.data.status) }}
-            </span>
+            <dt>状态</dt>
+            <dd>{{ receiptStatusLabel(receiptDialog.data.status) }}</dd>
           </div>
           <div class="restock__summary-row">
-            <span class="restock__summary-label">经办人</span>
-            <span class="restock__summary-value">{{ receiptDialog.data.operator_name }}</span>
+            <dt>经办人</dt>
+            <dd>{{ receiptDialog.data.operator_name }}</dd>
           </div>
           <div class="restock__summary-row">
-            <span class="restock__summary-label">业务时间</span>
-            <span class="restock__summary-value">
-              {{ formatReceiptTime(receiptDialog.data.business_at) }}
-            </span>
+            <dt>业务时间</dt>
+            <dd>{{ formatReceiptTime(receiptDialog.data.business_at) }}</dd>
           </div>
           <div class="restock__summary-row">
-            <span class="restock__summary-label">入账时间</span>
-            <span class="restock__summary-value">
-              {{ formatReceiptTime(receiptDialog.data.posted_at) }}
-            </span>
+            <dt>入账时间</dt>
+            <dd>{{ formatReceiptTime(receiptDialog.data.posted_at) }}</dd>
           </div>
           <div v-if="receiptDialog.data.source" class="restock__summary-row">
-            <span class="restock__summary-label">来源</span>
-            <span class="restock__summary-value">{{ receiptDialog.data.source }}</span>
+            <dt>来源</dt>
+            <dd>{{ receiptDialog.data.source }}</dd>
           </div>
           <div v-if="receiptDialog.data.remark" class="restock__summary-row">
-            <span class="restock__summary-label">备注</span>
-            <span class="restock__summary-value">{{ receiptDialog.data.remark }}</span>
+            <dt>备注</dt>
+            <dd>{{ receiptDialog.data.remark }}</dd>
           </div>
-        </div>
+        </dl>
 
         <el-table :data="receiptDialog.data.lines" class="table-dense">
           <el-table-column label="耗材" min-width="140">
@@ -856,18 +840,69 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .restock__patrol {
-  font-size: 14px;
-  line-height: 22px;
+  font-size: 12px;
+  line-height: 18px;
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
 }
 
 .restock__filters {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 12px;
   margin-bottom: 16px;
+}
+
+.restock__segmented {
+  display: inline-flex;
+  flex-wrap: wrap;
+}
+
+.restock__segmented :deep(.el-radio-button__inner) {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 14px;
+  border-color: var(--line);
+  border-radius: 0;
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  box-shadow: none;
+  transition:
+    background-color var(--duration-hover) ease,
+    color var(--duration-hover) ease,
+    border-color var(--duration-hover) ease;
+}
+
+.restock__segmented :deep(.el-radio-button:first-child .el-radio-button__inner) {
+  border-radius: var(--radius-control) 0 0 var(--radius-control);
+}
+
+.restock__segmented :deep(.el-radio-button:last-child .el-radio-button__inner) {
+  border-radius: 0 var(--radius-control) var(--radius-control) 0;
+}
+
+.restock__segmented :deep(.el-radio-button__inner:hover) {
+  background: var(--surface-subtle);
+  color: var(--text);
+}
+
+.restock__segmented :deep(.el-radio-button.is-active .el-radio-button__inner) {
+  border-color: var(--primary-200);
+  background: var(--primary-soft);
+  color: var(--primary);
+  box-shadow: none;
+}
+
+.restock__seg-count {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.restock__segmented :deep(.el-radio-button.is-active .restock__seg-count) {
+  color: var(--primary);
 }
 
 .restock__notice {
@@ -884,8 +919,8 @@ onBeforeUnmount(() => {
 
 .restock__loading-text {
   margin: 0 0 16px;
-  font-size: 14px;
-  line-height: 22px;
+  font-size: 13px;
+  line-height: 20px;
   color: var(--text-muted);
 }
 
@@ -900,7 +935,7 @@ onBeforeUnmount(() => {
   flex-direction: column;
   gap: 16px;
   padding: 20px;
-  border-left: 4px solid var(--line);
+  border-left: 3px solid var(--line);
 }
 
 .restock__card--urgent {
@@ -925,10 +960,10 @@ onBeforeUnmount(() => {
   flex-wrap: wrap;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 12px;
+  gap: 12px 16px;
 }
 
-.restock__card-heading {
+.restock__identity {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -938,8 +973,8 @@ onBeforeUnmount(() => {
 
 .restock__name {
   margin: 0;
-  font-size: 18px;
-  line-height: 26px;
+  font-size: 16px;
+  line-height: 24px;
   font-weight: 600;
   color: var(--text);
 }
@@ -951,22 +986,25 @@ onBeforeUnmount(() => {
 
 .restock__amount-block {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  margin-left: auto;
+  text-align: right;
 }
 
 .restock__amount-label {
-  font-size: 13px;
-  line-height: 20px;
+  font-size: 12px;
+  line-height: 16px;
   color: var(--text-muted);
 }
 
 .restock__amount {
   font-size: 28px;
-  line-height: 36px;
-  font-weight: 700;
-  color: var(--primary);
+  line-height: 32px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  color: var(--text);
   font-variant-numeric: tabular-nums;
 }
 
@@ -974,7 +1012,7 @@ onBeforeUnmount(() => {
   margin-left: 2px;
   font-size: 14px;
   font-weight: 500;
-  color: var(--text-secondary);
+  color: var(--text-muted);
 }
 
 .restock__disposition {
@@ -982,55 +1020,160 @@ onBeforeUnmount(() => {
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-  font-size: 13px;
-  line-height: 20px;
+  font-size: 12px;
+  line-height: 18px;
   color: var(--text-muted);
 }
 
 .restock__metrics {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-  gap: 12px 16px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px 16px;
   margin: 0;
-  padding: 16px;
-  border-radius: var(--radius-control);
-  background: var(--surface-muted);
+  padding: 14px 0 0;
+  border-top: 1px solid var(--line-soft);
 }
 
 .restock__metric {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
   min-width: 0;
 }
 
 .restock__metric dt {
   margin: 0;
-  font-size: 13px;
-  line-height: 20px;
+  font-size: 12px;
+  line-height: 16px;
   color: var(--text-muted);
 }
 
 .restock__metric dd {
   margin: 0;
-  font-size: 16px;
-  line-height: 24px;
+  font-size: 15px;
+  line-height: 22px;
   font-weight: 600;
   color: var(--text);
   font-variant-numeric: tabular-nums;
 }
 
+.restock__reasons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.restock__reason {
+  padding: 1px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-muted);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.restock__note {
+  margin: 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--text-muted);
+}
+
+.restock__foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.restock__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 24px;
+  margin: 0;
+}
+
+.restock__meta-item {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.restock__meta-item dt {
+  margin: 0;
+  font-size: 11px;
+  line-height: 15px;
+  letter-spacing: 0.01em;
+  color: var(--text-muted);
+}
+
+.restock__meta-item dd {
+  margin: 0;
+  font-size: 13px;
+  line-height: 19px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.restock__rationale {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.restock__rationale-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.restock__rationale-head .status-tag {
+  height: 18px;
+  padding: 0 6px;
+  font-size: 11px;
+}
+
+.restock__rationale-title {
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.restock__rationale-time {
+  margin-left: auto;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.restock__rationale-text {
+  margin: 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--text-muted);
+  white-space: pre-line;
+}
+
 .restock__rules {
-  margin-bottom: 16px;
+  margin-top: 24px;
   padding: 16px 20px;
+  box-shadow: none;
 }
 
 .restock__rules-summary {
   cursor: pointer;
-  font-size: 14px;
-  line-height: 22px;
-  font-weight: 600;
-  color: var(--text);
+  font-size: 13px;
+  line-height: 20px;
+  font-weight: 500;
+  color: var(--text-secondary);
 }
 
 .restock__rules-body {
@@ -1042,9 +1185,9 @@ onBeforeUnmount(() => {
 
 .restock__rules-text {
   margin: 0;
-  font-size: 13px;
-  line-height: 21px;
-  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 19px;
+  color: var(--text-muted);
 }
 
 .restock__rules-list {
@@ -1054,9 +1197,9 @@ onBeforeUnmount(() => {
   margin: 0;
   padding-left: 0;
   list-style: none;
-  font-size: 13px;
-  line-height: 21px;
-  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 19px;
+  color: var(--text-muted);
 }
 
 .restock__rules-list li {
@@ -1064,64 +1207,6 @@ onBeforeUnmount(() => {
   flex-wrap: wrap;
   align-items: baseline;
   gap: 6px;
-}
-
-.restock__reasons {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-}
-
-.restock__reasons-title {
-  font-size: 13px;
-  line-height: 20px;
-  color: var(--text-muted);
-}
-
-.restock__hint {
-  margin: 0;
-  font-size: 13px;
-  line-height: 20px;
-  color: var(--text-muted);
-}
-
-.restock__rationale {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding-top: 16px;
-  border-top: 1px solid var(--line);
-}
-
-.restock__rationale-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-}
-
-.restock__rationale-time {
-  margin-left: auto;
-  font-size: 12px;
-  line-height: 20px;
-  color: var(--text-muted);
-  font-variant-numeric: tabular-nums;
-}
-
-.restock__rationale-title {
-  font-size: 13px;
-  line-height: 20px;
-  font-weight: 600;
-  color: var(--text-secondary);
-}
-
-.restock__rationale-text {
-  margin: 0;
-  font-size: 14px;
-  line-height: 22px;
-  color: var(--text-secondary);
-  white-space: pre-line;
 }
 
 .restock__dialog {
@@ -1137,38 +1222,47 @@ onBeforeUnmount(() => {
 }
 
 .restock__summary {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 16px;
+  margin: 0;
   padding: 16px;
   border-radius: var(--radius-control);
-  background: var(--surface-muted);
+  background: var(--surface-subtle);
 }
 
 .restock__summary-row {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 16px;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
 }
 
-.restock__summary-label {
-  font-size: 13px;
-  line-height: 20px;
+.restock__summary-row dt {
+  font-size: 12px;
+  line-height: 16px;
   color: var(--text-muted);
 }
 
-.restock__summary-value {
+.restock__summary-row dd {
+  margin: 0;
   font-size: 14px;
-  line-height: 22px;
+  line-height: 20px;
   font-weight: 600;
   color: var(--text);
-  text-align: right;
   font-variant-numeric: tabular-nums;
+  word-break: break-word;
 }
 
 .restock__quantity {
   width: 100%;
+}
+
+.restock__hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--text-muted);
 }
 
 .restock__dialog-error {
@@ -1179,11 +1273,11 @@ onBeforeUnmount(() => {
 
 .restock__request-id {
   padding: 2px 6px;
-  border-radius: var(--radius-control);
+  border-radius: var(--radius-xs);
   background: var(--surface-muted);
   color: var(--text);
-  font-size: 13px;
-  line-height: 20px;
+  font-size: 12px;
+  line-height: 18px;
   word-break: break-all;
   user-select: all;
 }
@@ -1198,13 +1292,12 @@ onBeforeUnmount(() => {
     padding: 16px;
   }
 
-  .restock__amount {
-    font-size: 24px;
-    line-height: 32px;
+  .restock__foot .el-button {
+    min-height: 44px;
   }
 
-  .restock__dialog-error-action .el-button {
-    min-height: 44px;
+  .restock__segmented :deep(.el-radio-button__inner) {
+    height: 36px;
   }
 }
 </style>

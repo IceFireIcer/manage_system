@@ -54,7 +54,7 @@ const visible = computed({
   set: (value) => emit('update:modelValue', value),
 })
 
-const drawerSize = computed(() => (viewportWidth.value < 768 ? '100%' : '720px'))
+const drawerSize = computed(() => (viewportWidth.value < 768 ? '100%' : '640px'))
 
 const drawerTitle = computed(() => {
   const name = props.consumableName || audit.value?.name || ''
@@ -215,63 +215,58 @@ onBeforeUnmount(() => {
     destroy-on-close
   >
     <div class="audit-drawer__body">
-      <div class="audit-drawer__summary">
-        <div class="audit-drawer__metric">
-          <span class="audit-drawer__metric-label">当前库存</span>
-          <span class="audit-drawer__metric-value">
+      <section class="audit-drawer__summary">
+        <div class="audit-drawer__primary">
+          <span class="audit-drawer__label">当前库存</span>
+          <span class="audit-drawer__primary-value">
             {{ audit ? formatStock(audit.current_stock) : '—' }}
           </span>
         </div>
-        <div class="audit-drawer__metric">
-          <span class="audit-drawer__metric-label">可信期初</span>
-          <span class="audit-drawer__metric-value">
-            {{ audit ? formatStock(audit.opening_stock) : '—' }}
-          </span>
-        </div>
-        <div class="audit-drawer__metric">
-          <span class="audit-drawer__metric-label">流水末值</span>
-          <span class="audit-drawer__metric-value">
-            {{ audit ? formatStock(audit.ledger_end) : '—' }}
-          </span>
-        </div>
-        <div class="audit-drawer__metric">
-          <span class="audit-drawer__metric-label">差异</span>
-          <span
-            class="audit-drawer__metric-value"
-            :class="{ 'audit-drawer__metric-value--alert': audit && audit.diff }"
-          >
-            {{ audit ? formatDiff(audit.diff) : '—' }}
-          </span>
-        </div>
-        <div class="audit-drawer__metric">
-          <span class="audit-drawer__metric-label">证据状态</span>
-          <span v-if="audit" class="status-tag" :class="evidenceMeta.className">
-            {{ evidenceMeta.label }}
-          </span>
-          <span v-else class="audit-drawer__metric-value">—</span>
-        </div>
-      </div>
+        <dl class="audit-drawer__metrics">
+          <div class="audit-drawer__metric">
+            <dt>可信期初</dt>
+            <dd>{{ audit ? formatStock(audit.opening_stock) : '—' }}</dd>
+          </div>
+          <div class="audit-drawer__metric">
+            <dt>流水末值</dt>
+            <dd>{{ audit ? formatStock(audit.ledger_end) : '—' }}</dd>
+          </div>
+          <div class="audit-drawer__metric">
+            <dt>差异</dt>
+            <dd :class="{ 'audit-drawer__metric-value--alert': audit && audit.diff }">
+              {{ audit ? formatDiff(audit.diff) : '—' }}
+            </dd>
+          </div>
+          <div class="audit-drawer__metric">
+            <dt>证据状态</dt>
+            <dd>
+              <span v-if="audit" class="status-tag" :class="evidenceMeta.className">
+                {{ evidenceMeta.label }}
+              </span>
+              <span v-else>—</span>
+            </dd>
+          </div>
+        </dl>
+      </section>
 
-      <div v-if="audit" class="audit-drawer__evidence">
+      <section v-if="audit" class="audit-drawer__evidence">
         <ul class="audit-drawer__reasons">
           <li v-for="reason in audit.evidence_reasons" :key="reason">{{ reason }}</li>
         </ul>
-        <div class="audit-drawer__checks">
+        <dl class="audit-drawer__checks">
           <div class="audit-drawer__check">
-            <span class="audit-drawer__check-label">首次异常</span>
-            <span v-if="audit.first_anomaly" class="audit-drawer__check-value">
+            <dt>首次异常</dt>
+            <dd v-if="audit.first_anomaly">
               {{ anomalyLabel(audit.first_anomaly) }}：{{ audit.first_anomaly.reason }}
-            </span>
-            <span v-else class="audit-drawer__check-value">—</span>
+            </dd>
+            <dd v-else>—</dd>
           </div>
           <div class="audit-drawer__check">
-            <span class="audit-drawer__check-label">受影响区间</span>
-            <span class="audit-drawer__check-value">
-              {{ rangeLabel(audit.affected_range) }}
-            </span>
+            <dt>受影响区间</dt>
+            <dd>{{ rangeLabel(audit.affected_range) }}</dd>
           </div>
-        </div>
-      </div>
+        </dl>
+      </section>
 
       <div v-if="error" class="audit-drawer__error">
         <p class="audit-drawer__error-text">{{ error }}</p>
@@ -286,7 +281,7 @@ onBeforeUnmount(() => {
         <div class="audit-drawer__basis">
           <div class="audit-drawer__basis-row">
             <span class="audit-drawer__basis-label">对账口径</span>
-            <el-radio-group v-model="basisKey" size="small">
+            <el-radio-group v-model="basisKey" size="small" class="audit-drawer__segmented">
               <el-radio-button
                 v-for="option in BASIS_OPTIONS"
                 :key="option.value"
@@ -295,14 +290,13 @@ onBeforeUnmount(() => {
                 {{ option.label }}
               </el-radio-button>
             </el-radio-group>
-          </div>
-          <div class="audit-drawer__basis-row">
             <el-date-picker
               v-model="cutoff"
               type="datetime"
               value-format="YYYY-MM-DD HH:mm:ss"
-              placeholder="查询时点（两种口径同时计算）"
+              placeholder="查询时点"
               clearable
+              class="audit-drawer__cutoff"
             />
           </div>
           <div class="audit-drawer__basis-stocks">
@@ -319,9 +313,6 @@ onBeforeUnmount(() => {
               按业务时间重排 {{ basisStockText(audit.business) }}
             </span>
           </div>
-          <p class="audit-drawer__basis-note">
-            按入账时间回答系统当时账面余额；按业务时间重排仅作补录解释，不替代账面余额。
-          </p>
         </div>
 
         <el-table
@@ -381,7 +372,7 @@ onBeforeUnmount(() => {
         <EmptyState
           v-else
           title="该时点没有账面记录"
-          description="所选时点早于首笔入账，或该耗材还没有库存事件。"
+          description="该时点无库存事件。"
         />
       </template>
     </div>
@@ -404,36 +395,68 @@ onBeforeUnmount(() => {
 .audit-drawer__summary {
   display: flex;
   flex-wrap: wrap;
+  align-items: flex-start;
   gap: 24px;
   padding: 16px;
-  border: 1px solid var(--line);
   border-radius: var(--radius-panel);
-  background: var(--surface-muted);
+  background: var(--surface-subtle);
+}
+
+.audit-drawer__primary {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 128px;
+}
+
+.audit-drawer__label {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--text-muted);
+}
+
+.audit-drawer__primary-value {
+  font-size: 28px;
+  line-height: 32px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.audit-drawer__metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  flex: 1;
+  gap: 8px 16px;
+  margin: 0;
 }
 
 .audit-drawer__metric {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  min-width: 110px;
+  gap: 3px;
+  min-width: 0;
 }
 
-.audit-drawer__metric-label {
-  font-size: 13px;
-  line-height: 20px;
+.audit-drawer__metric dt {
+  margin: 0;
+  font-size: 12px;
+  line-height: 16px;
   color: var(--text-muted);
 }
 
-.audit-drawer__metric-value {
-  font-size: 16px;
-  line-height: 24px;
+.audit-drawer__metric dd {
+  margin: 0;
+  font-size: 14px;
+  line-height: 20px;
   font-weight: 600;
   color: var(--text);
   font-variant-numeric: tabular-nums;
 }
 
 .audit-drawer__metric-value--alert {
-  color: var(--danger, #d9534f);
+  color: var(--danger);
 }
 
 .audit-drawer__evidence {
@@ -441,38 +464,41 @@ onBeforeUnmount(() => {
   flex-direction: column;
   gap: 12px;
   padding: 16px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-soft);
   border-radius: var(--radius-panel);
 }
 
 .audit-drawer__reasons {
   margin: 0;
-  padding-left: 18px;
-  font-size: 14px;
-  line-height: 22px;
+  padding-left: 16px;
+  font-size: 12px;
+  line-height: 19px;
   color: var(--text-secondary);
 }
 
 .audit-drawer__checks {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
+  margin: 0;
 }
 
 .audit-drawer__check {
-  display: flex;
-  gap: 12px;
-  font-size: 14px;
-  line-height: 22px;
+  display: grid;
+  grid-template-columns: 84px minmax(0, 1fr);
+  gap: 8px;
+  font-size: 12px;
+  line-height: 19px;
 }
 
-.audit-drawer__check-label {
-  flex: none;
+.audit-drawer__check dt {
   color: var(--text-muted);
 }
 
-.audit-drawer__check-value {
+.audit-drawer__check dd {
+  margin: 0;
   color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
 }
 
 .audit-drawer__basis {
@@ -485,41 +511,55 @@ onBeforeUnmount(() => {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 12px;
+  gap: 8px 12px;
 }
 
 .audit-drawer__basis-label {
-  font-size: 14px;
-  line-height: 22px;
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 500;
   color: var(--text-muted);
+}
+
+.audit-drawer__segmented :deep(.el-radio-button__inner) {
+  border-color: var(--line);
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-weight: 500;
+  box-shadow: none;
+}
+
+.audit-drawer__segmented :deep(.el-radio-button.is-active .el-radio-button__inner) {
+  border-color: var(--primary-200);
+  background: var(--primary-soft);
+  color: var(--primary);
+  box-shadow: none;
+}
+
+.audit-drawer__cutoff {
+  width: 220px;
 }
 
 .audit-drawer__basis-stocks {
   display: flex;
   flex-wrap: wrap;
-  gap: 12px;
+  gap: 8px;
 }
 
 .audit-drawer__basis-stock {
-  padding: 4px 10px;
+  padding: 3px 10px;
   border: 1px solid var(--line);
-  border-radius: 999px;
-  font-size: 13px;
-  line-height: 20px;
+  border-radius: var(--radius-pill);
+  font-size: 12px;
+  line-height: 18px;
   color: var(--text-secondary);
   font-variant-numeric: tabular-nums;
 }
 
 .audit-drawer__basis-stock--active {
-  border-color: var(--primary);
+  border-color: var(--primary-200);
+  background: var(--primary-50);
   color: var(--primary);
-}
-
-.audit-drawer__basis-note {
-  margin: 0;
-  font-size: 13px;
-  line-height: 20px;
-  color: var(--text-muted);
 }
 
 .audit-drawer__source {
@@ -530,14 +570,14 @@ onBeforeUnmount(() => {
 }
 
 .audit-drawer__source-no {
-  font-size: 13px;
-  line-height: 20px;
+  font-size: 12px;
+  line-height: 18px;
   color: var(--text-secondary);
   word-break: break-all;
 }
 
 .audit-drawer__muted {
-  font-size: 13px;
+  font-size: 12px;
   color: var(--text-muted);
 }
 
@@ -547,14 +587,14 @@ onBeforeUnmount(() => {
   align-items: flex-start;
   gap: 12px;
   padding: 24px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-soft);
   border-radius: var(--radius-panel);
 }
 
 .audit-drawer__error-text {
   margin: 0;
-  font-size: 14px;
-  line-height: 22px;
+  font-size: 13px;
+  line-height: 20px;
   color: var(--text-secondary);
 }
 
@@ -573,14 +613,28 @@ onBeforeUnmount(() => {
     gap: 16px;
   }
 
-  .audit-drawer__metric {
-    min-width: 96px;
+  .audit-drawer__metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .audit-drawer__cutoff {
+    width: 100%;
+  }
+
+  .audit-drawer__footer .el-button {
+    min-height: 44px;
   }
 }
 </style>
 
 <style>
 .audit-drawer .el-drawer__body {
-  padding: 0 20px 20px;
+  padding: 0 24px 24px;
+}
+
+@media (max-width: 767px) {
+  .audit-drawer .el-drawer__body {
+    padding: 0 16px 24px;
+  }
 }
 </style>

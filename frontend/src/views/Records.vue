@@ -159,25 +159,22 @@ const appliedSummary = computed(() => {
 
 const emptyStateMeta = computed(() => {
   if (hasAppliedFilters.value) {
-    const summary = appliedSummary.value.length
-      ? `当前条件：${appliedSummary.value.join('；')}。`
-      : ''
     return {
       title: '没有符合条件的记录',
-      description: `${summary}可清除筛选查看全部记录。`,
+      description: '调整筛选条件或清除筛选后重新查询。',
       action: 'clear',
     }
   }
   if (isStudent.value) {
     return {
-      title: '你还没有领用记录',
-      description: '完成一次领用登记后，本人流水会出现在这里。',
+      title: '还没有领用记录',
+      description: '完成一次领用登记后会显示在这里。',
       action: 'create',
     }
   }
   return {
     title: '暂无领用流水',
-    description: '还没有登记过领用，可先创建一条领用记录。',
+    description: '登记领用后会显示在这里。',
     action: 'create',
   }
 })
@@ -721,8 +718,6 @@ onMounted(async () => {
       <template #actions>
         <el-button
           v-if="isStaff"
-          type="primary"
-          plain
           :loading="exporting"
           :disabled="exporting"
           @click="handleExport"
@@ -762,7 +757,7 @@ onMounted(async () => {
       </template>
     </el-alert>
 
-    <form class="panel records__filters-panel" @submit.prevent="handleSearch">
+    <form class="panel records__toolbar" @submit.prevent="handleSearch">
       <div class="records__filters">
         <div class="records__filter">
           <span class="records__filter-label">耗材</span>
@@ -846,7 +841,7 @@ onMounted(async () => {
 
         <div class="records__filter-actions">
           <el-button type="primary" native-type="submit">查询</el-button>
-          <el-button @click="handleReset">重置</el-button>
+          <el-button text @click="handleReset">重置</el-button>
         </div>
       </div>
 
@@ -860,19 +855,20 @@ onMounted(async () => {
         <el-button link type="primary" @click="fetchUserOptions">重试</el-button>
       </p>
 
-      <div class="records__quick" role="group" aria-label="快捷筛选">
-        <span class="records__quick-label">快捷</span>
-        <el-button
-          v-for="option in QUICK_OPTIONS"
-          :key="option.key"
-          size="small"
-          :type="quickKey === option.key ? 'primary' : ''"
-          :plain="quickKey !== option.key"
-          :aria-pressed="quickKey === option.key"
-          @click="handleQuick(option.key)"
-        >
-          {{ option.label }}
-        </el-button>
+      <div class="records__quick">
+        <div class="records__quick-group" role="group" aria-label="快捷筛选">
+          <el-button
+            v-for="option in QUICK_OPTIONS"
+            :key="option.key"
+            size="small"
+            class="records__quick-btn"
+            :class="{ 'records__quick-btn--on': quickKey === option.key }"
+            :aria-pressed="quickKey === option.key"
+            @click="handleQuick(option.key)"
+          >
+            {{ option.label }}
+          </el-button>
+        </div>
       </div>
     </form>
 
@@ -895,7 +891,7 @@ onMounted(async () => {
 
       <div v-if="loadError && !initialized" class="records__error" role="alert">
         <p class="records__error-text">{{ loadError }}</p>
-        <el-button type="primary" plain @click="fetchRecords()">重试</el-button>
+        <el-button @click="fetchRecords()">重试</el-button>
       </div>
 
       <div v-else-if="loading && !initialized" class="records__loading">
@@ -976,76 +972,26 @@ onMounted(async () => {
               </span>
             </template>
           </el-table-column>
-          <el-table-column label="备注" min-width="160" show-overflow-tooltip>
-            <template #default="{ row }">
-              <span :class="{ 'records__muted': !row.remark }">{{ row.remark || '—' }}</span>
-            </template>
-          </el-table-column>
-          <el-table-column label="补录" width="110">
-            <template #default="{ row }">
-              <el-tooltip
-                v-if="row.backfill_mode"
-                :content="backfillTitle(row)"
-                placement="top"
-              >
-                <span class="status-tag" :class="backfillMeta(row).className">
-                  {{ backfillMeta(row).label }}
-                </span>
-              </el-tooltip>
-              <span v-else class="records__muted">—</span>
-            </template>
-          </el-table-column>
-          <el-table-column label="纠错" width="100">
-            <template #default="{ row }">
-              <span
-                v-if="row.correction_status"
-                class="status-tag"
-                :class="correctionMeta(row).className"
-              >
-                {{ correctionMeta(row).label }}
-              </span>
-              <span v-else class="records__muted">—</span>
-            </template>
-          </el-table-column>
-          <el-table-column label="关联" min-width="150">
+          <el-table-column label="操作" width="180" fixed="right">
             <template #default="{ row }">
               <el-button
                 v-if="row.related"
                 link
                 type="primary"
+                :aria-label="`查看关联流水 #${row.id}`"
                 @click="openDetail(row.related, $event)"
               >
-                {{ relatedLabel(row) }}
+                关联
               </el-button>
-              <span v-else class="records__muted">—</span>
-            </template>
-          </el-table-column>
-          <el-table-column label="操作" width="260" fixed="right">
-            <template #default="{ row }">
-              <el-button link type="primary" @click="openDetail(row, $event)">查看详情</el-button>
-              <el-button
-                v-if="canStockActionRow(row)"
-                link
-                type="primary"
-                @click="openStockAction(row, 'return', $event)"
-              >
-                退库
-              </el-button>
-              <el-button
-                v-if="canScrapRow(row)"
-                link
-                type="warning"
-                @click="openStockAction(row, 'scrap', $event)"
-              >
-                报损
-              </el-button>
+              <el-button link type="primary" @click="openDetail(row, $event)">详情</el-button>
               <el-button
                 v-if="canReverseRow(row)"
                 link
                 type="danger"
+                :aria-label="`撤销领用 #${row.id}`"
                 @click="openReversal(row, $event)"
               >
-                红冲
+                撤销领用
               </el-button>
             </template>
           </el-table-column>
@@ -1058,7 +1004,7 @@ onMounted(async () => {
         >
           <template #action>
             <el-button v-if="emptyStateMeta.action === 'clear'" @click="handleReset">清除筛选</el-button>
-            <el-button v-else type="primary" @click="router.push('/requisition')">登记领用</el-button>
+            <el-button v-else @click="router.push('/requisition')">登记领用</el-button>
           </template>
         </EmptyState>
 
@@ -1112,7 +1058,7 @@ onMounted(async () => {
 
 <style scoped>
 .records__receipt {
-  margin-bottom: 16px;
+  margin-bottom: var(--space-4);
 }
 
 .records__receipt-text {
@@ -1121,16 +1067,16 @@ onMounted(async () => {
   line-height: 22px;
 }
 
-.records__filters-panel {
-  padding: 16px 24px;
-  margin-bottom: 16px;
+.records__toolbar {
+  padding: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-4);
 }
 
 .records__filters {
   display: flex;
   flex-wrap: wrap;
   align-items: flex-end;
-  gap: 12px 16px;
+  gap: var(--space-2) var(--space-3);
 }
 
 .records__filter {
@@ -1141,30 +1087,32 @@ onMounted(async () => {
 }
 
 .records__filter-label {
-  font-size: 13px;
-  line-height: 20px;
+  font-size: 12px;
+  line-height: 18px;
+  font-weight: 500;
   color: var(--text-muted);
 }
 
 .records__filter-consumable {
-  width: 200px;
+  width: 190px;
 }
 
 .records__filter-user {
-  width: 160px;
+  width: 156px;
 }
 
 .records__filter-date {
-  width: 240px;
+  width: 232px;
 }
 
 .records__filter-type,
 .records__filter-status {
-  width: 120px;
+  width: 112px;
 }
 
 .records__filter-actions {
   display: flex;
+  align-items: center;
   gap: 8px;
   margin-left: auto;
 }
@@ -1184,27 +1132,52 @@ onMounted(async () => {
 }
 
 .records__quick {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid var(--line);
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--line-soft);
 }
 
-.records__quick-label {
+.records__quick-group {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--radius-control);
+  background: var(--surface-muted);
+}
+
+.records__quick-btn.el-button {
+  height: 28px;
+  min-height: 28px;
+  padding: 0 12px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-secondary);
   font-size: 13px;
-  line-height: 20px;
-  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.records__quick-btn.el-button:hover {
+  border-color: transparent;
+  background: var(--surface);
+  color: var(--text);
+}
+
+.records__quick-btn.el-button.records__quick-btn--on {
+  border-color: transparent;
+  background: var(--surface);
+  box-shadow: var(--shadow-xs);
+  color: var(--text);
+  font-weight: 600;
 }
 
 .records__list {
-  padding: 16px 24px 24px;
+  padding: var(--space-4);
 }
 
 .records__stale {
-  margin-bottom: 16px;
+  margin-bottom: var(--space-4);
 }
 
 .records__stale-text {
@@ -1217,10 +1190,8 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 16px;
-  padding: 24px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-panel);
+  gap: var(--space-3);
+  padding: var(--space-5);
 }
 
 .records__error-text {
@@ -1233,7 +1204,6 @@ onMounted(async () => {
 .records__loading {
   padding: 8px 0;
 }
-
 
 .records__refreshing {
   margin: 0 0 8px;
@@ -1267,7 +1237,7 @@ onMounted(async () => {
 .records__footer {
   display: flex;
   justify-content: flex-end;
-  margin-top: 16px;
+  margin-top: var(--space-4);
 }
 
 .records__table :deep(.records__row--reversed) {
@@ -1275,12 +1245,12 @@ onMounted(async () => {
 }
 
 @media (max-width: 767px) {
-  .records__filters-panel {
-    padding: 16px;
+  .records__toolbar {
+    padding: var(--space-3) var(--space-3) var(--space-4);
   }
 
   .records__list {
-    padding: 16px;
+    padding: var(--space-3);
   }
 
   .records__filter,
@@ -1290,11 +1260,29 @@ onMounted(async () => {
   .records__filter-type,
   .records__filter-status {
     width: 100%;
+    flex: 1 1 100%;
   }
 
   .records__filter-actions {
     width: 100%;
     margin-left: 0;
+  }
+
+  .records__filter-actions .el-button {
+    flex: 1 1 0;
+    min-height: 44px;
+    margin-left: 0;
+  }
+
+  .records__quick-group {
+    display: flex;
+    width: 100%;
+  }
+
+  .records__quick-btn.el-button {
+    flex: 1 1 0;
+    min-height: 44px;
+    padding: 0 8px;
   }
 }
 </style>

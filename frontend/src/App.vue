@@ -33,7 +33,10 @@ async function retry() {
       </span>
       <span class="startup__name">班级实训耗材智能管理系统</span>
     </div>
-    <p class="startup__text">正在连接系统…</p>
+    <p class="startup__text">
+      <span class="startup__spinner" aria-hidden="true" />
+      正在连接系统…
+    </p>
   </div>
 
   <div v-else-if="failed" class="startup" role="alert">
@@ -62,39 +65,61 @@ async function retry() {
   gap: 16px;
   min-height: 100vh;
   padding: 24px;
-  background: var(--page);
+  background:
+    radial-gradient(700px 380px at 50% -6%, var(--brand-glow), transparent 70%),
+    var(--page);
   text-align: center;
 }
 
 .startup__brand {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 11px;
 }
 
 .startup__mark {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 40px;
-  height: 40px;
-  border-radius: var(--radius-panel);
-  background: var(--primary-soft);
-  color: var(--primary);
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  background: var(--brand-mark-bg);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 14%);
+  color: #FFFFFF;
 }
 
 .startup__name {
-  font-size: 16px;
+  font-size: 15px;
   line-height: 24px;
   font-weight: 600;
+  letter-spacing: 0.01em;
   color: var(--text);
 }
 
 .startup__text {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   margin: 0;
-  font-size: 14px;
-  line-height: 22px;
+  font-size: 13px;
+  line-height: 20px;
   color: var(--text-muted);
+}
+
+.startup__spinner {
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid var(--line-strong);
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: startup-spin 0.8s linear infinite;
+}
+
+@keyframes startup-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .startup__title {
@@ -102,14 +127,16 @@ async function retry() {
   font-size: 24px;
   line-height: 32px;
   font-weight: 600;
+  letter-spacing: -0.015em;
   color: var(--text);
 }
 
 .startup__desc {
-  max-width: 420px;
+  max-width: 44ch;
   margin: 0;
   font-size: 14px;
   line-height: 22px;
   color: var(--text-muted);
+  text-wrap: pretty;
 }
 </style>

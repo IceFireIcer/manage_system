@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { Close } from '@element-plus/icons-vue'
 import api from '../api'
 import { useUserStore } from '../stores/user'
 import PageHeader from '../components/PageHeader.vue'
@@ -140,6 +141,13 @@ function quantityOverStock(row) {
   if (!item) return false
   return row.quantity > item.current_stock
 }
+
+const totalQuantity = computed(() =>
+  rows.value.reduce((sum, row) => {
+    const value = Number(row.quantity)
+    return Number.isInteger(value) && value > 0 ? sum + value : sum
+  }, 0),
+)
 
 function clearRowErrors() {
   Object.keys(rowErrors).forEach((key) => delete rowErrors[key])
@@ -1023,7 +1031,7 @@ onBeforeUnmount(() => {
     <section
       v-if="result"
       ref="receiptSectionRef"
-      class="panel requisition__panel"
+      class="panel requisition__receipt"
       tabindex="-1"
       aria-labelledby="requisition-receipt-title"
     >
@@ -1033,7 +1041,7 @@ onBeforeUnmount(() => {
             已登记 {{ result.count }} 项耗材
           </h2>
           <p v-if="result.orderNo" class="requisition__receipt-desc">
-            领用单号：{{ result.orderNo }}
+            领用单号 {{ result.orderNo }}
           </p>
           <p class="requisition__receipt-desc">
             业务时间 {{ formatMoment(result.businessAt) }} · 入账时间 {{ formatMoment(result.postedAt) }}
@@ -1043,7 +1051,7 @@ onBeforeUnmount(() => {
             （{{ ROLE_NAMES[result.receipt.operator_role] ?? result.receipt.operator_role }}）
           </p>
           <p v-if="result.receipt?.backfill_reason" class="requisition__receipt-desc">
-            补录原因：{{ result.receipt.backfill_reason }}
+            补录原因 {{ result.receipt.backfill_reason }}
           </p>
         </div>
         <span class="status-tag status-tag--success">
@@ -1105,34 +1113,38 @@ onBeforeUnmount(() => {
       </div>
     </section>
 
-    <section v-else class="panel requisition__panel" :aria-busy="consumableLoading || submitting">
-      <div v-if="consumableLoading && !consumables.length" class="requisition__loading">
+    <section v-else class="requisition__shell" :aria-busy="consumableLoading || submitting">
+      <div v-if="consumableLoading && !consumables.length" class="panel requisition__state">
         <el-skeleton :rows="5" animated />
       </div>
 
-      <div v-else-if="consumableError && !consumables.length" class="requisition__block" role="alert">
-        <p class="requisition__block-text">{{ consumableError }}</p>
-        <el-button type="primary" plain @click="fetchConsumables">重试</el-button>
+      <div v-else-if="consumableError && !consumables.length" class="panel requisition__state" role="alert">
+        <p class="requisition__state-text">{{ consumableError }}</p>
+        <el-button @click="fetchConsumables">重试</el-button>
       </div>
 
-      <EmptyState
-        v-else-if="!consumables.length"
-        title="暂无可领用耗材"
-        :description="isAdmin ? '先添加至少一项启用耗材，再回来登记领用。' : '当前没有启用的耗材，请联系班委建档。'"
-      >
-        <template #action>
-          <el-button v-if="isAdmin" type="primary" @click="goConsumables">去建档</el-button>
-        </template>
-      </EmptyState>
+      <div v-else-if="!consumables.length" class="panel requisition__state">
+        <EmptyState
+          title="暂无可领用耗材"
+          :description="isAdmin ? '先添加至少一项启用耗材。' : '请联系班委建档。'"
+        >
+          <template #action>
+            <el-button v-if="isAdmin" type="primary" @click="goConsumables">去建档</el-button>
+          </template>
+        </EmptyState>
+      </div>
 
-      <template v-else>
+      <div v-else class="requisition__grid">
         <el-form
+          id="requisition-form"
           label-position="top"
-          class="requisition__form"
+          class="requisition__main"
           :model="form"
           @submit.prevent="handleSubmit"
           @focusin="keepFocusedFieldVisible"
         >
+          <button type="submit" class="sr-only" tabindex="-1" aria-hidden="true">提交领用</button>
+
           <el-alert
             v-if="locked"
             type="error"
@@ -1184,7 +1196,7 @@ onBeforeUnmount(() => {
                 请求超时或连接中断，可按请求标识查询处理结果；确认前请勿重复提交相同明细。
               </p>
               <p v-if="requestStatus?.order_no" class="requisition__alert-text">
-                领用单号：{{ requestStatus.order_no }} · 状态：{{
+                领用单号 {{ requestStatus.order_no }} · 状态 {{
                   STATUS_NAMES[requestStatus.status] ?? requestStatus.status
                 }}
               </p>
@@ -1225,256 +1237,317 @@ onBeforeUnmount(() => {
             </template>
           </el-alert>
 
-          <div class="requisition__meta">
-            <el-form-item
-              label="领用人"
-              class="requisition__meta-item"
-              :error="metaErrors.user"
-              :required="!isStudent"
-            >
-              <el-input
-                v-if="isStudent"
-                :model-value="`本人（${userStore.user?.name ?? ''}）`"
-                disabled
-                aria-label="领用人"
-              />
-              <el-select
-                v-else
-                ref="userSelectRef"
-                v-model="form.userId"
-                filterable
-                :loading="userLoading"
-                :disabled="submitting"
-                placeholder="选择领用人"
-                class="requisition__user-select"
-                aria-label="领用人"
-                @change="handleUserChange"
+          <div class="panel requisition__card">
+            <h2 class="requisition__card-title">领用信息</h2>
+            <div class="requisition__meta">
+              <el-form-item
+                label="领用人"
+                class="requisition__meta-item"
+                :error="metaErrors.user"
+                :required="!isStudent"
               >
-                <el-option
-                  v-for="option in userOptions"
-                  :key="option.id"
-                  :label="`${option.name}（${ROLE_NAMES[option.role] ?? option.role}·${option.account}）`"
-                  :value="option.id"
+                <el-input
+                  v-if="isStudent"
+                  :model-value="`本人（${userStore.user?.name ?? ''}）`"
+                  disabled
+                  aria-label="领用人"
                 />
-              </el-select>
-              <p v-if="!isStudent && userLoadError" class="requisition__hint requisition__hint--error">
-                {{ userLoadError }}
-                <el-button link type="primary" @click="fetchUserOptions">重试</el-button>
-              </p>
-              <p v-else-if="!isStudent" class="requisition__hint">可搜索姓名，为学生代登记</p>
-            </el-form-item>
-
-            <el-form-item
-              label="领用时间"
-              class="requisition__meta-item"
-              :error="metaErrors.time"
-            >
-              <div class="requisition__time">
-                <el-radio-group v-model="form.timeMode" aria-label="领用时间方式" :disabled="submitting" @change="handleTimeModeChange">
-                  <el-radio-button value="now">现在</el-radio-button>
-                  <el-radio-button value="backfill">补录</el-radio-button>
-                </el-radio-group>
-                <el-date-picker
-                  v-if="form.timeMode === 'backfill'"
-                  ref="timePickerRef"
-                  v-model="form.backfillAt"
-                  type="datetime"
-                  format="YYYY-MM-DD HH:mm"
-                  value-format="YYYY-MM-DD[T]HH:mm:00"
-                  :disabled-date="disabledBackfillDate"
-                  :disabled="submitting"
-                  placeholder="选择补录时间"
-                  class="requisition__time-picker"
-                  aria-label="补录时间"
-                  @change="metaErrors.time = ''"
-                />
-              </div>
-              <p class="requisition__hint">
-                {{ form.timeMode === 'now' ? '提交时使用服务端当前时间' : `可选最近 ${MAX_BACKFILL_DAYS} 天内；超期由教师或班委走受控调整` }}
-              </p>
-            </el-form-item>
-
-            <el-form-item
-              v-if="form.timeMode === 'backfill'"
-              label="补录原因"
-              class="requisition__meta-item"
-              :error="metaErrors.reason"
-            >
-              <el-input
-                ref="reasonInputRef"
-                v-model="form.backfillReason"
-                type="textarea"
-                :rows="2"
-                maxlength="500"
-                show-word-limit
-                :disabled="submitting"
-                placeholder="说明漏登原因，便于追溯"
-                class="requisition__backfill-reason"
-              />
-            </el-form-item>
-          </div>
-
-          <div class="requisition__rows-head">
-            <h3 class="requisition__rows-title">领用明细</h3>
-            <span class="requisition__rows-count">已添加 {{ rows.length }}／{{ MAX_ROWS }} 种</span>
-          </div>
-
-          <div class="requisition__rows">
-            <div
-              v-for="(row, index) in rows"
-              :key="row.key"
-              :ref="(el) => setRowDom(el, index)"
-              class="requisition__row"
-              :class="{ 'requisition__row--error': rowErrors[index] }"
-              role="group"
-              :aria-label="`第 ${index + 1} 行明细`"
-              tabindex="-1"
-            >
-              <div class="requisition__row-head">
-                <span class="requisition__row-index">明细 {{ index + 1 }}</span>
-                <span v-if="rowItem(row)" class="requisition__row-stock">
-                  当前库存 {{ rowStockText(row) }}
-                </span>
-              </div>
-
-              <div class="requisition__row-fields">
                 <el-select
-                  :ref="(el) => setSelectRef(el, index)"
-                  v-model="row.consumableId"
+                  v-else
+                  ref="userSelectRef"
+                  v-model="form.userId"
                   filterable
-                  placeholder="选择耗材"
-                  :loading="consumableLoading"
+                  :loading="userLoading"
                   :disabled="submitting"
-                  class="requisition__consumable"
-                  :aria-label="`第 ${index + 1} 行耗材`"
-                  :aria-describedby="rowErrors[index] ? `requisition-row-error-${index}` : undefined"
-                  @change="handleRowConsumableChange(index)"
+                  placeholder="选择领用人"
+                  class="requisition__user-select"
+                  aria-label="领用人"
+                  @change="handleUserChange"
                 >
                   <el-option
-                    v-for="item in consumables"
-                    :key="item.id"
-                    :label="optionLabel(item, index)"
-                    :value="item.id"
-                    :disabled="isOptionDisabled(item, index)"
+                    v-for="option in userOptions"
+                    :key="option.id"
+                    :label="`${option.name}（${ROLE_NAMES[option.role] ?? option.role}·${option.account}）`"
+                    :value="option.id"
                   />
                 </el-select>
+                <p v-if="!isStudent && userLoadError" class="requisition__hint requisition__hint--error">
+                  {{ userLoadError }}
+                  <el-button link type="primary" @click="fetchUserOptions">重试</el-button>
+                </p>
+              </el-form-item>
 
-                <div class="requisition__quantity">
-                  <span class="requisition__quantity-label">数量</span>
-                  <el-input-number
-                    :ref="(el) => setQtyRef(el, index)"
-                    v-model="row.quantity"
-                    :min="1"
-                    :step="1"
-                    step-strictly
-                    :disabled="submitting || !row.consumableId"
-                    class="requisition__quantity-input"
-                    :aria-label="`第 ${index + 1} 行数量`"
-                    @change="handleQuantityChange(index)"
-                  />
-                  <span class="requisition__quantity-unit">{{ rowUnit(row) }}</span>
-                </div>
-
-                <el-button
-                  class="requisition__remove"
-                  :disabled="submitting || rows.length <= 1"
-                  :aria-label="`移除第 ${index + 1} 行`"
-                  @click="removeRow(index)"
-                >
-                  移除
-                </el-button>
-              </div>
-
-              <p
-                v-if="rowErrors[index]"
-                :id="`requisition-row-error-${index}`"
-                class="requisition__row-error"
-                role="alert"
+              <el-form-item
+                label="领用时间"
+                class="requisition__meta-item"
+                :error="metaErrors.time"
               >
-                {{ rowErrors[index] }}
-              </p>
-              <p v-else-if="quantityOverStock(row)" class="requisition__row-warning">
-                数量超出当前可用量（{{ rowStockText(row) }}），提交前建议
-                <el-button link type="primary" @click="refreshAvailableStock(index)">刷新可用量</el-button>
-              </p>
-              <p v-else-if="rowItem(row)" class="requisition__row-hint">
-                可用 {{ rowStockText(row) }}
-              </p>
+                <div class="requisition__time">
+                  <el-radio-group v-model="form.timeMode" aria-label="领用时间方式" :disabled="submitting" @change="handleTimeModeChange">
+                    <el-radio-button value="now">现在</el-radio-button>
+                    <el-radio-button value="backfill">补录</el-radio-button>
+                  </el-radio-group>
+                  <el-date-picker
+                    v-if="form.timeMode === 'backfill'"
+                    ref="timePickerRef"
+                    v-model="form.backfillAt"
+                    type="datetime"
+                    format="YYYY-MM-DD HH:mm"
+                    value-format="YYYY-MM-DD[T]HH:mm:00"
+                    :disabled-date="disabledBackfillDate"
+                    :disabled="submitting"
+                    placeholder="选择补录时间"
+                    class="requisition__time-picker"
+                    aria-label="补录时间"
+                    @change="metaErrors.time = ''"
+                  />
+                </div>
+                <p v-if="form.timeMode === 'backfill'" class="requisition__hint">
+                  可选最近 {{ MAX_BACKFILL_DAYS }} 天内，超期需受控调整
+                </p>
+              </el-form-item>
+
+              <el-form-item
+                v-if="form.timeMode === 'backfill'"
+                label="补录原因"
+                class="requisition__meta-item requisition__meta-item--full"
+                :error="metaErrors.reason"
+              >
+                <el-input
+                  ref="reasonInputRef"
+                  v-model="form.backfillReason"
+                  type="textarea"
+                  :rows="2"
+                  maxlength="500"
+                  show-word-limit
+                  :disabled="submitting"
+                  placeholder="说明漏登原因，便于追溯"
+                  class="requisition__backfill-reason"
+                />
+              </el-form-item>
             </div>
           </div>
 
-          <div class="requisition__rows-actions">
-            <el-button ref="addButtonRef" :disabled="submitting || rows.length >= MAX_ROWS" @click="addRow">
-              添加明细
-            </el-button>
-            <el-button v-if="recentItems.length" :disabled="submitting || locked" @click="applyRecent">
-              复用最近明细
-            </el-button>
-            <span v-if="rows.length >= MAX_ROWS" class="requisition__rows-limit">
-              每次最多登记 {{ MAX_ROWS }} 种耗材
-            </span>
+          <div class="panel requisition__card">
+            <div class="requisition__card-head">
+              <h2 class="requisition__card-title">领用明细</h2>
+              <span class="requisition__card-meta">已添加 {{ rows.length }}／{{ MAX_ROWS }} 种</span>
+            </div>
+
+            <div class="requisition__rows">
+              <div
+                v-for="(row, index) in rows"
+                :key="row.key"
+                :ref="(el) => setRowDom(el, index)"
+                class="requisition__row"
+                :class="{ 'requisition__row--error': rowErrors[index] }"
+                role="group"
+                :aria-label="`第 ${index + 1} 行明细`"
+                tabindex="-1"
+              >
+                <div class="requisition__row-head">
+                  <span class="requisition__row-index" aria-hidden="true">{{ index + 1 }}</span>
+                  <span v-if="rowItem(row)" class="requisition__row-stock">
+                    当前库存 {{ rowStockText(row) }}
+                  </span>
+                  <el-button
+                    class="requisition__remove"
+                    :disabled="submitting || rows.length <= 1"
+                    :aria-label="`移除第 ${index + 1} 行`"
+                    @click="removeRow(index)"
+                  >
+                    <el-icon :size="14"><Close /></el-icon>
+                  </el-button>
+                </div>
+
+                <div class="requisition__row-fields">
+                  <el-select
+                    :ref="(el) => setSelectRef(el, index)"
+                    v-model="row.consumableId"
+                    filterable
+                    placeholder="选择耗材"
+                    :loading="consumableLoading"
+                    :disabled="submitting"
+                    class="requisition__consumable"
+                    :aria-label="`第 ${index + 1} 行耗材`"
+                    :aria-describedby="rowErrors[index] ? `requisition-row-error-${index}` : undefined"
+                    @change="handleRowConsumableChange(index)"
+                  >
+                    <el-option
+                      v-for="item in consumables"
+                      :key="item.id"
+                      :label="optionLabel(item, index)"
+                      :value="item.id"
+                      :disabled="isOptionDisabled(item, index)"
+                    />
+                  </el-select>
+
+                  <div class="requisition__quantity">
+                    <span class="requisition__quantity-label">数量</span>
+                    <el-input-number
+                      :ref="(el) => setQtyRef(el, index)"
+                      v-model="row.quantity"
+                      :min="1"
+                      :step="1"
+                      step-strictly
+                      :disabled="submitting || !row.consumableId"
+                      class="requisition__quantity-input"
+                      :aria-label="`第 ${index + 1} 行数量`"
+                      @change="handleQuantityChange(index)"
+                    />
+                    <span class="requisition__quantity-unit">{{ rowUnit(row) }}</span>
+                  </div>
+                </div>
+
+                <p
+                  v-if="rowErrors[index]"
+                  :id="`requisition-row-error-${index}`"
+                  class="requisition__row-error"
+                  role="alert"
+                >
+                  {{ rowErrors[index] }}
+                </p>
+                <p v-else-if="quantityOverStock(row)" class="requisition__row-warning">
+                  超出可用量（{{ rowStockText(row) }}）
+                  <el-button link type="primary" @click="refreshAvailableStock(index)">刷新可用量</el-button>
+                </p>
+              </div>
+            </div>
+
+            <div class="requisition__rows-actions">
+              <el-button ref="addButtonRef" :disabled="submitting || rows.length >= MAX_ROWS" @click="addRow">
+                添加明细
+              </el-button>
+              <el-button v-if="recentItems.length" text :disabled="submitting || locked" @click="applyRecent">
+                复用最近明细
+              </el-button>
+              <span v-if="rows.length >= MAX_ROWS" class="requisition__rows-limit">
+                每次最多登记 {{ MAX_ROWS }} 种耗材
+              </span>
+            </div>
           </div>
 
-          <el-form-item label="备注" class="requisition__remark">
-            <el-input
-              v-model="form.remark"
-              type="textarea"
-              :rows="2"
-              maxlength="255"
-              show-word-limit
-              placeholder="选填，例如实训课程或用途"
-              aria-label="备注"
-              :disabled="submitting"
-
-            />
-          </el-form-item>
-
-          <div class="requisition__actions">
-            <el-button :disabled="submitting || locked" @click="handleReset">重置</el-button>
-            <el-button
-              type="primary"
-              native-type="submit"
-              :loading="submitting"
-              :disabled="submitting || uncertain || locked"
-            >
-              提交领用
-            </el-button>
+          <div class="panel requisition__card">
+            <el-form-item label="备注" class="requisition__remark">
+              <el-input
+                v-model="form.remark"
+                type="textarea"
+                :rows="2"
+                maxlength="255"
+                show-word-limit
+                placeholder="选填，例如实训课程或用途"
+                aria-label="备注"
+                :disabled="submitting"
+              />
+            </el-form-item>
           </div>
         </el-form>
-      </template>
+
+        <aside class="requisition__aside" aria-label="领用摘要">
+          <div class="panel requisition__summary">
+            <p class="requisition__summary-label">合计数量</p>
+            <p class="requisition__summary-value">{{ totalQuantity }}</p>
+            <dl class="requisition__summary-list">
+              <div class="requisition__summary-item">
+                <dt>明细</dt>
+                <dd>{{ rows.length }} 种</dd>
+              </div>
+            </dl>
+            <div class="requisition__summary-actions">
+              <el-button
+                type="primary"
+                :loading="submitting"
+                :disabled="submitting || uncertain || locked"
+                @click="handleSubmit"
+              >
+                提交领用
+              </el-button>
+              <el-button :disabled="submitting || locked" @click="handleReset">重置</el-button>
+            </div>
+          </div>
+        </aside>
+      </div>
     </section>
   </div>
 </template>
 
 <style scoped>
-.requisition__panel {
-  padding: 24px;
-  max-width: var(--content-max);
+.requisition__shell {
+  width: 100%;
 }
 
-.requisition__loading {
-  padding: 8px 0;
+.requisition__state {
+  padding: var(--space-5);
 }
 
-.requisition__block {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 16px;
-  padding: 24px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-panel);
-}
-
-.requisition__block-text {
-  margin: 0;
+.requisition__state-text {
+  margin: 0 0 var(--space-3);
   font-size: 14px;
   line-height: 22px;
   color: var(--text-secondary);
 }
 
+.requisition__grid {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(268px, 1fr);
+  gap: var(--space-5);
+  align-items: start;
+}
+
+.requisition__main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+.requisition__card {
+  padding: var(--space-4) var(--space-5);
+}
+
+.requisition__card-title {
+  margin: 0;
+  font-size: 15px;
+  line-height: 22px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+
+.requisition__card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: var(--space-3);
+}
+
+.requisition__card-head .requisition__card-title {
+  margin-bottom: 0;
+}
+
+.requisition__card > .requisition__card-title {
+  margin-bottom: var(--space-3);
+}
+
+.requisition__card-meta {
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.requisition__card :deep(.el-form-item) {
+  margin-bottom: var(--space-3);
+}
+
+.requisition__card :deep(.el-form-item:last-child) {
+  margin-bottom: 0;
+}
+
 .requisition__alert {
-  margin-bottom: 16px;
+  margin-bottom: 0;
 }
 
 .requisition__alert-text {
@@ -1485,7 +1558,7 @@ onBeforeUnmount(() => {
 
 .requisition__request-id {
   padding: 2px 6px;
-  border-radius: var(--radius-control);
+  border-radius: var(--radius-xs);
   background: var(--surface-muted);
   color: var(--text);
   font-size: 13px;
@@ -1494,22 +1567,22 @@ onBeforeUnmount(() => {
   user-select: all;
 }
 
-.requisition__panel:focus {
-  outline: none;
-}
-
 .requisition__meta {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 8px 24px;
-  margin-bottom: 8px;
+  gap: 0 var(--space-5);
 }
 
 .requisition__meta-item {
   min-width: 0;
 }
 
-.requisition__user-select {
+.requisition__meta-item--full {
+  grid-column: 1 / -1;
+}
+
+.requisition__user-select,
+.requisition__backfill-reason {
   width: 100%;
 }
 
@@ -1517,7 +1590,7 @@ onBeforeUnmount(() => {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 12px;
+  gap: var(--space-2);
 }
 
 .requisition__time-picker {
@@ -1536,58 +1609,48 @@ onBeforeUnmount(() => {
   color: var(--danger);
 }
 
-.requisition__rows-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
-  margin: 8px 0 12px;
-}
-
-.requisition__rows-title {
-  margin: 0;
-}
-
-.requisition__rows-count {
-  font-size: 13px;
-  line-height: 20px;
-  color: var(--text-muted);
-}
-
 .requisition__rows {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: var(--space-2);
 }
 
 .requisition__row {
-  padding: 12px 16px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-panel);
-  background: var(--surface);
+  padding: var(--space-3);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-control);
+  background: var(--surface-subtle);
+}
 
+.requisition__row:focus {
+  outline: none;
 }
 
 .requisition__row--error {
-  border-color: var(--danger);
+  border-color: var(--danger-line);
   background: var(--danger-soft);
 }
 
 .requisition__row-head {
   display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 8px;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
 }
 
 .requisition__row-index {
-  font-size: 13px;
-  line-height: 20px;
-  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-xs);
+  background: var(--surface-muted);
   color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }
 
 .requisition__row-stock {
@@ -1597,22 +1660,39 @@ onBeforeUnmount(() => {
   font-variant-numeric: tabular-nums;
 }
 
+.requisition__remove {
+  margin-left: auto;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.requisition__remove:hover:not(.is-disabled) {
+  border-color: var(--danger-line);
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
 .requisition__row-fields {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 12px;
+  gap: var(--space-3);
 }
 
 .requisition__consumable {
-  flex: 1;
-  min-width: 240px;
+  flex: 1 1 240px;
+  min-width: 0;
 }
 
 .requisition__quantity {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
+  flex: 0 0 auto;
 }
 
 .requisition__quantity-label {
@@ -1622,24 +1702,19 @@ onBeforeUnmount(() => {
 }
 
 .requisition__quantity-input {
-  width: 120px;
+  width: 108px;
 }
 
 .requisition__quantity-unit {
-  min-width: 32px;
+  min-width: 24px;
   font-size: 13px;
   line-height: 20px;
   color: var(--text-muted);
 }
 
-.requisition__remove {
-  margin-left: auto;
-}
-
 .requisition__row-error,
-.requisition__row-warning,
-.requisition__row-hint {
-  margin: 8px 0 0;
+.requisition__row-warning {
+  margin: var(--space-2) 0 0;
   font-size: 13px;
   line-height: 20px;
 }
@@ -1652,16 +1727,12 @@ onBeforeUnmount(() => {
   color: var(--warning);
 }
 
-.requisition__row-hint {
-  color: var(--text-muted);
-}
-
 .requisition__rows-actions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 12px;
-  margin: 12px 0 16px;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
 }
 
 .requisition__rows-limit {
@@ -1670,16 +1741,90 @@ onBeforeUnmount(() => {
   color: var(--text-muted);
 }
 
-.requisition__remark {
-  margin-bottom: 8px;
+.requisition__remark :deep(.el-form-item__label) {
+  padding-bottom: 4px;
 }
 
-.requisition__actions {
+.requisition__aside {
+  position: sticky;
+  top: calc(var(--topbar-height) + var(--space-4));
+  min-width: 0;
+}
+
+.requisition__summary {
   display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  padding-top: 8px;
-  scroll-margin-bottom: 96px;
+  flex-direction: column;
+  padding: var(--space-4);
+}
+
+.requisition__summary-label {
+  margin: 0;
+  font-size: 12px;
+  line-height: 18px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+
+.requisition__summary-value {
+  margin: 4px 0 0;
+  font-size: 30px;
+  line-height: 38px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.requisition__summary-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: var(--space-3) 0 0;
+  padding: var(--space-3) 0 0;
+  border-top: 1px solid var(--line-soft);
+}
+
+.requisition__summary-item {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.requisition__summary-item dt {
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--text-muted);
+}
+
+.requisition__summary-item dd {
+  margin: 0;
+  font-size: 14px;
+  line-height: 22px;
+  font-weight: 500;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.requisition__summary-actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+}
+
+.requisition__summary-actions .el-button {
+  width: 100%;
+  margin-left: 0;
+}
+
+.requisition__receipt {
+  padding: var(--space-5);
+}
+
+.requisition__receipt:focus {
+  outline: none;
 }
 
 .requisition__receipt-head {
@@ -1687,26 +1832,31 @@ onBeforeUnmount(() => {
   flex-wrap: wrap;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 24px;
+  gap: var(--space-4);
+  margin-bottom: var(--space-5);
 }
 
 .requisition__receipt-title {
   margin: 0 0 4px;
+  font-size: 18px;
+  line-height: 26px;
+  font-weight: 600;
+  color: var(--text);
 }
 
 .requisition__receipt-desc {
   margin: 0;
-  font-size: 14px;
-  line-height: 22px;
+  font-size: 13px;
+  line-height: 20px;
   color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
 }
 
 .requisition__receipt-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  margin: 0 0 24px;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-5);
   padding: 0;
   list-style: none;
 }
@@ -1716,10 +1866,10 @@ onBeforeUnmount(() => {
   flex-wrap: wrap;
   align-items: baseline;
   gap: 8px 24px;
-  padding: 12px 16px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-panel);
-  background: var(--surface-muted);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-control);
+  background: var(--surface-subtle);
   font-size: 14px;
   line-height: 22px;
 }
@@ -1750,47 +1900,132 @@ onBeforeUnmount(() => {
 .requisition__receipt-actions {
   display: flex;
   justify-content: flex-end;
-  gap: 8px;
-  scroll-margin-bottom: 96px;
+  gap: var(--space-2);
+}
+
+@media (max-width: 1023px) {
+  .requisition__grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-4);
+  }
+
+  .requisition__aside {
+    position: static;
+  }
+
+  .requisition__summary {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-4);
+    padding: var(--space-3) var(--space-4);
+  }
+
+  .requisition__summary-value {
+    margin: 0;
+    font-size: 24px;
+    line-height: 30px;
+  }
+
+  .requisition__summary-list {
+    flex: 1 1 auto;
+    margin: 0;
+    padding: 0;
+    border-top: none;
+  }
+
+  .requisition__summary-actions {
+    flex: 0 0 auto;
+    flex-direction: row;
+    margin-top: 0;
+  }
+
+  .requisition__summary-actions .el-button {
+    width: auto;
+  }
 }
 
 @media (max-width: 767px) {
-  .requisition__panel {
-    padding: 16px;
+  .requisition__card {
+    padding: var(--space-4);
   }
 
   .requisition__meta {
     grid-template-columns: minmax(0, 1fr);
   }
 
+  .requisition__row-fields {
+    gap: var(--space-2);
+  }
+
   .requisition__consumable {
-    min-width: 100%;
+    flex: 1 1 100%;
   }
 
   .requisition__remove {
+    width: 44px;
+    height: 44px;
+  }
+
+  .requisition__row-head {
+    margin-bottom: var(--space-1);
+  }
+
+  .requisition__aside {
+    position: sticky;
+    bottom: calc(var(--keyboard-inset, 0px) + 4px);
+    z-index: 6;
+  }
+
+  .requisition__summary {
+    gap: var(--space-3);
+    padding: var(--space-3);
+    box-shadow: var(--shadow-md);
+  }
+
+  .requisition__summary-list {
+    display: none;
+  }
+
+  .requisition__summary-value {
+    font-size: 22px;
+    line-height: 28px;
+  }
+
+  .requisition__summary-actions {
+    flex: 1 1 160px;
+  }
+
+  .requisition__summary-actions .el-button {
+    flex: 1 1 0;
+    min-height: 44px;
     margin-left: 0;
+  }
+
+  .requisition__receipt {
+    padding: var(--space-4);
   }
 
   .requisition__receipt-stock {
     margin-left: 0;
   }
 
-  .requisition__actions .el-button,
   .requisition__receipt-actions .el-button {
     flex: 1 1 0;
     min-height: 44px;
-  }
-
-  .requisition__actions {
-    position: sticky;
-    bottom: calc(var(--keyboard-inset, 0px) + 4px);
-    z-index: 6;
-    padding: 8px 0;
-    background: var(--surface);
+    margin-left: 0;
   }
 }
 
 @media (max-width: 480px) {
+  .requisition__summary {
+    gap: var(--space-2);
+  }
+
+  .requisition__summary-label {
+    flex: 1 1 100%;
+  }
+
   .requisition__quantity {
     flex: 1 1 100%;
   }

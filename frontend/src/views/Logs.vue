@@ -536,116 +536,118 @@ onBeforeUnmount(() => {
         :closable="false"
         show-icon
         title="操作人选项加载失败"
-        description="仍可按操作类型与日期查询，操作人筛选暂不可用。"
+        description="操作人筛选暂不可用。"
       />
       <el-button link type="primary" @click="fetchUserOptions">重试</el-button>
     </div>
 
     <section class="panel logs__panel">
-      <el-form inline class="logs__filters" @submit.prevent>
-        <el-form-item label="操作类型">
-          <el-select
-            v-model="draft.action"
-            clearable
-            filterable
-            placeholder="全部操作类型"
-            class="logs__filter-action"
-          >
-            <el-option
-              v-for="option in actionOptions"
-              :key="option.value"
-              :label="option.label"
-              :value="option.value"
+      <div class="logs__filters">
+        <el-form inline class="logs__filter-grid" @submit.prevent>
+          <el-form-item label="操作类型">
+            <el-select
+              v-model="draft.action"
+              clearable
+              filterable
+              placeholder="全部操作类型"
+              class="logs__filter-action"
+            >
+              <el-option
+                v-for="option in actionOptions"
+                :key="option.value"
+                :label="option.label"
+                :value="option.value"
+              />
+            </el-select>
+          </el-form-item>
+
+          <el-form-item label="操作人">
+            <el-select
+              v-model="draft.operatorId"
+              clearable
+              filterable
+              placeholder="全部操作人"
+              class="logs__filter-operator"
+              :disabled="optionsError"
+            >
+              <el-option
+                v-for="option in userOptions"
+                :key="option.id"
+                :label="userOptionLabel(option)"
+                :value="option.id"
+              />
+            </el-select>
+          </el-form-item>
+
+          <el-form-item label="对象类型">
+            <el-select
+              v-model="draft.targetType"
+              clearable
+              filterable
+              placeholder="全部对象类型"
+              class="logs__filter-target"
+            >
+              <el-option
+                v-for="option in TARGET_TYPE_OPTIONS"
+                :key="option.value"
+                :label="option.label"
+                :value="option.value"
+              />
+            </el-select>
+          </el-form-item>
+
+          <el-form-item label="结果">
+            <el-select
+              v-model="draft.result"
+              clearable
+              placeholder="全部结果"
+              class="logs__filter-result"
+            >
+              <el-option
+                v-for="option in RESULTS"
+                :key="option.value"
+                :label="option.label"
+                :value="option.value"
+              />
+            </el-select>
+          </el-form-item>
+
+          <el-form-item label="对象编号">
+            <el-input
+              v-model="draft.targetId"
+              clearable
+              placeholder="对象 ID"
+              class="logs__filter-id"
             />
-          </el-select>
-        </el-form-item>
+          </el-form-item>
 
-        <el-form-item label="操作人">
-          <el-select
-            v-model="draft.operatorId"
-            clearable
-            filterable
-            placeholder="全部操作人"
-            class="logs__filter-operator"
-            :disabled="optionsError"
-          >
-            <el-option
-              v-for="option in userOptions"
-              :key="option.id"
-              :label="userOptionLabel(option)"
-              :value="option.id"
+          <el-form-item label="关键词">
+            <el-input
+              v-model="draft.keyword"
+              clearable
+              placeholder="单据号、对象或备注"
+              class="logs__filter-keyword"
             />
-          </el-select>
-        </el-form-item>
+          </el-form-item>
 
-        <el-form-item label="对象类型">
-          <el-select
-            v-model="draft.targetType"
-            clearable
-            filterable
-            placeholder="全部对象类型"
-            class="logs__filter-target"
-          >
-            <el-option
-              v-for="option in TARGET_TYPE_OPTIONS"
-              :key="option.value"
-              :label="option.label"
-              :value="option.value"
+          <el-form-item label="日期范围" class="logs__filter-item--wide">
+            <el-date-picker
+              v-model="draft.dateRange"
+              type="daterange"
+              start-placeholder="开始日期"
+              end-placeholder="结束日期"
+              value-format="YYYY-MM-DD"
+              class="logs__filter-date"
             />
-          </el-select>
-        </el-form-item>
+          </el-form-item>
+        </el-form>
 
-        <el-form-item label="对象编号">
-          <el-input
-            v-model="draft.targetId"
-            clearable
-            placeholder="对象 ID"
-            class="logs__filter-id"
-          />
-        </el-form-item>
-
-        <el-form-item label="结果">
-          <el-select
-            v-model="draft.result"
-            clearable
-            placeholder="全部结果"
-            class="logs__filter-result"
-          >
-            <el-option
-              v-for="option in RESULTS"
-              :key="option.value"
-              :label="option.label"
-              :value="option.value"
-            />
-          </el-select>
-        </el-form-item>
-
-        <el-form-item label="关键词">
-          <el-input
-            v-model="draft.keyword"
-            clearable
-            placeholder="单据号、对象或备注"
-            class="logs__filter-keyword"
-          />
-        </el-form-item>
-
-        <el-form-item label="日期范围">
-          <el-date-picker
-            v-model="draft.dateRange"
-            type="daterange"
-            start-placeholder="开始日期"
-            end-placeholder="结束日期"
-            value-format="YYYY-MM-DD"
-            class="logs__filter-date"
-          />
-        </el-form-item>
-
-        <el-form-item class="logs__filter-actions">
+        <div class="logs__filter-actions">
           <el-button type="primary" @click="handleSearch">查询</el-button>
           <el-button @click="handleReset">重置</el-button>
           <el-button :loading="exporting" @click="handleExport">导出</el-button>
-        </el-form-item>
-      </el-form>
+        </div>
+      </div>
 
       <p v-if="filterError" class="logs__filter-error" role="alert">{{ filterError }}</p>
 
@@ -660,7 +662,7 @@ onBeforeUnmount(() => {
       </div>
 
       <div v-if="loading && !logs.length" class="logs__skeleton" aria-busy="true">
-        <p class="logs__placeholder">正在读取操作日志…</p>
+        <p class="logs__placeholder">正在读取…</p>
         <el-skeleton :rows="8" animated />
       </div>
 
@@ -677,11 +679,7 @@ onBeforeUnmount(() => {
       <EmptyState
         v-else-if="!logs.length"
         :title="hasFilters ? '没有符合条件的记录' : '暂无操作日志'"
-        :description="
-          hasFilters
-            ? '当前筛选条件下没有操作日志，可调整条件后重新查询。'
-            : '登录、领用、档案变更等操作产生后会在这里留下记录。'
-        "
+        :description="hasFilters ? '调整条件后重新查询。' : '产生操作后会记录在此。'"
       >
         <template #action>
           <el-button v-if="hasFilters" @click="handleReset">清除筛选</el-button>
@@ -693,43 +691,32 @@ onBeforeUnmount(() => {
           <el-table-column label="操作时间" width="170">
             <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
           </el-table-column>
-          <el-table-column label="操作人" width="110">
-            <template #default="{ row }">{{ row.operator_name ?? '—' }}</template>
-          </el-table-column>
-          <el-table-column label="角色" width="90" align="center">
+          <el-table-column label="操作人" width="150">
             <template #default="{ row }">
-              <span v-if="row.role" class="status-tag" :class="roleClass(row.role)">
-                {{ ROLE_NAMES[row.role] ?? row.role }}
-              </span>
-              <span v-else>—</span>
+              <div class="logs__operator">
+                <span>{{ row.operator_name ?? '—' }}</span>
+                <span v-if="row.role" class="logs__operator-role">
+                  {{ ROLE_NAMES[row.role] ?? row.role }}
+                </span>
+              </div>
             </template>
           </el-table-column>
-          <el-table-column label="操作类型" width="120" align="center">
+          <el-table-column label="操作类型" width="120">
             <template #default="{ row }">
               <span class="status-tag" :class="actionMeta(row.action).tagClass">
                 {{ actionMeta(row.action).label }}
               </span>
             </template>
           </el-table-column>
-          <el-table-column label="结果" width="90" align="center">
+          <el-table-column label="对象与变更" min-width="360">
             <template #default="{ row }">
-              <span class="status-tag" :class="resultMeta(row.result).tagClass">
-                {{ resultMeta(row.result).label }}
-              </span>
+              <div class="logs__target">{{ targetLabel(row) }}</div>
+              <div class="logs__summary">{{ summaryText(row) }}</div>
             </template>
-          </el-table-column>
-          <el-table-column label="对象" min-width="150">
-            <template #default="{ row }">{{ targetLabel(row) }}</template>
-          </el-table-column>
-          <el-table-column label="变更摘要" min-width="260" show-overflow-tooltip>
-            <template #default="{ row }">{{ summaryText(row) }}</template>
-          </el-table-column>
-          <el-table-column label="备注" min-width="150" show-overflow-tooltip>
-            <template #default="{ row }">{{ row.remark ?? '—' }}</template>
           </el-table-column>
           <el-table-column label="操作" width="100" fixed="right">
             <template #default="{ row }">
-              <el-button link type="primary" @click="openDetail(row)">查看详情</el-button>
+              <el-button link type="primary" @click="openDetail(row)">详情</el-button>
             </template>
           </el-table-column>
         </el-table>
@@ -787,30 +774,92 @@ onBeforeUnmount(() => {
 
 .logs__filters {
   display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: 4px 8px;
-  margin-bottom: 4px;
+  flex-direction: column;
+  gap: 12px;
 }
 
-.logs__filter-action {
-  width: 170px;
+.logs__filter-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px 16px;
+  align-items: end;
 }
 
-.logs__filter-operator {
-  width: 180px;
+.logs__filter-grid :deep(.el-form-item) {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  margin: 0;
 }
 
+.logs__filter-grid :deep(.el-form-item__label) {
+  justify-content: flex-start;
+  width: auto;
+  padding: 0 0 4px;
+  line-height: 16px;
+  font-size: 12px;
+  font-weight: 500;
+  text-align: left;
+  color: var(--text-muted);
+}
+
+.logs__filter-grid :deep(.el-form-item__content) {
+  width: 100%;
+  margin-left: 0;
+}
+
+.logs__filter-item--wide {
+  grid-column: span 2;
+}
+
+.logs__filter-action,
+.logs__filter-operator,
+.logs__filter-target,
+.logs__filter-result,
+.logs__filter-id,
+.logs__filter-keyword,
 .logs__filter-date {
-  width: 260px;
+  width: 100%;
 }
 
 .logs__filter-actions {
-  margin-left: auto;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.logs__operator {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.logs__operator-role {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--text-muted);
+}
+
+.logs__target {
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--text);
+}
+
+.logs__summary {
+  margin-top: 2px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--text-muted);
+}
+
+.logs__filter-actions .el-button + .el-button {
+  margin-left: 0;
 }
 
 .logs__filter-error {
-  margin: 4px 0 0;
+  margin: 8px 0 0;
   font-size: 13px;
   line-height: 20px;
   color: var(--danger);
@@ -824,8 +873,8 @@ onBeforeUnmount(() => {
 
 .logs__placeholder {
   margin: 0;
-  font-size: 14px;
-  line-height: 22px;
+  font-size: 13px;
+  line-height: 20px;
   color: var(--text-muted);
 }
 
@@ -839,19 +888,27 @@ onBeforeUnmount(() => {
   margin-top: 16px;
 }
 
+@media (max-width: 1100px) {
+  .logs__filter-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 @media (max-width: 767px) {
   .logs__panel {
     padding: 16px;
   }
 
-  .logs__filter-action,
-  .logs__filter-operator,
-  .logs__filter-date {
-    width: 100%;
+  .logs__filter-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 
-  .logs__filter-actions {
-    margin-left: 0;
+  .logs__filter-item--wide {
+    grid-column: auto;
+  }
+
+  .logs__filter-actions .el-button {
+    min-height: 44px;
   }
 }
 </style>

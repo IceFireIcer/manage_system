@@ -347,30 +347,28 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
     <div v-if="log" class="log-detail">
       <p class="log-detail__sub">{{ metaLine }}</p>
 
-      <div class="log-detail__meta">
+      <dl class="log-detail__meta">
         <div class="log-detail__meta-item">
-          <span class="log-detail__meta-label">操作人</span>
-          <span class="log-detail__meta-value">{{ log.operator_name ?? '—' }}</span>
+          <dt>操作人</dt>
+          <dd>{{ log.operator_name ?? '—' }}</dd>
         </div>
         <div class="log-detail__meta-item">
-          <span class="log-detail__meta-label">角色</span>
-          <span class="log-detail__meta-value">
-            {{ ROLE_NAMES[log.role] ?? log.role ?? '—' }}
-          </span>
+          <dt>角色</dt>
+          <dd>{{ ROLE_NAMES[log.role] ?? log.role ?? '—' }}</dd>
         </div>
         <div class="log-detail__meta-item">
-          <span class="log-detail__meta-label">操作类型</span>
-          <span class="log-detail__meta-value">{{ ACTION_NAMES[log.action] ?? log.action }}</span>
+          <dt>操作类型</dt>
+          <dd>{{ ACTION_NAMES[log.action] ?? log.action }}</dd>
         </div>
         <div class="log-detail__meta-item">
-          <span class="log-detail__meta-label">结果</span>
-          <span class="log-detail__meta-value">{{ RESULT_NAMES[log.result] ?? log.result ?? '—' }}</span>
+          <dt>结果</dt>
+          <dd>{{ RESULT_NAMES[log.result] ?? log.result ?? '—' }}</dd>
         </div>
         <div class="log-detail__meta-item">
-          <span class="log-detail__meta-label">对象</span>
-          <span class="log-detail__meta-value">{{ targetLabel }}</span>
+          <dt>对象</dt>
+          <dd>{{ targetLabel }}</dd>
         </div>
-      </div>
+      </dl>
 
       <div class="log-detail__compare">
         <section class="log-detail__side">
@@ -415,7 +413,7 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
     <EmptyState
       v-else
       title="操作记录不可用"
-      description="该操作记录不存在或已失效，请关闭后重新查询。"
+      description="请关闭后重新查询。"
     />
 
     <template #footer>
@@ -438,42 +436,44 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
 .log-detail {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 24px;
 }
 
 .log-detail__sub {
   margin: 0;
-  font-size: 14px;
-  line-height: 22px;
+  font-size: 12px;
+  line-height: 18px;
   color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
 }
 
 .log-detail__meta {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: 12px 16px;
+  margin: 0;
   padding: 16px;
-  border: 1px solid var(--line);
   border-radius: var(--radius-panel);
-  background: var(--surface-muted);
+  background: var(--surface-subtle);
 }
 
 .log-detail__meta-item {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
   min-width: 0;
 }
 
-.log-detail__meta-label {
-  font-size: 13px;
-  line-height: 20px;
+.log-detail__meta-item dt {
+  font-size: 12px;
+  line-height: 16px;
   color: var(--text-muted);
 }
 
-.log-detail__meta-value {
-  font-size: 14px;
-  line-height: 22px;
+.log-detail__meta-item dd {
+  margin: 0;
+  font-size: 13px;
+  line-height: 20px;
   font-weight: 600;
   color: var(--text);
   word-break: break-word;
@@ -482,7 +482,7 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
 .log-detail__compare {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
+  gap: 24px;
 }
 
 .log-detail__side {
@@ -494,8 +494,8 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
 
 .log-detail__side-title {
   margin: 0;
-  font-size: 14px;
-  line-height: 22px;
+  font-size: 13px;
+  line-height: 20px;
   font-weight: 600;
   color: var(--text-secondary);
 }
@@ -503,7 +503,7 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
 .log-detail__list {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
   margin: 0;
   padding: 0;
   list-style: none;
@@ -512,29 +512,28 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
 .log-detail__row {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: 8px 12px;
-  border-radius: var(--radius-control);
-  background: var(--surface-muted);
+  gap: 1px;
+  padding: 6px 8px;
+  border-radius: var(--radius-xs);
 }
 
 .log-detail__row--changed {
-  background: var(--primary-soft);
+  background: var(--warning-soft);
 }
 
 .log-detail__row--changed .log-detail__label {
-  color: var(--primary);
+  color: var(--warning);
 }
 
 .log-detail__label {
-  font-size: 12px;
-  line-height: 18px;
+  font-size: 11px;
+  line-height: 16px;
   color: var(--text-muted);
 }
 
 .log-detail__value {
-  font-size: 14px;
-  line-height: 22px;
+  font-size: 13px;
+  line-height: 20px;
   color: var(--text);
   word-break: break-word;
   font-variant-numeric: tabular-nums;
@@ -542,26 +541,26 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
 
 .log-detail__none {
   margin: 0;
-  padding: 16px;
+  padding: 12px 16px;
   border: 1px dashed var(--line);
   border-radius: var(--radius-control);
-  font-size: 14px;
-  line-height: 22px;
+  font-size: 12px;
+  line-height: 18px;
   color: var(--text-muted);
 }
 
 .log-detail__remark {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
   padding-top: 16px;
-  border-top: 1px solid var(--line);
+  border-top: 1px solid var(--line-soft);
 }
 
 .log-detail__remark-text {
   margin: 0;
-  font-size: 14px;
-  line-height: 22px;
+  font-size: 13px;
+  line-height: 20px;
   color: var(--text-secondary);
   white-space: pre-line;
 }
@@ -570,7 +569,7 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 8px;
 }
 
@@ -580,23 +579,30 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
   gap: 8px;
 }
 
+.log-detail__footer .el-button + .el-button {
+  margin-left: 0;
+}
+
 @media (max-width: 767px) {
   .log-detail__compare {
     grid-template-columns: minmax(0, 1fr);
+    gap: 20px;
   }
 
-  .log-detail__footer {
-    justify-content: flex-end;
-  }
-
-  .log-detail__footer-left {
-    width: 100%;
+  .log-detail__footer .el-button {
+    min-height: 44px;
   }
 }
 </style>
 
 <style>
 .log-detail-drawer .el-drawer__body {
-  padding: 0 20px 20px;
+  padding: 0 24px 24px;
+}
+
+@media (max-width: 767px) {
+  .log-detail-drawer .el-drawer__body {
+    padding: 0 16px 24px;
+  }
 }
 </style>

@@ -149,34 +149,34 @@ async function handleConfirm() {
     :show-close="!submitting"
     append-to-body
   >
-    <div v-if="record" class="reversal__summary">
+    <dl v-if="record" class="reversal__summary">
       <div class="reversal__row">
-        <span class="reversal__label">原流水号</span>
-        <span class="reversal__value">#{{ record.id }}</span>
+        <dt class="reversal__label">原流水号</dt>
+        <dd class="reversal__value">#{{ record.id }}</dd>
       </div>
       <div class="reversal__row">
-        <span class="reversal__label">领用人</span>
-        <span class="reversal__value">{{ record.user_name }}</span>
+        <dt class="reversal__label">领用人</dt>
+        <dd class="reversal__value">{{ record.user_name }}</dd>
       </div>
       <div class="reversal__row">
-        <span class="reversal__label">耗材</span>
-        <span class="reversal__value">{{ consumableLabel(record) }}</span>
+        <dt class="reversal__label">耗材</dt>
+        <dd class="reversal__value">{{ consumableLabel(record) }}</dd>
       </div>
       <div class="reversal__row">
-        <span class="reversal__label">领用时间</span>
-        <span class="reversal__value">{{ formatTime(record.created_at) }}</span>
+        <dt class="reversal__label">领用时间</dt>
+        <dd class="reversal__value">{{ formatTime(record.created_at) }}</dd>
       </div>
       <div class="reversal__row">
-        <span class="reversal__label">数量</span>
-        <span class="reversal__value">{{ quantityText }}</span>
+        <dt class="reversal__label">数量</dt>
+        <dd class="reversal__value">{{ quantityText }}</dd>
       </div>
       <div v-if="record.correction" class="reversal__row">
-        <span class="reversal__label">纠错申请</span>
-        <span class="reversal__value">
+        <dt class="reversal__label">纠错申请</dt>
+        <dd class="reversal__value">
           #{{ record.correction.id }} · {{ record.correction.reason }}
-        </span>
+        </dd>
       </div>
-    </div>
+    </dl>
 
     <el-alert
       v-if="record"
@@ -228,7 +228,6 @@ async function handleConfirm() {
         <el-checkbox v-model="reentryEnabled" :disabled="submitting">
           生成关联重登单
         </el-checkbox>
-        <p class="reversal__reentry-hint">勾选后按更正后的数量重新登记，原流水与红冲单保留。</p>
       </el-form-item>
 
       <template v-if="reentryEnabled">
@@ -274,31 +273,35 @@ async function handleConfirm() {
 <style scoped>
 .reversal__summary {
   display: grid;
-  gap: 8px;
-  padding: 16px;
-  border: 1px solid var(--line);
+  gap: var(--space-2);
+  margin: 0;
+  padding: 14px 16px;
+  border: 1px solid var(--line-soft);
   border-radius: var(--radius-panel);
-  background: var(--surface-muted);
+  background: var(--surface-subtle);
 }
 
 .reversal__row {
   display: flex;
   align-items: baseline;
-  gap: 12px;
+  gap: var(--space-3);
   min-width: 0;
 }
 
 .reversal__label {
-  flex: 0 0 72px;
+  flex: 0 0 76px;
   font-size: 13px;
   line-height: 20px;
+  font-weight: 500;
   color: var(--text-muted);
 }
 
 .reversal__value {
   min-width: 0;
+  margin: 0;
   font-size: 14px;
   line-height: 22px;
+  font-weight: 500;
   color: var(--text);
   word-break: break-word;
   font-variant-numeric: tabular-nums;
@@ -306,18 +309,15 @@ async function handleConfirm() {
 
 .reversal__impact,
 .reversal__request-error {
-  margin-top: 16px;
+  margin-top: var(--space-4);
 }
 
 .reversal__form {
-  margin-top: 16px;
+  margin-top: var(--space-4);
 }
 
-.reversal__reentry-hint {
-  margin: 4px 0 0;
-  font-size: 13px;
-  line-height: 20px;
-  color: var(--text-muted);
+.reversal__form :deep(.el-form-item) {
+  margin-bottom: var(--space-3);
 }
 
 .reversal__footer {
@@ -330,6 +330,10 @@ async function handleConfirm() {
 @media (max-width: 767px) {
   .reversal-dialog.el-dialog {
     width: calc(100% - 32px);
+  }
+
+  .reversal-dialog .el-dialog__footer .el-button {
+    min-height: 44px;
   }
 }
 </style>

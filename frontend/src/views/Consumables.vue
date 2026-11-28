@@ -2,6 +2,7 @@
 import { computed, h, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { MoreFilled } from '@element-plus/icons-vue'
 import api from '../api'
 import PageHeader from '../components/PageHeader.vue'
 import EmptyState from '../components/EmptyState.vue'
@@ -476,6 +477,13 @@ function handleLedgerImported() {
   fetchList('已导入台账，暂时无法刷新列表')
 }
 
+function handleRowCommand(row, command) {
+  if (command === 'receive') openReceive(row)
+  else if (command === 'records') goRecords(row)
+  else if (command === 'disable') handleToggle(row, 'disabled')
+  else if (command === 'enable') handleToggle(row, 'enabled')
+}
+
 function handleResize() {
   viewportWidth.value = window.innerWidth
 }
@@ -500,7 +508,12 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
     </PageHeader>
 
     <div class="consumables__toolbar panel">
-      <el-radio-group v-model="statusFilter" @change="handleStatusChange">
+      <el-radio-group
+        v-model="statusFilter"
+        class="consumables__segment"
+        aria-label="耗材状态"
+        @change="handleStatusChange"
+      >
         <el-radio-button value="enabled">启用中</el-radio-button>
         <el-radio-button value="disabled">已停用</el-radio-button>
       </el-radio-group>
@@ -511,12 +524,15 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
           placeholder="搜索名称、规格或位置"
           maxlength="64"
           clearable
+          aria-label="搜索耗材"
           @keyup.enter="applySearch"
           @clear="applySearch"
         />
         <el-button @click="applySearch">查询</el-button>
       </div>
-      <el-button class="consumables__refresh" :loading="loading" @click="fetchList()">刷新</el-button>
+      <el-button text class="consumables__refresh" :loading="loading" @click="fetchList()">
+        刷新
+      </el-button>
     </div>
 
     <div v-if="staleNotice" class="consumables__banner consumables__banner--warning" role="status">
@@ -542,10 +558,8 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
       <el-skeleton v-if="!failed" :rows="6" animated />
       <div v-else class="consumables__error" role="alert">
         <p class="consumables__error-title">耗材档案读取失败</p>
-        <p class="consumables__error-desc">
-          请检查网络连接后重试；重新读取成功后会展示最新档案。
-        </p>
-        <el-button type="primary" @click="fetchList()">重试</el-button>
+        <p class="consumables__error-desc">请检查网络连接后重试。</p>
+        <el-button @click="fetchList()">重试</el-button>
       </div>
     </div>
 
@@ -577,8 +591,8 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
               <div class="cell-number" :class="{ 'cell-number--out': row.current_stock === 0 }">
                 {{ row.current_stock }} {{ row.unit }}
               </div>
-              <div v-if="row.current_stock === 0" class="cell-sub">缺货</div>
-              <div v-else-if="row.low_stock" class="cell-sub">低于安全库存线</div>
+              <div v-if="row.current_stock === 0" class="cell-sub cell-sub--danger">缺货</div>
+              <div v-else-if="row.low_stock" class="cell-sub cell-sub--warning">低库存</div>
             </template>
           </el-table-column>
           <el-table-column label="状态" width="150">
@@ -594,9 +608,9 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
               </div>
             </template>
           </el-table-column>
-          <el-table-column label="操作" min-width="260" fixed="right">
+          <el-table-column label="操作" width="140" fixed="right">
             <template #default="{ row }">
-              <template v-if="row.status === 'enabled'">
+              <div class="consumables__row-actions">
                 <el-button
                   link
                   type="primary"
@@ -606,54 +620,39 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
                 >
                   编辑
                 </el-button>
-                <el-button
-                  link
-                  type="primary"
-                  size="small"
-                  :aria-label="`收货 ${row.name}`"
-                  @click="openReceive(row)"
+                <el-dropdown
+                  trigger="click"
+                  placement="bottom-end"
+                  @command="(command) => handleRowCommand(row, command)"
                 >
-                  收货
-                </el-button>
-                <el-button
-                  link
-                  type="primary"
-                  size="small"
-                  :aria-label="`查看 ${row.name} 的流水`"
-                  @click="goRecords(row)"
-                >
-                  查流水
-                </el-button>
-                <el-button
-                  link
-                  type="danger"
-                  size="small"
-                  :aria-label="`停用 ${row.name}`"
-                  @click="handleToggle(row, 'disabled')"
-                >
-                  停用
-                </el-button>
-              </template>
-              <template v-else>
-                <el-button
-                  link
-                  type="primary"
-                  size="small"
-                  :aria-label="`查看 ${row.name} 的流水`"
-                  @click="goRecords(row)"
-                >
-                  查流水
-                </el-button>
-                <el-button
-                  link
-                  type="success"
-                  size="small"
-                  :aria-label="`启用 ${row.name}`"
-                  @click="handleToggle(row, 'enabled')"
-                >
-                  启用
-                </el-button>
-              </template>
+                  <el-button
+                    link
+                    size="small"
+                    class="consumables__more"
+                    :aria-label="`${row.name} 的更多操作`"
+                  >
+                    更多
+                    <el-icon :size="12" class="consumables__more-icon"><MoreFilled /></el-icon>
+                  </el-button>
+                  <template #dropdown>
+                    <el-dropdown-menu>
+                      <el-dropdown-item v-if="row.status === 'enabled'" command="receive">
+                        收货
+                      </el-dropdown-item>
+                      <el-dropdown-item command="records">查流水</el-dropdown-item>
+                      <el-dropdown-item
+                        v-if="row.status === 'enabled'"
+                        divided
+                        command="disable"
+                        class="consumables__danger-item"
+                      >
+                        停用
+                      </el-dropdown-item>
+                      <el-dropdown-item v-else command="enable">启用</el-dropdown-item>
+                    </el-dropdown-menu>
+                  </template>
+                </el-dropdown>
+              </div>
             </template>
           </el-table-column>
 
@@ -661,27 +660,27 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
             <EmptyState
               v-if="emptyMode === 'enabled'"
               title="还没有启用中的耗材"
-              description="新增耗材后默认处于启用状态，可立即用于登记领用。"
+              description="新增后默认启用，可立即登记领用。"
             >
               <template #action>
-                <el-button type="primary" @click="openCreate">新增耗材</el-button>
-                <el-button @click="handleStatusChange('disabled')">查看已停用</el-button>
+                <el-button @click="openCreate">新增耗材</el-button>
+                <el-button text @click="handleStatusChange('disabled')">查看已停用</el-button>
               </template>
             </EmptyState>
             <EmptyState
               v-else-if="emptyMode === 'disabled'"
-              title="该状态下暂无耗材"
-              description="停用后的耗材会保留在这里，可随时重新启用。"
+              title="暂无停用耗材"
+              description="停用后的耗材会保留在这里。"
             >
               <template #action>
-                <el-button @click="handleStatusChange('enabled')">查看启用中</el-button>
-                <el-button type="primary" @click="openCreate">新增耗材</el-button>
+                <el-button text @click="handleStatusChange('enabled')">查看启用中</el-button>
+                <el-button @click="openCreate">新增耗材</el-button>
               </template>
             </EmptyState>
             <EmptyState
               v-else
-              title="没有符合搜索条件的耗材"
-              :description="`没有找到与「${keyword.trim()}」匹配的名称、规格或存放位置。`"
+              title="没有符合条件的耗材"
+              :description="`没有找到与「${keyword.trim()}」匹配的结果。`"
             >
               <template #action>
                 <el-button @click="clearSearch">清除搜索</el-button>
@@ -720,7 +719,6 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
       >
         <el-form-item v-if="editingId" label="耗材编码">
           <span class="consumables__readonly">{{ form.code || '—' }}</span>
-          <p class="consumables__form-hint">编码为稳定标识，建档后不可修改</p>
         </el-form-item>
         <el-form-item label="名称" prop="name">
           <el-input v-model="form.name" maxlength="128" placeholder="如：焊丝" />
@@ -751,11 +749,9 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
         </el-form-item>
         <el-form-item v-if="!editingId" label="当前库存" prop="current_stock">
           <el-input-number v-model="form.current_stock" :min="0" :step="1" step-strictly />
-          <p class="consumables__form-hint">期初库存，保存后仅能经领用、撤销或补货变更</p>
         </el-form-item>
         <el-form-item v-else label="当前库存">
           <span class="consumables__readonly">{{ form.current_stock }} {{ form.unit }}</span>
-          <p class="consumables__form-hint">当前库存只读，仅能经领用、撤销或补货变更</p>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -789,24 +785,71 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 12px;
+  gap: 12px 16px;
   padding: 12px 16px;
-  margin-bottom: 16px;
+  margin-bottom: var(--space-4);
+}
+
+.consumables__segment {
+  padding: 2px;
+  border-radius: var(--radius-control);
+  background: var(--surface-muted);
+}
+
+.consumables__segment :deep(.el-radio-button__inner) {
+  min-height: 30px;
+  padding: 0 14px;
+  border: none;
+  border-radius: var(--radius-control);
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 30px;
+  transition:
+    background-color var(--duration-hover) ease,
+    color var(--duration-hover) ease;
+}
+
+.consumables__segment :deep(.el-radio-button:first-child .el-radio-button__inner) {
+  border-left: none;
+}
+
+.consumables__segment :deep(.el-radio-button.is-active .el-radio-button__inner) {
+  background: var(--primary-soft);
+  box-shadow: none;
+  color: var(--primary);
+  font-weight: 600;
 }
 
 .consumables__search {
   display: flex;
-  flex: 1 1 240px;
+  flex: 1 1 260px;
   align-items: center;
   gap: 8px;
 }
 
 .consumables__search-input {
-  max-width: 320px;
+  max-width: 300px;
 }
 
 .consumables__refresh {
   margin-left: auto;
+  color: var(--text-secondary);
+}
+
+.consumables__row-actions {
+  display: flex;
+  align-items: center;
+}
+
+.consumables__row-actions :deep(.el-button + .el-dropdown) {
+  margin-left: 8px;
+}
+
+.consumables__more-icon {
+  margin-left: 2px;
 }
 
 .consumables__banner {
@@ -816,7 +859,7 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
   justify-content: space-between;
   gap: 12px;
   padding: 10px 16px;
-  margin-bottom: 12px;
+  margin-bottom: var(--space-3);
   border: 1px solid var(--line);
   border-radius: var(--radius-panel);
   font-size: 14px;
@@ -824,19 +867,19 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
 }
 
 .consumables__banner--warning {
-  border-color: var(--warning);
+  border-color: var(--warning-line);
   background: var(--warning-soft);
   color: var(--warning);
 }
 
 .consumables__banner--info {
-  border-color: var(--primary);
-  background: var(--primary-soft);
-  color: var(--primary);
+  border-color: var(--info-line);
+  background: var(--info-soft);
+  color: var(--info);
 }
 
 .consumables__placeholder {
-  padding: 24px;
+  padding: var(--space-5);
 }
 
 .consumables__error {
@@ -879,7 +922,7 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
 }
 
 .cell-code {
-  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Consolas, monospace);
+  font-family: var(--font-mono);
   font-size: 12px;
   color: var(--text-muted);
 }
@@ -888,6 +931,14 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
   font-size: 12px;
   line-height: 18px;
   color: var(--text-muted);
+}
+
+.cell-sub--danger {
+  color: var(--danger);
+}
+
+.cell-sub--warning {
+  color: var(--warning);
 }
 
 .cell-number {
@@ -901,7 +952,7 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
 }
 
 .consumables__form-error {
-  margin-bottom: 16px;
+  margin-bottom: var(--space-4);
 }
 
 .consumables__form-hint {
@@ -925,6 +976,42 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+}
+
+@media (max-width: 767px) {
+  .consumables__toolbar {
+    gap: 8px;
+    padding: 12px;
+  }
+
+  .consumables__segment {
+    flex: 1 1 100%;
+    display: flex;
+  }
+
+  .consumables__segment :deep(.el-radio-button) {
+    flex: 1;
+  }
+
+  .consumables__segment :deep(.el-radio-button__inner) {
+    width: 100%;
+    min-height: 38px;
+    line-height: 38px;
+  }
+
+  .consumables__search {
+    flex: 1 1 100%;
+  }
+
+  .consumables__search-input {
+    max-width: none;
+    flex: 1;
+  }
+
+  .consumables__refresh {
+    margin-left: 0;
+    min-height: 44px;
+  }
 }
 </style>
 
@@ -953,5 +1040,14 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
 
 .consumables__row--focus td.el-table__cell {
   background: var(--primary-soft);
+}
+
+.el-dropdown-menu__item.consumables__danger-item {
+  color: var(--danger);
+}
+
+.el-dropdown-menu__item.consumables__danger-item:not(.is-disabled):hover {
+  background: var(--danger-soft);
+  color: var(--danger);
 }
 </style>

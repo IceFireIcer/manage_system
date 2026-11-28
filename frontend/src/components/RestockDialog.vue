@@ -136,26 +136,26 @@ async function submit() {
     :show-close="!submitting"
   >
     <div v-if="consumable" class="receive-dialog">
-      <div class="receive-dialog__summary">
+      <dl class="receive-dialog__summary">
         <div class="receive-dialog__row">
-          <span class="receive-dialog__label">耗材</span>
-          <span class="receive-dialog__value">
+          <dt class="receive-dialog__label">耗材</dt>
+          <dd class="receive-dialog__value">
             {{ consumable.name }}<span v-if="consumable.spec">（{{ consumable.spec }}）</span>
-          </span>
+          </dd>
         </div>
         <div class="receive-dialog__row">
-          <span class="receive-dialog__label">当前库存</span>
-          <span class="receive-dialog__value">
+          <dt class="receive-dialog__label">当前库存</dt>
+          <dd class="receive-dialog__value">
             {{ consumable.current_stock }}{{ consumable.unit }}
-          </span>
+          </dd>
         </div>
         <div class="receive-dialog__row">
-          <span class="receive-dialog__label">安全库存线</span>
-          <span class="receive-dialog__value">
+          <dt class="receive-dialog__label">安全库存线</dt>
+          <dd class="receive-dialog__value">
             {{ consumable.safety_stock }}{{ consumable.unit }}
-          </span>
+          </dd>
         </div>
-      </div>
+      </dl>
 
       <el-form label-position="top" @submit.prevent>
         <el-form-item label="实收数量" required :error="fieldError">
@@ -170,7 +170,7 @@ async function submit() {
             @change="clearQuantityError"
           />
           <p v-if="expectedStock !== null" class="receive-dialog__hint">
-            预计入库后 {{ expectedStock }}{{ unit }}
+            入库后库存 {{ expectedStock }}{{ unit }}
           </p>
         </el-form-item>
         <el-form-item label="实收日期" required>
@@ -198,7 +198,7 @@ async function submit() {
             maxlength="255"
             show-word-limit
             :disabled="submitting"
-            placeholder="可选"
+            placeholder="选填"
           />
         </el-form-item>
       </el-form>
@@ -226,35 +226,39 @@ async function submit() {
 .receive-dialog {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: var(--space-4);
 }
 
 .receive-dialog__summary {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 16px;
-  border-radius: var(--radius-control);
-  background: var(--surface-muted);
+  gap: var(--space-2);
+  margin: 0;
+  padding: 14px 16px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-panel);
+  background: var(--surface-subtle);
 }
 
 .receive-dialog__row {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  gap: 16px;
+  gap: var(--space-4);
 }
 
 .receive-dialog__label {
   font-size: 13px;
   line-height: 20px;
+  font-weight: 500;
   color: var(--text-muted);
 }
 
 .receive-dialog__value {
+  margin: 0;
   font-size: 14px;
   line-height: 22px;
-  font-weight: 600;
+  font-weight: 500;
   color: var(--text);
   text-align: right;
   font-variant-numeric: tabular-nums;
@@ -270,5 +274,6 @@ async function submit() {
   font-size: 13px;
   line-height: 20px;
   color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
 }
 </style>

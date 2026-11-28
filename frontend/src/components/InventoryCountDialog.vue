@@ -225,12 +225,13 @@ function formatSigned(value, unit) {
     v-model="visible"
     title="库存盘点"
     width="760px"
+    class="count-dialog-root"
     :close-on-click-modal="!posting"
     :close-on-press-escape="!posting"
   >
     <div class="count-dialog">
       <template v-if="step === 'create'">
-        <el-form label-position="top" @submit.prevent>
+        <el-form label-position="top" class="count-dialog__form" @submit.prevent>
           <el-form-item label="盘点耗材" required>
             <el-select
               v-model="selectedIds"
@@ -249,9 +250,6 @@ function formatSigned(value, unit) {
                 :value="item.id"
               />
             </el-select>
-            <p class="count-dialog__hint">
-              系统会在创建时冻结所选耗材的盘点时点系统量与执行序号。
-            </p>
           </el-form-item>
           <el-form-item label="复核人">
             <el-select
@@ -285,15 +283,15 @@ function formatSigned(value, unit) {
 
       <template v-else>
         <div class="count-dialog__summary">
-          <div class="count-dialog__row">
+          <div class="count-dialog__fact">
             <span class="count-dialog__label">盘点单号</span>
             <span class="count-dialog__value">{{ count.order_no }}</span>
           </div>
-          <div class="count-dialog__row">
+          <div class="count-dialog__fact">
             <span class="count-dialog__label">盘点时点</span>
             <span class="count-dialog__value">{{ String(count.count_at).replace('T', ' ') }}</span>
           </div>
-          <div class="count-dialog__row">
+          <div class="count-dialog__fact">
             <span class="count-dialog__label">盘点人 · 复核人</span>
             <span class="count-dialog__value">
               {{ count.counter_name }} · {{ count.reviewer_name }}
@@ -307,61 +305,68 @@ function formatSigned(value, unit) {
           :closable="false"
           show-icon
           title="盘点期间库存基准已变化"
-          description="系统保留盘点时点快照，并列出期间净变动，请核对后再过账。"
+          description="已保留盘点时点快照与期间净变动，请核对后再过账。"
         />
 
-        <el-table :data="count.lines" class="table-dense count-dialog__table" row-key="consumable_id">
-          <el-table-column label="耗材" min-width="150">
-            <template #default="{ row }">
-              <div>{{ row.consumable_name }}</div>
-              <div v-if="row.period_delta" class="count-dialog__hint">
-                期间净变动 {{ formatSigned(row.period_delta, row.unit) }}，应有
-                {{ row.expected_stock }}{{ row.unit }}
-              </div>
-            </template>
-          </el-table-column>
-          <el-table-column label="系统量" width="90" align="right">
-            <template #default="{ row }">{{ row.baseline_stock }}{{ row.unit }}</template>
-          </el-table-column>
-          <el-table-column label="实盘量" width="140">
-            <template #default="{ row }">
-              <el-input-number
-                v-model="entries[row.consumable_id].counted_qty"
-                :min="0"
-                :precision="0"
-                :step="1"
-                :disabled="step === 'posted'"
-                controls-position="right"
-                class="count-dialog__number"
-              />
-            </template>
-          </el-table-column>
-          <el-table-column label="差异" width="90" align="right">
-            <template #default="{ row }">
-              {{ formatDiff(diffOf(row)) }}
-            </template>
-          </el-table-column>
-          <el-table-column label="原因" width="140">
-            <template #default="{ row }">
-              <el-select
-                v-model="entries[row.consumable_id].reason"
-                :disabled="step === 'posted'"
-                placeholder="可选"
-                class="count-dialog__control"
-              >
-                <el-option
-                  v-for="reason in REASONS"
-                  :key="reason.value"
-                  :label="reason.label"
-                  :value="reason.value"
+        <div class="count-dialog__table-wrap">
+          <el-table
+            :data="count.lines"
+            class="table-dense count-dialog__table"
+            row-key="consumable_id"
+          >
+            <el-table-column label="耗材" min-width="150">
+              <template #default="{ row }">
+                <div>{{ row.consumable_name }}</div>
+                <div v-if="row.period_delta" class="count-dialog__hint">
+                  期间净变动 {{ formatSigned(row.period_delta, row.unit) }}，应有
+                  {{ row.expected_stock }}{{ row.unit }}
+                </div>
+              </template>
+            </el-table-column>
+            <el-table-column label="系统量" width="90" align="right">
+              <template #default="{ row }">{{ row.baseline_stock }}{{ row.unit }}</template>
+            </el-table-column>
+            <el-table-column label="实盘量" width="140">
+              <template #default="{ row }">
+                <el-input-number
+                  v-model="entries[row.consumable_id].counted_qty"
+                  :min="0"
+                  :precision="0"
+                  :step="1"
+                  :disabled="step === 'posted'"
+                  controls-position="right"
+                  class="count-dialog__number"
                 />
-              </el-select>
-            </template>
-          </el-table-column>
-        </el-table>
+              </template>
+            </el-table-column>
+            <el-table-column label="差异" width="90" align="right">
+              <template #default="{ row }">
+                {{ formatDiff(diffOf(row)) }}
+              </template>
+            </el-table-column>
+            <el-table-column label="原因" width="140">
+              <template #default="{ row }">
+                <el-select
+                  v-model="entries[row.consumable_id].reason"
+                  :disabled="step === 'posted'"
+                  placeholder="可选"
+                  class="count-dialog__control"
+                >
+                  <el-option
+                    v-for="reason in REASONS"
+                    :key="reason.value"
+                    :label="reason.label"
+                    :value="reason.value"
+                  />
+                </el-select>
+              </template>
+            </el-table-column>
+          </el-table>
+        </div>
 
         <div class="count-dialog__totals">
-          预计调整合计：{{ formatSigned(totalAdjustment, '') }}
+          <span class="count-dialog__label">预计调整合计</span>
+          <span class="count-dialog__total-value">{{ formatSigned(totalAdjustment, '') }}</span>
         </div>
 
         <el-alert
@@ -412,6 +417,14 @@ function formatSigned(value, unit) {
   gap: 16px;
 }
 
+.count-dialog__form :deep(.el-form-item) {
+  margin-bottom: 14px;
+}
+
+.count-dialog__form :deep(.el-form-item:last-child) {
+  margin-bottom: 0;
+}
+
 .count-dialog__control {
   width: 100%;
 }
@@ -421,24 +434,26 @@ function formatSigned(value, unit) {
 }
 
 .count-dialog__summary {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 16px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px 24px;
+  padding: 14px 16px;
+  border: 1px solid var(--line-soft);
   border-radius: var(--radius-control);
-  background: var(--surface-muted);
+  background: var(--surface-subtle);
 }
 
-.count-dialog__row {
+.count-dialog__fact {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 16px;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
 }
 
 .count-dialog__label {
-  font-size: 13px;
-  line-height: 20px;
+  font-size: 12px;
+  line-height: 18px;
+  font-weight: 500;
   color: var(--text-muted);
 }
 
@@ -447,25 +462,83 @@ function formatSigned(value, unit) {
   line-height: 22px;
   font-weight: 600;
   color: var(--text);
-  text-align: right;
   font-variant-numeric: tabular-nums;
 }
 
 .count-dialog__hint {
-  margin: 4px 0 0;
+  margin-top: 2px;
   font-size: 12px;
   line-height: 18px;
   color: var(--text-muted);
 }
 
-.count-dialog__totals {
-  text-align: right;
-  font-size: 14px;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
+.count-dialog__table-wrap {
+  width: 100%;
+  overflow-x: auto;
 }
 
 .count-dialog__table {
   width: 100%;
+  min-width: 620px;
+}
+
+.count-dialog__totals {
+  display: flex;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+.count-dialog__total-value {
+  font-size: 16px;
+  line-height: 24px;
+  font-weight: 650;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.count-dialog :deep(.el-alert) {
+  padding: 10px 12px;
+}
+
+@media (max-width: 767px) {
+  .count-dialog {
+    gap: 12px;
+  }
+
+  .count-dialog__summary {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+    padding: 12px;
+  }
+}
+</style>
+
+<style>
+.count-dialog-root .el-dialog__header {
+  padding: 20px 24px 12px;
+}
+
+.count-dialog-root .el-dialog__body {
+  padding: 0 24px 16px;
+}
+
+.count-dialog-root .el-dialog__footer {
+  padding: 12px 24px 20px;
+}
+
+@media (max-width: 767px) {
+  .count-dialog-root .el-dialog__header {
+    padding: 16px 16px 10px;
+  }
+
+  .count-dialog-root .el-dialog__body {
+    padding: 0 16px 12px;
+  }
+
+  .count-dialog-root .el-dialog__footer {
+    padding: 10px 16px 16px;
+  }
 }
 </style>

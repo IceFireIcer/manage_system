@@ -391,13 +391,28 @@ async function confirmImport() {
       />
 
       <template v-if="preview">
-        <div class="ledger-import__summary">
-          <span>共 {{ preview.summary.total_rows }} 行</span>
-          <span>可导入 {{ preview.summary.ready_rows }} 类</span>
-          <span>已存在跳过 {{ preview.summary.existing_rows }} 行</span>
-          <span>错误 {{ preview.summary.error_rows }} 行</span>
-          <span>期初合计 {{ preview.summary.opening_total }}</span>
-        </div>
+        <dl class="ledger-import__summary">
+          <div class="ledger-import__summary-item">
+            <dt>总行数</dt>
+            <dd>{{ preview.summary.total_rows }}</dd>
+          </div>
+          <div class="ledger-import__summary-item">
+            <dt>可导入</dt>
+            <dd>{{ preview.summary.ready_rows }} 类</dd>
+          </div>
+          <div class="ledger-import__summary-item">
+            <dt>已存在跳过</dt>
+            <dd>{{ preview.summary.existing_rows }} 行</dd>
+          </div>
+          <div class="ledger-import__summary-item">
+            <dt>错误</dt>
+            <dd>{{ preview.summary.error_rows }} 行</dd>
+          </div>
+          <div class="ledger-import__summary-item">
+            <dt>期初合计</dt>
+            <dd>{{ preview.summary.opening_total }}</dd>
+          </div>
+        </dl>
         <div class="ledger-import__units">
           <el-tag
             v-for="item in preview.summary.by_unit"
@@ -453,12 +468,24 @@ async function confirmImport() {
         title="台账已导入"
         :sub-title="`批次 ${receipt.batch_id} · ${receipt.source}`"
       />
-      <div class="ledger-import__summary">
-        <span>总类数 {{ receipt.summary.total_kinds }}</span>
-        <span>期初合计 {{ receipt.summary.opening_total }}</span>
-        <span>已存在跳过 {{ receipt.summary.existing_rows }} 行</span>
-        <span>计数时点 {{ receipt.counted_at.replace('T', ' ') }}</span>
-      </div>
+      <dl class="ledger-import__summary">
+        <div class="ledger-import__summary-item">
+          <dt>总类数</dt>
+          <dd>{{ receipt.summary.total_kinds }}</dd>
+        </div>
+        <div class="ledger-import__summary-item">
+          <dt>期初合计</dt>
+          <dd>{{ receipt.summary.opening_total }}</dd>
+        </div>
+        <div class="ledger-import__summary-item">
+          <dt>已存在跳过</dt>
+          <dd>{{ receipt.summary.existing_rows }} 行</dd>
+        </div>
+        <div class="ledger-import__summary-item">
+          <dt>计数时点</dt>
+          <dd>{{ receipt.counted_at.replace('T', ' ') }}</dd>
+        </div>
+      </dl>
       <div class="ledger-import__units">
         <el-tag
           v-for="item in receipt.summary.by_unit"
@@ -516,27 +543,33 @@ async function confirmImport() {
 .ledger-import__grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
-  margin-bottom: 12px;
+  gap: var(--space-4);
+  margin-bottom: var(--space-3);
 }
 
 .ledger-import__field {
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+
+.ledger-import__field span {
   font-size: 13px;
+  line-height: 20px;
+  font-weight: 500;
   color: var(--text-muted);
 }
 
 .ledger-import__upload {
   display: flex;
   align-items: center;
-  gap: 12px;
-  margin-bottom: 12px;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
 }
 
 .ledger-import__filename {
   font-size: 13px;
+  line-height: 20px;
   color: var(--text-muted);
 }
 
@@ -556,23 +589,47 @@ async function confirmImport() {
 }
 
 .ledger-import__alert {
-  margin-top: 12px;
+  margin-top: var(--space-3);
 }
 
 .ledger-import__summary {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px 20px;
-  margin: 16px 0 8px;
+  gap: var(--space-2) var(--space-5);
+  margin: var(--space-4) 0 var(--space-2);
+  padding: 12px 16px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-control);
+  background: var(--surface-subtle);
+}
+
+.ledger-import__summary-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.ledger-import__summary-item dt {
   font-size: 13px;
+  line-height: 20px;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.ledger-import__summary-item dd {
+  margin: 0;
+  font-size: 14px;
+  line-height: 22px;
+  font-weight: 600;
   color: var(--text);
+  font-variant-numeric: tabular-nums;
 }
 
 .ledger-import__units {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin-bottom: 12px;
+  margin-bottom: var(--space-3);
 }
 
 .ledger-import__sub {
@@ -594,6 +651,16 @@ async function confirmImport() {
 @media (max-width: 640px) {
   .ledger-import__grid {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ledger-import__upload {
+    flex-wrap: wrap;
+  }
+}
+
+@media (max-width: 767px) {
+  .ledger-import .el-dialog__footer .el-button {
+    min-height: 44px;
   }
 }
 </style>

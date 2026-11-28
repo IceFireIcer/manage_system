@@ -119,24 +119,24 @@ async function handleConfirm() {
     :show-close="!submitting"
     append-to-body
   >
-    <div v-if="record" class="correction__summary">
+    <dl v-if="record" class="correction__summary">
       <div class="correction__row">
-        <span class="correction__label">原流水号</span>
-        <span class="correction__value">#{{ record.id }}</span>
+        <dt class="correction__label">原流水号</dt>
+        <dd class="correction__value">#{{ record.id }}</dd>
       </div>
       <div class="correction__row">
-        <span class="correction__label">耗材</span>
-        <span class="correction__value">{{ consumableLabel(record) }}</span>
+        <dt class="correction__label">耗材</dt>
+        <dd class="correction__value">{{ consumableLabel(record) }}</dd>
       </div>
       <div class="correction__row">
-        <span class="correction__label">领用时间</span>
-        <span class="correction__value">{{ formatTime(record.created_at) }}</span>
+        <dt class="correction__label">领用时间</dt>
+        <dd class="correction__value">{{ formatTime(record.created_at) }}</dd>
       </div>
       <div class="correction__row">
-        <span class="correction__label">数量</span>
-        <span class="correction__value">{{ quantityText }}</span>
+        <dt class="correction__label">数量</dt>
+        <dd class="correction__value">{{ quantityText }}</dd>
       </div>
-    </div>
+    </dl>
 
     <el-alert
       v-if="record"
@@ -202,46 +202,51 @@ async function handleConfirm() {
 <style scoped>
 .correction__summary {
   display: grid;
-  gap: 8px;
-  padding: 16px;
-  border: 1px solid var(--line);
+  gap: var(--space-2);
+  margin: 0;
+  padding: 14px 16px;
+  border: 1px solid var(--line-soft);
   border-radius: var(--radius-panel);
-  background: var(--surface-muted);
+  background: var(--surface-subtle);
 }
 
 .correction__row {
   display: flex;
   align-items: baseline;
-  gap: 12px;
+  gap: var(--space-3);
   min-width: 0;
 }
 
 .correction__label {
-  flex: 0 0 64px;
+  flex: 0 0 68px;
   font-size: 13px;
   line-height: 20px;
+  font-weight: 500;
   color: var(--text-muted);
 }
 
 .correction__value {
   min-width: 0;
+  margin: 0;
   font-size: 14px;
   line-height: 22px;
+  font-weight: 500;
   color: var(--text);
   word-break: break-word;
   font-variant-numeric: tabular-nums;
 }
 
-.correction__hint {
-  margin-top: 16px;
-}
-
+.correction__hint,
 .correction__request-error {
-  margin-top: 16px;
+  margin-top: var(--space-4);
 }
 
 .correction__form {
-  margin-top: 16px;
+  margin-top: var(--space-4);
+}
+
+.correction__form :deep(.el-form-item) {
+  margin-bottom: var(--space-3);
 }
 
 .correction__footer {
@@ -254,6 +259,10 @@ async function handleConfirm() {
 @media (max-width: 767px) {
   .correction-dialog.el-dialog {
     width: calc(100% - 32px);
+  }
+
+  .correction-dialog .el-dialog__footer .el-button {
+    min-height: 44px;
   }
 }
 </style>
