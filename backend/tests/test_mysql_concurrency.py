@@ -11,10 +11,19 @@ from typing import Any
 from urllib.parse import urlsplit
 
 import pytest
-from app import inventory_ledger
-from app.models import Base, Consumable, InventoryEvent, Requisition, RequisitionOrder, User
+from app import inventory_count, inventory_ledger
+from app.models import (
+    Base,
+    Consumable,
+    InventoryCount,
+    InventoryEvent,
+    Requisition,
+    RequisitionOrder,
+    User,
+)
 from app.restock import create_restock_order
 from app.routers.requisitions import _create_requisition_impl, reverse_requisition
+from app.schemas_inventory import InventoryCountCreate, InventoryCountLineIn
 from app.schemas_requisitions import (
     RequisitionCreate,
     RequisitionCreateOut,
@@ -384,3 +393,42 @@ def test_lock_conflict_returns_retryable_result_and_retry_posts_once(engine) -> 
     _assert_ledger_consistent(engine, ids["a"], 9)
     assert _count(engine, RequisitionOrder) == 1
     assert _count(engine, Requisition) == 1
+
+def test_inventory_count_posts_once_under_concurrency(engine) -> None:
+    ids = _seed(engine, 20, 20)
+    with Session(engine) as db:
+        admin = db.get(User, ids["admin"])
+        created, _ = inventory_count.create_count(
+            db,
+            payload=InventoryCountCreate(
+                lines=[InventoryCountLineIn(consumable_id=ids["a"], counted_qty=22)],
+                request_id=f"cnt-{uuid.uuid4().hex}",
+            ),
+            operator=admin,
+        )
+        order_no = created.order_no
+        count_id = created.id
+
+    def post(db: Session):
+        admin = db.get(User, ids["admin"])
+        count = inventory_count.get_count_by_no(db, order_no)
+        assert count is not None
+        return inventory_count.post_count(db, count=count, operator=admin)
+
+    results = _run_concurrently(engine, [post, post])
+
+    assert all(result.error is None for result in results), results
+    assert sorted(result.value[1] for result in results) == [False, True]
+    with Session(engine) as db:
+        events = db.scalars(
+            select(InventoryEvent).where(
+                InventoryEvent.source_type == "inventory_count",
+                InventoryEvent.source_id == count_id,
+            )
+        ).all()
+        assert len(events) == 1
+        assert events[0].delta == 2
+        count = db.get(InventoryCount, count_id)
+        assert count is not None
+        assert count.status == "posted"
+    _assert_ledger_consistent(engine, ids["a"], 22)

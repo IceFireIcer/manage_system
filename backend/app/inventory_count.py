@@ -252,6 +252,12 @@ def update_lines(
 def post_count(
     db: Session, *, count: InventoryCount, operator: User
 ) -> tuple[InventoryCount, bool]:
+    count = db.scalars(
+        select(InventoryCount)
+        .where(InventoryCount.id == count.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).one()
     if count.status == "posted":
         return count, False
 
