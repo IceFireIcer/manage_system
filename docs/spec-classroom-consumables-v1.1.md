@@ -168,7 +168,7 @@
 
 ## Further Notes
 
-- 决策基线：`ADR-0001`（四表）、`ADR-0002`（处置即入库）、`ADR-0003`（红冲撤销）、`ADR-0004`（技术栈与部署）；术语以 `GLOSSARY.md` 为准；需求全文见 `output/prd-classroom-training-consumables-system.md`（v1.1）
+- 决策基线：`ADR-0001`（四表）、`ADR-0002`（处置即入库）、`ADR-0003`（红冲撤销）、`ADR-0004`（技术栈与部署）；术语以 `GLOSSARY.md` 为准；需求全文见 `prd-classroom-training-consumables-system.md`（v1.1）
 - 赛事约束：赛事原始要求为 CodeArts CI/CD 流水线发布；本项目 2026-11-27 按用户决定迁移 GitHub（GitHub Actions + GHCR），合规性待与赛事方确认（ADR-0005）
 - 实施前置（不阻塞开发）：ECS 开通、DeepSeek API Key、真实安全线数据校准
 - 本 spec 发布至 GitHub Issues（IceFireIcer/manage_system）并标记 `ready-for-agent`；后续由 to-tickets 拆分为带阻塞边的实现票据

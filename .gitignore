@@ -1,26 +1,72 @@
+# ---------- AI / Agent 工具（本地私有） ----------
 .codeartsdoer/
 .arts/
+.scratch/
+.worktrees/
+.claude/
+.cursor/
+.continue/
+.aider*
+
+# ---------- 依赖 ----------
 node_modules/
-__pycache__/
-*.pyc
-.pytest_cache/
-.ruff_cache/
-.env
-.env.bak.*
-certs/
 venv/
 .venv/
 .venv-ci/
+
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# ---------- 前端 / 构建产物 ----------
 dist/
+dist-verify/
+dist-check-*/
+*.tsbuildinfo
+
+# ---------- 测试与覆盖率 ----------
+.coverage
+coverage.xml
+htmlcov/
+playwright-report/
+test-results/
+
+# ---------- 运行时数据 / 备份 ----------
 .dev-run/
 backups/
 *.sqlite
+*.sqlite3
 *.db
-.coverage
+*.log
+*.pid
+
+# ---------- 密钥 / 证书 / 本地配置 ----------
+.env
+.env.bak.*
+*.local
+certs/
+.npmrc
+docker-compose.override.yml
+
+# ---------- 临时文件 ----------
+*.bak
+*.orig
+*.rej
+*.swp
+*.swo
+*~
+.cache/
 temp/
 
-htmlcov/
+# ---------- IDE / 系统 ----------
 .idea/
 .vscode/
 Thumbs.db
 .DS_Store
+
+# ---------- 指定不入库的本地文档 ----------
+docs/前端完整设计文档-班级实训耗材管理系统-v2.md
