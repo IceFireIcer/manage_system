@@ -30,6 +30,7 @@ const overview = ref({ summary: null, items: [] })
 const records = ref({ items: [], total: 0 })
 const suggestions = ref({ items: [] })
 const consumption = ref({ items: [], unit_totals: [] })
+const classSignals = ref(null)
 const logs = ref({ items: [] })
 const consumables = ref([])
 const courseRisks = ref([])
@@ -93,6 +94,16 @@ const unitTotals = computed(() =>
 )
 const maxUnit = computed(() =>
   Math.max(1, ...unitTotals.value.map((row) => Number(row.net_quantity) || 0)),
+)
+
+const classSignalUnits = computed(() =>
+  (classSignals.value?.units ?? []).slice(0, 3),
+)
+const maxSignalUnit = computed(() =>
+  Math.max(
+    1,
+    ...classSignalUnits.value.map((row) => Number(row.net_quantity) || 0),
+  ),
 )
 
 const stats = computed(() => {
@@ -187,6 +198,17 @@ function formatTime(value) {
   })
 }
 
+function formatChange(value) {
+  if (value === null || value === undefined) return '—'
+  const percent = Math.round(value * 100)
+  return `${percent > 0 ? '+' : ''}${percent}%`
+}
+
+function signalTone(value) {
+  if (!value) return 'status-tag--neutral'
+  return value > 0 ? 'status-tag--danger' : 'status-tag--success'
+}
+
 function go(path) {
   router.push(path)
 }
@@ -203,6 +225,8 @@ function assign(key, data) {
       items: data.items ?? [],
       unit_totals: data.unit_totals ?? [],
     }
+  } else if (key === 'classSignals') {
+    classSignals.value = data ?? null
   } else if (key === 'logs') {
     logs.value = { items: data.items ?? [] }
   } else if (key === 'risks') {
@@ -232,6 +256,12 @@ async function loadData({ silent = false } = {}) {
       {
         key: 'consumption',
         request: api.get('/consumption/summary', { params: { window: 7 } }),
+      },
+      {
+        key: 'classSignals',
+        request: api.get('/requisitions/class-signals', {
+          params: { window: 7 },
+        }),
       },
       {
         key: 'logs',
@@ -461,6 +491,54 @@ onMounted(() => loadData())
             </div>
           </div>
           <EmptyState v-else title="近 7 天暂无消耗" />
+        </section>
+
+        <section v-if="isStaff" class="panel dashboard__section">
+          <header class="dashboard__section-head">
+            <h2 class="dashboard__section-title">班级消耗信号</h2>
+            <span
+              v-if="classSignals && !classSignals.insufficient"
+              class="status-tag status-tag--info"
+            >
+              匿名聚合
+            </span>
+          </header>
+          <template v-if="classSignals && !classSignals.insufficient">
+            <div class="dashboard__signal-summary">
+              <span class="dashboard__signal-total">
+                {{ classSignals.total_net_quantity }}
+              </span>
+              <span class="dashboard__signal-caption">总净量 · 近 7 天</span>
+              <span
+                class="status-tag"
+                :class="signalTone(classSignals.change_quantity)"
+              >
+                环比 {{ formatChange(classSignals.change_ratio) }}
+              </span>
+            </div>
+            <div v-if="classSignalUnits.length" class="dashboard__trend">
+              <div
+                v-for="unit in classSignalUnits"
+                :key="unit.unit"
+                class="dashboard__trend-row"
+              >
+                <span class="dashboard__trend-label">{{ unit.unit }}</span>
+                <div class="dashboard__trend-track">
+                  <span
+                    class="dashboard__trend-bar"
+                    :style="{
+                      width: `${Math.max(4, (Number(unit.net_quantity) / maxSignalUnit) * 100)}%`,
+                    }"
+                  />
+                </div>
+                <span class="dashboard__trend-value">
+                  {{ unit.net_quantity }}
+                </span>
+              </div>
+            </div>
+          </template>
+          <EmptyState v-else-if="classSignals" title="样本不足" />
+          <EmptyState v-else title="班级信号暂不可用" />
         </section>
 
         <section v-if="isStaff" class="panel dashboard__section">
@@ -751,6 +829,29 @@ onMounted(() => loadData())
   flex-direction: column;
   gap: 12px;
   padding-top: 4px;
+}
+
+.dashboard__signal-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.dashboard__signal-total {
+  color: var(--text);
+  font-size: 24px;
+  line-height: 30px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+}
+
+.dashboard__signal-caption {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 18px;
 }
 
 .dashboard__trend-row {

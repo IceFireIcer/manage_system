@@ -500,3 +500,46 @@ class FootprintOut(BaseModel):
     requisition_count: int
     items: list[FootprintItemOut]
     unit_totals: list[FootprintUnitTotalOut]
+
+class ClassSignalThresholdOut(BaseModel):
+    min_requesters: int
+    min_flows: int
+
+
+class ClassSignalSampleOut(BaseModel):
+    requester_count: int
+    flow_count: int
+
+
+class ClassSignalItemOut(BaseModel):
+    consumable_id: int
+    name: str
+    unit: str
+    net_quantity: int
+    previous_net_quantity: int
+    change_quantity: int
+    change_ratio: float | None = None
+
+
+class ClassSignalUnitOut(BaseModel):
+    unit: str
+    net_quantity: int
+    previous_net_quantity: int
+    change_quantity: int
+    change_ratio: float | None = None
+    consumables: int
+
+
+class ClassSignalsOut(BaseModel):
+    window: int
+    generated_at: datetime
+    class_id: int
+    insufficient: bool
+    threshold: ClassSignalThresholdOut
+    sample: ClassSignalSampleOut | None = None
+    total_net_quantity: int | None = None
+    previous_net_quantity: int | None = None
+    change_quantity: int | None = None
+    change_ratio: float | None = None
+    units: list[ClassSignalUnitOut] = []
+    items: list[ClassSignalItemOut] = []

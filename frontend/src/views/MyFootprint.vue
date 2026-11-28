@@ -23,6 +23,10 @@ const unitTotals = ref([])
 const totalCount = ref(0)
 const loading = ref(false)
 const error = ref('')
+const classSignal = ref(null)
+const signalWindow = ref(30)
+const signalLoading = ref(true)
+const signalError = ref(false)
 let requestSeq = 0
 
 function formatTime(value) {
@@ -46,26 +50,50 @@ function supportMeta(support) {
   return `${support.course_name} · ${support.headcount} 人`
 }
 
+function formatChange(value) {
+  if (value === null || value === undefined) return '—'
+  const percent = Math.round(value * 100)
+  return `${percent > 0 ? '+' : ''}${percent}%`
+}
+
+function changeTone(value) {
+  if (value === null || value === undefined || value === 0) return 'flat'
+  return value > 0 ? 'up' : 'down'
+}
+
 async function fetchFootprint() {
   const seq = ++requestSeq
   const requested = windowDays.value
+  const requestedSignalWindow = requested === 7 ? 7 : 30
   loading.value = true
+  signalLoading.value = true
   error.value = ''
-  try {
-    const { data } = await api.get('/requisitions/my-footprint', {
-      params: { window: requested },
-    })
-    if (seq !== requestSeq) return
+  signalError.value = false
+  const [footprintResult, signalResult] = await Promise.allSettled([
+    api.get('/requisitions/my-footprint', { params: { window: requested } }),
+    api.get('/requisitions/class-signals', {
+      params: { window: requestedSignalWindow },
+    }),
+  ])
+  if (seq !== requestSeq) return
+  if (footprintResult.status === 'fulfilled') {
+    const data = footprintResult.value.data
     items.value = Array.isArray(data.items) ? data.items : []
     unitTotals.value = Array.isArray(data.unit_totals) ? data.unit_totals : []
     totalCount.value = Number(data.requisition_count) || 0
     appliedWindow.value = requested
-  } catch {
-    if (seq !== requestSeq) return
+  } else {
     error.value = '足迹读取失败，请稍后重试。'
-  } finally {
-    if (seq === requestSeq) loading.value = false
   }
+  if (signalResult.status === 'fulfilled') {
+    classSignal.value = signalResult.value.data
+    signalWindow.value = requestedSignalWindow
+  } else {
+    classSignal.value = null
+    signalError.value = true
+  }
+  loading.value = false
+  signalLoading.value = false
 }
 
 function switchWindow(value) {
@@ -95,6 +123,95 @@ onMounted(fetchFootprint)
         </el-radio-group>
       </template>
     </PageHeader>
+
+    <section class="panel footprint__block footprint__signal" aria-live="polite">
+      <div class="footprint__block-head">
+        <div class="footprint__signal-heading">
+          <h2 class="footprint__block-title">班级消耗信号</h2>
+          <span class="footprint__block-meta">
+            近 {{ signalWindow }} 天 · 匿名聚合
+          </span>
+        </div>
+        <span
+          v-if="classSignal && !classSignal.insufficient"
+          class="footprint__signal-sample"
+        >
+          {{ classSignal.sample.requester_count }} 人 ·
+          {{ classSignal.sample.flow_count }} 笔
+        </span>
+      </div>
+      <p v-if="signalLoading && !classSignal" class="footprint__placeholder">
+        正在汇总班级消耗…
+      </p>
+      <div v-else-if="signalError" class="footprint__signal-empty">
+        <span class="footprint__signal-badge">暂不可用</span>
+      </div>
+      <div v-else-if="classSignal?.insufficient" class="footprint__signal-empty">
+        <span class="footprint__signal-badge">样本不足</span>
+        <span class="footprint__signal-note">
+          至少 {{ classSignal.threshold.min_requesters }} 人参与后展示
+        </span>
+      </div>
+      <template v-else-if="classSignal">
+        <div class="footprint__signal-stats">
+          <div class="footprint__signal-stat">
+            <span class="footprint__signal-stat-label">总净量</span>
+            <span class="footprint__signal-stat-value">
+              {{ classSignal.total_net_quantity }}
+            </span>
+          </div>
+          <div class="footprint__signal-stat">
+            <span class="footprint__signal-stat-label">上一周期</span>
+            <span class="footprint__signal-stat-value">
+              {{ classSignal.previous_net_quantity }}
+            </span>
+          </div>
+          <div class="footprint__signal-stat">
+            <span class="footprint__signal-stat-label">环比</span>
+            <span
+              class="footprint__signal-stat-value"
+              :class="`footprint__signal-stat-value--${changeTone(classSignal.change_ratio)}`"
+            >
+              {{ formatChange(classSignal.change_ratio) }}
+            </span>
+          </div>
+        </div>
+        <div v-if="classSignal.units.length" class="footprint__unit-grid">
+          <div
+            v-for="row in classSignal.units"
+            :key="row.unit"
+            class="footprint__unit"
+          >
+            <span class="footprint__unit-name">{{ row.unit }}</span>
+            <span class="footprint__unit-value">
+              {{ row.net_quantity }}<small>{{ row.unit }}</small>
+            </span>
+            <span class="footprint__unit-meta">
+              环比 {{ formatChange(row.change_ratio) }} ·
+              {{ row.consumables }} 种耗材
+            </span>
+          </div>
+        </div>
+        <ul v-if="classSignal.items.length" class="footprint__signal-list">
+          <li
+            v-for="row in classSignal.items.slice(0, 5)"
+            :key="row.consumable_id"
+            class="footprint__signal-row"
+          >
+            <span class="footprint__signal-name">{{ row.name }}</span>
+            <span class="footprint__signal-change">
+              {{ row.net_quantity }} {{ row.unit }}
+            </span>
+            <span
+              class="footprint__signal-ratio"
+              :class="`footprint__signal-ratio--${changeTone(row.change_ratio)}`"
+            >
+              {{ formatChange(row.change_ratio) }}
+            </span>
+          </li>
+        </ul>
+      </template>
+    </section>
 
     <section v-if="!items.length" class="panel footprint__state">
       <div v-if="loading" class="footprint__skeleton" aria-busy="true">
@@ -496,6 +613,148 @@ onMounted(fetchFootprint)
   font-size: 11px;
   line-height: 16px;
   color: var(--text-muted);
+}
+
+.footprint__signal {
+  display: flex;
+  flex-direction: column;
+}
+
+.footprint__signal-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.footprint__signal-sample {
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.footprint__signal-empty {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.footprint__signal-badge {
+  padding: 4px 10px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-subtle);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 18px;
+  font-weight: 600;
+}
+
+.footprint__signal-note {
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--text-muted);
+}
+
+.footprint__signal-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.footprint__signal-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.footprint__signal-stat-label {
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--text-muted);
+}
+
+.footprint__signal-stat-value {
+  font-size: 20px;
+  line-height: 26px;
+  font-weight: 650;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.footprint__signal-stat-value--up {
+  color: var(--danger);
+}
+
+.footprint__signal-stat-value--down {
+  color: var(--success);
+}
+
+.footprint__signal-stat-value--flat {
+  color: var(--text-secondary);
+}
+
+.footprint__signal-list {
+  display: flex;
+  flex-direction: column;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.footprint__signal-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 40px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.footprint__signal-row:first-child {
+  border-top: 0;
+}
+
+.footprint__signal-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 500;
+}
+
+.footprint__signal-change {
+  flex: 0 0 auto;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 18px;
+  font-variant-numeric: tabular-nums;
+}
+
+.footprint__signal-ratio {
+  flex: 0 0 auto;
+  min-width: 44px;
+  text-align: right;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 18px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.footprint__signal-ratio--up {
+  color: var(--danger);
+}
+
+.footprint__signal-ratio--down {
+  color: var(--success);
 }
 
 @media (max-width: 767px) {
