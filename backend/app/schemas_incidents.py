@@ -6,7 +6,8 @@ from pydantic import BaseModel, Field, field_validator
 STATUS_OPEN = "open"
 STATUS_CONFIRMED = "confirmed"
 STATUS_REJECTED = "rejected"
-STATUSES = (STATUS_OPEN, STATUS_CONFIRMED, STATUS_REJECTED)
+STATUS_CONVERTED = "converted_to_count"
+STATUSES = (STATUS_OPEN, STATUS_CONFIRMED, STATUS_REJECTED, STATUS_CONVERTED)
 
 DESCRIPTION_MAX_LENGTH = 500
 LOCATION_MAX_LENGTH = 64
@@ -36,11 +37,14 @@ class IncidentOut(BaseModel):
     location: str
     description: str
     photo_url: str | None = None
-    status: Literal["open", "confirmed", "rejected"]
+    status: Literal["open", "confirmed", "rejected", "converted_to_count"]
     handler_id: int | None = None
     handler_name: str | None = None
     handled_at: datetime | None = None
     reject_reason: str | None = None
+    linked_count_id: int | None = None
+    count_order_no: str | None = None
+    count_status: Literal["open", "posted"] | None = None
     created_at: datetime
     updated_at: datetime
 

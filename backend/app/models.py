@@ -521,6 +521,9 @@ class InventoryCount(Base):
     operator_name: Mapped[str] = mapped_column(String(64), nullable=False)
     operator_role: Mapped[str] = mapped_column(String(16), nullable=False)
     class_id: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    incident_id: Mapped[int | None] = mapped_column(
+        ForeignKey("incident_reports.id"), nullable=True, index=True
+    )
     remark: Mapped[str | None] = mapped_column(String(255), nullable=True)
     warning: Mapped[str | None] = mapped_column(Text, nullable=True)
     posted_at: Mapped[datetime | None] = mapped_column(DATETIME, nullable=True)
@@ -688,7 +691,7 @@ class IncidentReport(Base):
     __tablename__ = "incident_reports"
     __table_args__ = (
         CheckConstraint(
-            "status IN ('open','confirmed','rejected')",
+            "status IN ('open','confirmed','rejected','converted_to_count')",
             name="ck_incident_reports_status",
         ),
         Index("ix_incident_reports_class_status", "class_id", "status"),
@@ -715,6 +718,10 @@ class IncidentReport(Base):
     handler_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
     handled_at: Mapped[datetime | None] = mapped_column(DATETIME, nullable=True)
     reject_reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    linked_count_id: Mapped[int | None] = mapped_column(
+        ForeignKey("inventory_counts.id"), nullable=True
+    )
+    count_order_no: Mapped[str | None] = mapped_column(String(40), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
     updated_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
 

@@ -431,6 +431,7 @@ def build_out(db: Session, count: InventoryCount) -> InventoryCountOut:
         reviewer_id=count.reviewer_id,
         reviewer_name=count.reviewer_name,
         reviewer_role=count.reviewer_role,
+        incident_id=count.incident_id,
         posted_at=count.posted_at,
         posted_by_name=count.posted_by_name,
         remark=count.remark,

@@ -385,6 +385,7 @@ class InventoryCountOut(BaseModel):
     reviewer_id: int
     reviewer_name: str
     reviewer_role: str
+    incident_id: int | None = None
     posted_at: datetime | None
     posted_by_name: str | None
     remark: str | None

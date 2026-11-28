@@ -10,13 +10,22 @@ const STATUS_OPTIONS = [
   { value: '', label: '全部' },
   { value: 'open', label: '待处理' },
   { value: 'confirmed', label: '已确认' },
+  { value: 'converted_to_count', label: '已转盘点' },
   { value: 'rejected', label: '已驳回' },
 ]
-const STATUS_NAMES = { open: '待处理', confirmed: '已确认', rejected: '已驳回' }
+const STATUS_NAMES = {
+  open: '待处理',
+  confirmed: '已确认',
+  rejected: '已驳回',
+  converted_to_count: '已转盘点',
+  counted: '已盘点',
+}
 const STATUS_CLASS = {
   open: 'incidents__status--open',
   confirmed: 'incidents__status--confirmed',
   rejected: 'incidents__status--rejected',
+  converted_to_count: 'incidents__status--converted',
+  counted: 'incidents__status--counted',
 }
 const PHOTO_TYPES = ['image/jpeg', 'image/png', 'image/webp']
 const PHOTO_MAX_BYTES = 5 * 1024 * 1024
@@ -41,6 +50,7 @@ const statusFilter = ref('')
 const listLoading = ref(false)
 const listError = ref('')
 const handlingId = ref(null)
+const convertingId = ref(null)
 
 const photoDialogVisible = ref(false)
 const photoDialogSrc = ref('')
@@ -53,6 +63,14 @@ function statusLabel(status) {
 
 function statusClass(status) {
   return STATUS_CLASS[status] ?? ''
+}
+
+function effectiveStatus(item) {
+  return item.count_status === 'posted' ? 'counted' : item.status
+}
+
+function countStatusLabel(item) {
+  return item.count_status === 'posted' ? '已入账' : '盘点中'
 }
 
 function formatTime(value) {
@@ -208,6 +226,28 @@ async function rejectIncident(item) {
   await submitHandle(item, { action: 'reject', reject_reason: reason })
 }
 
+async function convertToCount(item) {
+  try {
+    await ElMessageBox.confirm(
+      `将「${item.consumable_name}」的异常单转为盘点？`,
+      '转盘点',
+      { confirmButtonText: '转盘点', cancelButtonText: '取消', type: 'info' },
+    )
+  } catch {
+    return
+  }
+  convertingId.value = item.id
+  try {
+    const response = await api.post(`/incidents/${item.id}/convert-to-count`)
+    ElMessage.success(`已生成盘点单 ${response.data.count_order_no}`)
+    await loadList()
+  } catch (error) {
+    ElMessage.error(error?.response?.data?.detail ?? '转盘点失败，请稍后重试')
+  } finally {
+    convertingId.value = null
+  }
+}
+
 function openPhoto(item) {
   photoDialogSrc.value = item.photo_url
   photoDialogVisible.value = true
@@ -333,8 +373,11 @@ onMounted(async () => {
           />
           <article v-for="item in items" :key="item.id" class="incidents__card">
             <div class="incidents__card-head">
-              <span class="incidents__status" :class="statusClass(item.status)">
-                {{ statusLabel(item.status) }}
+              <span
+                class="incidents__status"
+                :class="statusClass(effectiveStatus(item))"
+              >
+                {{ statusLabel(effectiveStatus(item)) }}
               </span>
               <span class="incidents__time">{{ formatTime(item.created_at) }}</span>
             </div>
@@ -345,6 +388,9 @@ onMounted(async () => {
               {{ item.location }}<template v-if="isStaff"> · {{ item.reporter_name }}</template>
             </p>
             <p class="incidents__card-desc">{{ item.description }}</p>
+            <p v-if="item.count_order_no" class="incidents__card-handle">
+              盘点单 {{ item.count_order_no }} · {{ countStatusLabel(item) }}
+            </p>
             <p v-if="item.status === 'rejected'" class="incidents__card-handle">
               驳回原因：{{ item.reject_reason }}（{{ item.handler_name }}）
             </p>
@@ -387,6 +433,16 @@ onMounted(async () => {
                   驳回
                 </el-button>
               </template>
+              <el-button
+                v-if="isStaff && ['open', 'confirmed'].includes(item.status)"
+                type="success"
+                plain
+                class="incidents__action"
+                :loading="convertingId === item.id"
+                @click="convertToCount(item)"
+              >
+                转盘点
+              </el-button>
             </div>
           </article>
         </div>
@@ -528,6 +584,16 @@ onMounted(async () => {
 .incidents__status--rejected {
   color: var(--danger);
   background: var(--danger-soft);
+}
+
+.incidents__status--converted {
+  color: var(--primary);
+  background: var(--primary-soft);
+}
+
+.incidents__status--counted {
+  color: var(--success);
+  background: var(--success-soft);
 }
 
 .incidents__card-title {

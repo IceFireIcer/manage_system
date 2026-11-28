@@ -13,14 +13,15 @@ from fastapi import (
     UploadFile,
     status,
 )
-from fastapi.responses import FileResponse
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app import business_time
+from app import business_time, inventory_count
 from app.database import get_db
 from app.deps import CurrentUser, require_role
-from app.models import Consumable, IncidentReport, User
+from app.models import Consumable, IncidentReport, InventoryCount, User
 from app.schemas_incidents import (
     ALLOWED_PHOTO_TYPES,
     DESCRIPTION_MAX_LENGTH,
@@ -31,6 +32,7 @@ from app.schemas_incidents import (
     RATE_LIMIT_MAX_SUBMISSIONS,
     RATE_LIMIT_WINDOW_MINUTES,
     STATUS_CONFIRMED,
+    STATUS_CONVERTED,
     STATUS_OPEN,
     STATUS_REJECTED,
     STATUSES,
@@ -38,6 +40,7 @@ from app.schemas_incidents import (
     IncidentOut,
     IncidentPageOut,
 )
+from app.schemas_inventory import InventoryCountCreate, InventoryCountLineIn
 
 router = APIRouter(prefix="/api/v1/incidents", tags=["incidents"])
 
@@ -58,6 +61,16 @@ def _photo_url(report: IncidentReport) -> str | None:
 
 def _serialize(db: Session, report: IncidentReport) -> IncidentOut:
     consumable = db.get(Consumable, report.consumable_id)
+    count = (
+        db.get(InventoryCount, report.linked_count_id)
+        if report.linked_count_id is not None
+        else None
+    )
+    count_status = (
+        count.status
+        if count is not None and count.class_id == report.class_id
+        else None
+    )
     return IncidentOut(
         id=report.id,
         class_id=report.class_id,
@@ -76,6 +89,9 @@ def _serialize(db: Session, report: IncidentReport) -> IncidentOut:
         handler_name=report.handler_name,
         handled_at=report.handled_at,
         reject_reason=report.reject_reason,
+        linked_count_id=report.linked_count_id,
+        count_order_no=report.count_order_no,
+        count_status=count_status,
         created_at=report.created_at,
         updated_at=report.updated_at,
     )
@@ -249,7 +265,7 @@ def list_incidents(
     if status_filter is not None and status_filter not in STATUSES:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="status 仅支持 open/confirmed/rejected",
+            detail="status 仅支持 open/confirmed/rejected/converted_to_count",
         )
 
     query = select(IncidentReport).where(
@@ -318,6 +334,74 @@ def handle_incident(
     db.commit()
     db.refresh(report)
     return _serialize(db, report)
+
+
+def _conversion_request_id(report: IncidentReport) -> str:
+    return f"incident-{report.id}"
+
+
+@router.post("/{incident_id}/convert-to-count")
+def convert_incident_to_count(
+    incident_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    staff: StaffUser,
+) -> JSONResponse:
+    report = _get_visible_or_404(db, incident_id, staff)
+    count = (
+        db.get(InventoryCount, report.linked_count_id)
+        if report.linked_count_id is not None
+        else None
+    )
+    if count is not None and count.class_id == report.class_id:
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content=jsonable_encoder(_serialize(db, report)),
+        )
+
+    if report.status not in (STATUS_OPEN, STATUS_CONFIRMED):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="当前状态不可转盘点"
+        )
+
+    payload = InventoryCountCreate(
+        lines=[
+            InventoryCountLineIn(
+                consumable_id=report.consumable_id,
+                counted_qty=None,
+                reason="异常转盘点",
+            )
+        ],
+        remark=f"异常单 #{report.id}",
+        request_id=_conversion_request_id(report),
+    )
+    existing = db.scalars(
+        select(InventoryCount).where(
+            InventoryCount.request_id == payload.request_id,
+            InventoryCount.class_id == staff.class_id,
+        )
+    ).first()
+    if existing is not None:
+        count, created = existing, False
+    else:
+        count, created = inventory_count.create_count(
+            db, payload=payload, operator=staff
+        )
+
+    count.incident_id = report.id
+    timestamp = business_time.now()
+    count.updated_at = timestamp
+    report.linked_count_id = count.id
+    report.count_order_no = count.order_no
+    report.status = STATUS_CONVERTED
+    report.updated_at = timestamp
+    db.add(count)
+    db.add(report)
+    db.commit()
+    db.refresh(report)
+    return JSONResponse(
+        status_code=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        content=jsonable_encoder(_serialize(db, report)),
+    )
 
 
 @router.get("/{incident_id}/photo")
