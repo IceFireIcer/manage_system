@@ -1,7 +1,17 @@
 from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+SUGGESTION_FEEDBACK_REASONS = (
+    "substitute",
+    "schedule_adjust",
+    "low_usage",
+    "other",
+)
+SuggestionFeedbackReason = Literal[
+    "substitute", "schedule_adjust", "low_usage", "other"
+]
 
 
 class InventorySummary(BaseModel):
@@ -65,6 +75,32 @@ class TeachingContextOut(BaseModel):
     consequence_degraded: bool = False
 
 
+class SuggestionFeedbackBrief(BaseModel):
+    reason: SuggestionFeedbackReason
+    note: str | None = None
+    feedback_name: str
+    created_at: datetime
+
+
+class SuggestionFeedbackCreate(BaseModel):
+    reason: SuggestionFeedbackReason
+    note: str | None = Field(default=None, max_length=255)
+
+    @field_validator("note", mode="after")
+    @classmethod
+    def normalize_note(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        stripped = value.strip()
+        return stripped or None
+
+    @model_validator(mode="after")
+    def require_note_for_other(self) -> "SuggestionFeedbackCreate":
+        if self.reason == "other" and not self.note:
+            raise ValueError("选择“其他”时必须填写备注")
+        return self
+
+
 class SuggestionOut(BaseModel):
     consumable_id: int
     name: str
@@ -92,6 +128,7 @@ class SuggestionOut(BaseModel):
     disposition_handler_name: str | None = None
     disposition_order_no: str | None = None
     disposition_updated_at: datetime | None = None
+    latest_feedback: SuggestionFeedbackBrief | None = None
 
 
 class SuggestionListOut(BaseModel):
@@ -99,6 +136,26 @@ class SuggestionListOut(BaseModel):
     generation: int = 0
     rules: RuleSpecOut
     items: list[SuggestionOut]
+
+
+class SuggestionFeedbackOut(BaseModel):
+    id: int
+    consumable_id: int
+    consumable_name: str
+    suggestion_key: str
+    reason: SuggestionFeedbackReason
+    note: str | None = None
+    feedback_by: int
+    feedback_name: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class SuggestionFeedbackListOut(BaseModel):
+    page: int
+    page_size: int
+    total: int
+    items: list[SuggestionFeedbackOut]
 
 
 class RestockCreate(BaseModel):

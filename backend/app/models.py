@@ -447,6 +447,48 @@ class RestockDisposition(Base):
     updated_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
 
 
+class SuggestionFeedback(Base):
+    __tablename__ = "suggestion_feedbacks"
+    __table_args__ = (
+        UniqueConstraint(
+            "class_id",
+            "consumable_id",
+            "suggestion_key",
+            "feedback_by",
+            name="uq_suggestion_feedbacks_member",
+        ),
+        CheckConstraint(
+            "reason IN ('substitute','schedule_adjust','low_usage','other')",
+            name="ck_suggestion_feedbacks_reason",
+        ),
+        Index(
+            "ix_suggestion_feedbacks_class_consumable_created",
+            "class_id",
+            "consumable_id",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    class_id: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    consumable_id: Mapped[int] = mapped_column(
+        ForeignKey("consumables.id"), nullable=False, index=True
+    )
+    suggestion_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    reason: Mapped[str] = mapped_column(String(32), nullable=False)
+    note: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    feedback_by: Mapped[int] = mapped_column(
+        ForeignKey("users.id"), nullable=False
+    )
+    feedback_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DATETIME, nullable=False, default=business_now
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DATETIME, nullable=False, default=business_now
+    )
+
+
 class StockAlert(Base):
     __tablename__ = "stock_alerts"
     __table_args__ = (
