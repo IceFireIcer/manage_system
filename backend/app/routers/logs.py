@@ -17,6 +17,7 @@ from app.operation_log import (
     SENSITIVE_ACTIONS,
     is_sensitive_query,
     record_operation,
+    sanitize_snapshot,
     status_snapshot,
 )
 from app.schemas_logs import OperationLogItemOut, OperationLogPageOut
@@ -156,11 +157,11 @@ def _serialize(log: OperationLog, joined_name: str | None, is_admin: bool) -> Op
         target_type=log.target_type,
         target_id=log.target_id,
         target_label=_target_label(log),
-        before_value=log.before_value,
-        after_value=log.after_value,
+        before_value=sanitize_snapshot(log.before_value),
+        after_value=sanitize_snapshot(log.after_value),
         before_status=status_snapshot(log.before_value),
         after_status=status_snapshot(log.after_value),
-        remark=log.remark,
+        remark=sanitize_snapshot(log.remark),
     )
 
 
@@ -195,9 +196,9 @@ def _csv_text(columns: tuple[str, ...], rows: list[OperationLog]) -> str:
             "target_type": log.target_type,
             "target_id": log.target_id,
             "target_label": _target_label(log),
-            "before_value": log.before_value,
-            "after_value": log.after_value,
-            "remark": log.remark,
+            "before_value": sanitize_snapshot(log.before_value),
+            "after_value": sanitize_snapshot(log.after_value),
+            "remark": sanitize_snapshot(log.remark),
         }
         writer.writerow([_csv_cell(record.get(column)) for column in columns])
     return "\ufeff" + buffer.getvalue()

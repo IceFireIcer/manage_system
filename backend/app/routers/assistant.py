@@ -292,6 +292,13 @@ def send_message(
             target_type="assistant_tool",
             target_label=call.get("name"),
             result="success" if call.get("ok") else "failure",
+            after_value=json.dumps(
+                {
+                    "tool": call.get("name"),
+                    "ok": bool(call.get("ok")),
+                },
+                ensure_ascii=False,
+            ),
             remark=(
                 f"助手调用只读工具 {call.get('name')}"
                 + ("" if call.get("ok") else f"：{call.get('error') or '失败'}")
@@ -308,6 +315,14 @@ def send_message(
             target_type="assistant_tool",
             target_label=action.get("tool"),
             result="success",
+            after_value=json.dumps(
+                {
+                    "kind": action.get("kind"),
+                    "tool": action.get("tool"),
+                    "summary": action.get("summary"),
+                },
+                ensure_ascii=False,
+            ),
             remark=(
                 f"助手生成预填链接 {action.get('tool')}："
                 f"{action.get('summary') or ''}"

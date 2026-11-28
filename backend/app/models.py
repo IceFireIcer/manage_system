@@ -709,6 +709,7 @@ class OperationLog(Base):
         Index("ix_operation_logs_action_created", "action", "created_at"),
         Index("ix_operation_logs_result", "result"),
         Index("ix_operation_logs_operator_created", "operator_id", "created_at"),
+        Index("ix_operation_logs_class_created", "class_id", "created_at"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -716,6 +717,7 @@ class OperationLog(Base):
     operator_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
     operator_account: Mapped[str | None] = mapped_column(String(64), nullable=True)
     role: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    class_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     action: Mapped[str] = mapped_column(String(64), nullable=False)
     result: Mapped[str | None] = mapped_column(String(16), nullable=True)
     target_type: Mapped[str | None] = mapped_column(String(64), nullable=True)

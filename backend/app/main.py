@@ -19,6 +19,7 @@ from app.routers import (
     accounts,
     alerts,
     assistant,
+    audit,
     auth,
     bootstrap,
     classes,
@@ -163,6 +164,7 @@ def create_app() -> FastAPI:
     app.include_router(alerts.router)
     app.include_router(consumption.router)
     app.include_router(logs.router)
+    app.include_router(audit.router)
     app.include_router(llm.router)
     app.include_router(ops.router)
     app.include_router(permissions.router)

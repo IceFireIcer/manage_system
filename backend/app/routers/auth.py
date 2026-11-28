@@ -252,6 +252,7 @@ def switch_role(
             db,
             action="role_switch",
             operator=current_user,
+            class_id=active_id,
             target_type="user",
             target_id=current_user.id,
             target_label=user_label(current_user),
@@ -299,13 +300,19 @@ def switch_class(
         active_class_id=payload.class_id,
     )
     _set_session_cookie(response, token, expire_seconds)
+    token_payload = getattr(request.state, "token_payload", None) or {}
+    previous_class = token_payload.get("cid")
+    if not isinstance(previous_class, int):
+        previous_class = getattr(current_user, "active_class_id", None) or current_user.class_id
     record_operation(
         db,
         action="switch_class",
         operator=current_user,
+        class_id=payload.class_id,
         target_type="class",
         target_id=payload.class_id,
         target_label=class_display_name(db, payload.class_id),
+        before_value=json.dumps({"class_id": previous_class}, ensure_ascii=False),
         after_value=json.dumps({"class_id": payload.class_id}, ensure_ascii=False),
         remark=f"账号 {current_user.account} 切换班级",
     )
