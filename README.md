@@ -43,17 +43,13 @@ systemctl enable --now docker
 git clone https://github.com/IceFireIcer/manage_system.git
 cd manage_system
 
-# 3. 配置生产密钥（生产环境必做，见「配置」一节）
-cp .env.example .env
-chmod 600 .env
-# 编辑 .env：MYSQL_ROOT_PASSWORD、MYSQL_APP_PASSWORD、MYSQL_MIGRATE_PASSWORD、MYSQL_BACKUP_PASSWORD、JWT_SECRET_KEY 必须替换为随机值
+# 3. 自动生成生产密钥并启动（私有包需先 docker login ghcr.io）
+./scripts/deploy.sh
 
-# 4. 拉取 GHCR 镜像并启动（私有包需先 docker login ghcr.io）
-docker compose pull
-docker compose up -d
-docker compose ps
+# 或分步执行：./scripts/init-env.sh 生成 .env 后，再 docker compose pull && docker compose up -d
+# 自动生成 MYSQL_*_PASSWORD、JWT_SECRET_KEY、SETTINGS_ENCRYPTION_KEY；已存在且非占位的值不会被覆盖
 
-# 5. 获取管理员初始密码
+# 4. 获取管理员初始密码
 docker compose logs backend | grep bootstrap
 ```
 
@@ -116,7 +112,7 @@ docker compose exec backend python scripts/manage_accounts.py recover-admin --ac
 | `WEB_PORT` | 否 | 对外 HTTP 端口，默认 `4900` |
 | `IMAGE_TAG` | 否 | 镜像版本标签，默认 `latest`，升级/回滚时切换 |
 
-**内置默认密钥只用于首次开箱启动，不具备生产安全性。** 生产部署必须通过 `.env` 覆盖 `MYSQL_ROOT_PASSWORD` 与 `JWT_SECRET_KEY`（可用 `openssl rand -hex 32` 生成）。
+**内置默认密钥只用于首次开箱启动，不具备生产安全性。** 运行 `./scripts/init-env.sh` 会自动生成并填写 `MYSQL_*_PASSWORD`、`JWT_SECRET_KEY` 与 `SETTINGS_ENCRYPTION_KEY`；已有非占位值不会被覆盖。数据库数据卷初始化后不要重新生成这些值。
 
 本地开发配置位于 `backend/.env`（由 `backend/.env.example` 复制），与仓库根 `.env` 相互独立。
 

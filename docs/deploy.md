@@ -39,10 +39,9 @@ sudo apt-get update && sudo apt-get install -y docker-compose-plugin
 git clone https://github.com/IceFireIcer/manage_system.git
 cd manage_system
 
-# 生产环境必须替换密钥（详见第 5 节）
-cp .env.example .env
-chmod 600 .env
-# 编辑 .env：MYSQL_ROOT_PASSWORD、MYSQL_APP_PASSWORD、MYSQL_MIGRATE_PASSWORD、MYSQL_BACKUP_PASSWORD、JWT_SECRET_KEY 填随机值
+# 自动生成 .env 与全部生产密钥（MYSQL_*_PASSWORD、JWT_SECRET_KEY、SETTINGS_ENCRYPTION_KEY）
+./scripts/init-env.sh
+# 已存在 .env 时只补齐空值/占位值，不会覆盖已配置的密钥；生成后请妥善备份 .env
 ```
 
 **第 3 步：拉取 GHCR 镜像并启动（不要构建）**
@@ -82,7 +81,7 @@ docker compose logs backend | grep bootstrap
 
 > GHCR 包默认私有：可在 GitHub Packages 将 `labstock-api` / `labstock-web` 设为 public；或服务器使用带 `read:packages` 权限的 PAT 执行 `docker login ghcr.io -u <GitHub 用户名>`。拉取慢时优先按第 3.1 节加速或重试；仍失败时再把镜像转存自有仓库。**本地构建不是服务器部署路径**，仅作无法访问 GHCR 时的临时手段（见 0.2）。
 
-> **安全提示**：Compose 内置的默认 `MYSQL_ROOT_PASSWORD` 与 `JWT_SECRET_KEY` 仅用于首次开箱启动，**不具备生产安全性**。生产部署必须通过 `.env` 覆盖。第 `1`~`14` 节为完整部署与运维说明：安装与首次启动已包含在本节，可跳过第 `3`~`6` 节；后续运维、升级、备份与排错仍按下文执行。
+> **安全提示**：Compose 内置的默认 `MYSQL_ROOT_PASSWORD` 与 `JWT_SECRET_KEY` 仅用于首次开箱启动，**不具备生产安全性**。生产部署运行 `./scripts/init-env.sh` 自动生成并填写 `.env` 密钥；数据库数据卷初始化后不要重新生成这些值。第 `1`~`14` 节为完整部署与运维说明：安装与首次启动已包含在本节，可跳过第 `3`~`6` 节；后续运维、升级、备份与排错仍按下文执行。
 
 ### 0.2 可选：本地开发构建（服务器正式部署不使用）
 
@@ -225,18 +224,7 @@ scp manage_system.tar.gz <user>@<服务器IP>:/opt/manage_system/
 
 ```bash
 cd /opt/manage_system
-cp .env.example .env
-chmod 600 .env
-
-# 生成随机 JWT 密钥并写入
-JWT_SECRET="$(openssl rand -hex 32)"
-sed -i "s/^JWT_SECRET_KEY=.*/JWT_SECRET_KEY=${JWT_SECRET}/" .env
-
-# 设置数据库 root 密码（示例：仅字母数字，避免 URL 转义问题）
-DB_PASS="$(openssl rand -hex 12)"
-sed -i "s/^MYSQL_ROOT_PASSWORD=.*/MYSQL_ROOT_PASSWORD=${DB_PASS}/" .env
-
-# 应用、迁移、备份使用独立最小权限账号，密码按 5.3 生成
+./scripts/init-env.sh
 
 # 可选：指定首次创建的管理员账号/密码；不填则随机生成并打印到日志
 # ADMIN_INIT_ACCOUNT=admin
@@ -252,8 +240,10 @@ vi .env
 
 | 变量 | 说明 |
 | --- | --- |
-| `MYSQL_ROOT_PASSWORD` | MySQL root 密码，仅用于首次初始化与应急运维；应用连接改用 `MYSQL_APP_PASSWORD`（见 5.3）；生产必填 |
-| `JWT_SECRET_KEY` | JWT 签名密钥，至少 32 位随机字符；变更后旧登录态失效；生产必填 |
+| `MYSQL_ROOT_PASSWORD` | MySQL root 密码，仅用于首次初始化与应急运维；应用连接改用 `MYSQL_APP_PASSWORD`（见 5.3）；生产必填，`init-env.sh` 自动生成 |
+| `MYSQL_APP_PASSWORD` / `MYSQL_MIGRATE_PASSWORD` / `MYSQL_BACKUP_PASSWORD` | 应用、迁移、备份三个最小权限账号密码；生产必填，`init-env.sh` 自动生成 |
+| `JWT_SECRET_KEY` | JWT 签名密钥，至少 32 位随机字符；变更后旧登录态失效；生产必填，`init-env.sh` 自动生成 |
+| `SETTINGS_ENCRYPTION_KEY` | LLM API Key 加密密钥；生产必填，`init-env.sh` 自动生成；已有加密数据后不要随意更换 |
 | `ADMIN_INIT_ACCOUNT` / `ADMIN_INIT_PASSWORD` / `ADMIN_INIT_NAME` | 首次创建的管理员账号、密码、姓名；仅首次创建生效 |
 | `LLM_API_KEY` / `LLM_BASE_URL` / `LLM_MODEL` | OpenAI 兼容接口；留空则只用规则引擎 |
 | `APP_ENV` | 应用环境；`prod` 正式（强制 HTTPS/Secure Cookie 与密钥校验），`demo` 演示（可 HTTP，Cookie 不带 Secure） |
