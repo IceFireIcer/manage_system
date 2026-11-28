@@ -719,6 +719,71 @@ class IncidentReport(Base):
     updated_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
 
 
+class HandoverChecklist(Base):
+    __tablename__ = "handover_checklists"
+    __table_args__ = (
+        UniqueConstraint(
+            "class_id", "version", name="uq_handover_checklists_class_version"
+        ),
+        CheckConstraint(
+            "status IN ('pending','confirmed')",
+            name="ck_handover_checklists_status",
+        ),
+        Index("ix_handover_checklists_class_created", "class_id", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    class_id: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
+    outgoing_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    outgoing_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    outgoing_account: Mapped[str] = mapped_column(String(64), nullable=False)
+    incoming_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id"), nullable=True
+    )
+    incoming_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    incoming_account: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    snapshot_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False)
+    confirmed_at: Mapped[datetime | None] = mapped_column(DATETIME, nullable=True)
+    confirmed_by_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id"), nullable=True
+    )
+    confirmed_by_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    confirmed_by_account: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
+
+
+class HandoverItem(Base):
+    __tablename__ = "handover_items"
+    __table_args__ = (
+        UniqueConstraint("checklist_id", "seq", name="uq_handover_items_seq"),
+        CheckConstraint(
+            "kind IN ('stock','restock','requisition','alert','incident',"
+            "'suggestion','count')",
+            name="ck_handover_items_kind",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    checklist_id: Mapped[int] = mapped_column(
+        ForeignKey("handover_checklists.id"), nullable=False, index=True
+    )
+    seq: Mapped[int] = mapped_column(Integer, nullable=False)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    ref_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    ref_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    label: Mapped[str] = mapped_column(String(160), nullable=False)
+    snapshot_payload: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    confirmed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    confirmed_by_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id"), nullable=True
+    )
+    confirmed_by_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    confirmed_at: Mapped[datetime | None] = mapped_column(DATETIME, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
+
+
 @event.listens_for(OperationLog, "before_insert")
 def _fill_operation_log_snapshot(_mapper, _connection, log: OperationLog) -> None:
     if log.result is None:

@@ -74,6 +74,16 @@ const routes = [
         },
       },
       {
+        path: 'handover',
+        name: 'handover',
+        component: () => import('../views/Handover.vue'),
+        meta: {
+          title: '班委交接',
+          roles: ['teacher', 'admin'],
+          nav: { group: 'daily', icon: 'Switch', order: 0 },
+        },
+      },
+      {
         path: 'consumables',
         name: 'consumables',
         component: () => import('../views/Consumables.vue'),
