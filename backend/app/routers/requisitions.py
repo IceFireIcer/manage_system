@@ -9,11 +9,12 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import and_, case, delete, func, select, update
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
 from app import business_time, inventory_ledger, stock_alerts
+from app import consumption as consumption_core
 from app.agent import service
 from app.auth_logs import trim_audit_logs
 from app.database import get_db
@@ -21,6 +22,10 @@ from app.db import concurrency
 from app.deps import CurrentUser, require_role
 from app.models import (
     Consumable,
+    Course,
+    CourseRecipeItem,
+    CourseRecipeSnapshot,
+    CourseSession,
     InventoryCount,
     InventoryCountLine,
     InventoryEvent,
@@ -40,6 +45,10 @@ from app.schemas_requisitions import (
     CorrectionCreate,
     CorrectionHandle,
     CorrectionOut,
+    FootprintItemOut,
+    FootprintOut,
+    FootprintSupportOut,
+    FootprintUnitTotalOut,
     RequisitionConsumableOptionOut,
     RequisitionCreate,
     RequisitionCreateOut,
@@ -115,6 +124,9 @@ EXPORT_COLUMN_LABELS = {
 EXPORT_NUMERIC_COLUMNS = ("quantity", "stock_after")
 TYPE_NAMES = {"normal": "领用", "reversal": "红冲"}
 STATUS_NAMES = {"active": "有效", "reversed": "已撤销"}
+
+FOOTPRINT_WINDOWS = (7, 30, 90)
+DEFAULT_FOOTPRINT_WINDOW = 90
 
 ManagerUser = Annotated[User, Depends(require_role("teacher", "admin"))]
 
@@ -701,6 +713,147 @@ def _consume_params(
     }
 
 
+def estimate_supported_sessions(
+    available_stock: int, quantity_per_person: int, headcount: int | None
+) -> tuple[int | None, str | None, int | None]:
+    if quantity_per_person <= 0:
+        return None, "zero_demand", None
+    if headcount is None or headcount <= 0:
+        return None, "no_headcount", None
+    required = quantity_per_person * headcount
+    if required <= 0:
+        return None, "zero_demand", required
+    return max(int(available_stock), 0) // required, None, required
+
+
+def _footprint_flow_rows(
+    db: Session, user_id: int, start: datetime, end: datetime
+) -> list[tuple[int, int, int, int, datetime]]:
+    issued = func.coalesce(
+        func.sum(case((Requisition.type == "normal", Requisition.quantity), else_=0)), 0
+    )
+    reversed_quantity = func.coalesce(
+        func.sum(
+            case(
+                (
+                    and_(
+                        Requisition.type == "reversal",
+                        Requisition.status == "active",
+                    ),
+                    Requisition.quantity,
+                ),
+                else_=0,
+            )
+        ),
+        0,
+    )
+    requisition_count = func.coalesce(
+        func.sum(case((Requisition.type == "normal", 1), else_=0)), 0
+    )
+    rows = db.execute(
+        select(
+            Requisition.consumable_id,
+            issued,
+            reversed_quantity,
+            requisition_count,
+            func.max(Requisition.created_at),
+        )
+        .where(
+            Requisition.user_id == user_id,
+            Requisition.created_at >= start,
+            Requisition.created_at <= end,
+        )
+        .group_by(Requisition.consumable_id)
+        .order_by(Requisition.consumable_id)
+    ).all()
+    return [
+        (
+            int(consumable_id),
+            int(issued_total),
+            int(reversed_sum),
+            int(count),
+            last_at,
+        )
+        for consumable_id, issued_total, reversed_sum, count, last_at in rows
+    ]
+
+
+def _footprint_supports(
+    db: Session,
+    consumable_ids: list[int],
+    class_id: int,
+    consumables: dict[int, Consumable],
+) -> dict[int, FootprintSupportOut]:
+    if not consumable_ids:
+        return {}
+    recipe_rows = db.execute(
+        select(CourseRecipeItem, CourseRecipeSnapshot, Course)
+        .join(
+            CourseRecipeSnapshot,
+            CourseRecipeItem.snapshot_id == CourseRecipeSnapshot.id,
+        )
+        .join(Course, CourseRecipeSnapshot.course_id == Course.id)
+        .where(
+            CourseRecipeItem.consumable_id.in_(consumable_ids),
+            Course.class_id == class_id,
+            Course.status == "enabled",
+        )
+        .order_by(
+            CourseRecipeSnapshot.created_at.desc(),
+            CourseRecipeSnapshot.id.desc(),
+            CourseRecipeItem.id,
+        )
+    ).all()
+    latest: dict[int, tuple[CourseRecipeItem, CourseRecipeSnapshot, Course]] = {}
+    for item, snapshot, course in recipe_rows:
+        latest.setdefault(item.consumable_id, (item, snapshot, course))
+
+    planned: dict[int, CourseSession] = {}
+    fallback: dict[int, CourseSession] = {}
+    course_ids = {course.id for _, _, course in latest.values()}
+    if course_ids:
+        sessions = db.scalars(
+            select(CourseSession)
+            .where(
+                CourseSession.course_id.in_(course_ids),
+                CourseSession.status != "cancelled",
+            )
+            .order_by(
+                CourseSession.session_date.desc(), CourseSession.seq.desc()
+            )
+        ).all()
+        for session in sessions:
+            fallback.setdefault(session.course_id, session)
+            if session.status == "planned":
+                planned.setdefault(session.course_id, session)
+
+    supports: dict[int, FootprintSupportOut] = {}
+    for consumable_id in consumable_ids:
+        entry = latest.get(consumable_id)
+        if entry is None:
+            supports[consumable_id] = FootprintSupportOut(reason_code="no_recipe")
+            continue
+        item, snapshot, course = entry
+        session = planned.get(course.id) or fallback.get(course.id)
+        headcount = session.headcount if session is not None else None
+        consumable = consumables.get(consumable_id)
+        available = consumable.current_stock if consumable is not None else 0
+        supported, reason, required = estimate_supported_sessions(
+            available, item.quantity_per_person, headcount
+        )
+        supports[consumable_id] = FootprintSupportOut(
+            supported_sessions=supported,
+            reason_code=reason,
+            course_id=course.id,
+            course_name=course.name,
+            recipe_version=snapshot.version,
+            headcount=headcount,
+            quantity_per_person=item.quantity_per_person,
+            required_quantity=required,
+        )
+    return supports
+
+
 @router.get("")
 def list_requisitions(
     db: Annotated[Session, Depends(get_db)],
@@ -897,6 +1050,88 @@ def list_consumable_options(
         )
         for row in rows
     ]
+
+
+@router.get("/my-footprint")
+def get_my_footprint(
+    db: Annotated[Session, Depends(get_db)],
+    current_user: CurrentUser,
+    window: Annotated[int, Query()] = DEFAULT_FOOTPRINT_WINDOW,
+) -> FootprintOut:
+    if window not in FOOTPRINT_WINDOWS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="window 参数仅支持 7、30 或 90",
+        )
+    start = consumption_core.window_start(window)
+    end = consumption_core.window_end()
+    rows = _footprint_flow_rows(db, current_user.id, start, end)
+    consumable_ids = [row[0] for row in rows]
+    consumables = (
+        {
+            consumable.id: consumable
+            for consumable in db.scalars(
+                select(Consumable).where(Consumable.id.in_(consumable_ids))
+            ).all()
+        }
+        if consumable_ids
+        else {}
+    )
+    supports = _footprint_supports(
+        db, consumable_ids, current_user.class_id, consumables
+    )
+
+    items: list[FootprintItemOut] = []
+    unit_rows: dict[str, dict[str, int]] = {}
+    for consumable_id, issued, reversed_quantity, count, last_at in rows:
+        consumable = consumables.get(consumable_id)
+        if consumable is None:
+            continue
+        net_quantity = max(issued - reversed_quantity, 0)
+        items.append(
+            FootprintItemOut(
+                consumable_id=consumable.id,
+                name=consumable.name,
+                spec=consumable.spec,
+                unit=consumable.unit,
+                requisition_count=count,
+                issued_quantity=issued,
+                reversed_quantity=reversed_quantity,
+                net_quantity=net_quantity,
+                last_at=last_at,
+                support=supports[consumable_id],
+            )
+        )
+        unit_row = unit_rows.setdefault(
+            consumable.unit,
+            {"requisition_count": 0, "net_quantity": 0, "consumables": 0},
+        )
+        unit_row["requisition_count"] += count
+        unit_row["net_quantity"] += net_quantity
+        unit_row["consumables"] += 1
+
+    items.sort(key=lambda row: (-row.net_quantity, row.name, row.consumable_id))
+    unit_totals = [
+        FootprintUnitTotalOut(
+            unit=unit,
+            requisition_count=values["requisition_count"],
+            net_quantity=values["net_quantity"],
+            consumables=values["consumables"],
+        )
+        for unit, values in sorted(
+            unit_rows.items(),
+            key=lambda entry: (-entry[1]["net_quantity"], entry[0]),
+        )
+    ]
+    return FootprintOut(
+        window=window,
+        generated_at=business_time.now(),
+        user_id=current_user.id,
+        user_name=current_user.name,
+        requisition_count=sum(item.requisition_count for item in items),
+        items=items,
+        unit_totals=unit_totals,
+    )
 
 
 @router.get("/requests/{request_id}")
