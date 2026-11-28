@@ -37,6 +37,7 @@ test-results/
 
 # ---------- 运行时数据 / 备份 ----------
 .dev-run/
+backend/var/
 backups/
 *.sqlite
 *.sqlite3
