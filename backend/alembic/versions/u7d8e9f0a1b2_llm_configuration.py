@@ -1,7 +1,7 @@
 """llm providers, prompt versions and feature bindings
 
-Revision ID: t6c7d8e9f0a1
-Revises: s5b6c7d8e9f0
+Revision ID: u7d8e9f0a1b2
+Revises: t6c7d8e9f0a1
 Create Date: 2026-11-28 15:00:00.000000
 
 """
@@ -11,8 +11,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "t6c7d8e9f0a1"
-down_revision: str | Sequence[str] | None = "s5b6c7d8e9f0"
+revision: str = "u7d8e9f0a1b2"
+down_revision: str | Sequence[str] | None = "t6c7d8e9f0a1"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

@@ -1,7 +1,7 @@
 """user profiles with base64 avatar
 
-Revision ID: t6c7d8e9f0a1
-Revises: s5b6c7d8e9f0
+Revision ID: v8e9f0a1b2c3
+Revises: u7d8e9f0a1b2
 Create Date: 2026-11-28 13:00:00.000000
 
 """
@@ -12,8 +12,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import mysql
 
-revision: str = "t6c7d8e9f0a1"
-down_revision: str | Sequence[str] | None = "s5b6c7d8e9f0"
+revision: str = "v8e9f0a1b2c3"
+down_revision: str | Sequence[str] | None = "u7d8e9f0a1b2"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
