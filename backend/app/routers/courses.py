@@ -1,8 +1,9 @@
+import json
 from datetime import datetime, timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -15,11 +16,14 @@ from app.models import (
     CourseRecipeItem,
     CourseRecipeSnapshot,
     CourseSession,
+    Requisition,
     RestockLine,
     RestockOrder,
+    TeachingReview,
     User,
 )
 from app.schemas_courses import (
+    REVIEW_TAG_CANDIDATES,
     ArrivalCoverageItemOut,
     ArrivalCoverageOut,
     ArrivalCoverageSessionOut,
@@ -39,6 +43,11 @@ from app.schemas_courses import (
     RecipeOut,
     RecipeSaveRequest,
     RecipeSnapshotOut,
+    TeachingReviewCreate,
+    TeachingReviewListOut,
+    TeachingReviewOut,
+    TeachingReviewRecipeItemOut,
+    TeachingReviewUpdate,
     WeekRiskItemOut,
     WeekRiskOut,
     WeekRiskSessionOut,
@@ -50,6 +59,7 @@ router = APIRouter(prefix="/api/v1/courses", tags=["courses"])
 DEFAULT_PAGE_SIZE = 20
 MAX_PAGE_SIZE = 100
 RECIPE_HISTORY_LIMIT = 20
+REVIEW_HISTORY_LIMIT = 50
 
 StaffUser = Annotated[User, Depends(require_role("teacher", "admin"))]
 
@@ -876,6 +886,273 @@ def get_session_risk(
             status_code=status.HTTP_404_NOT_FOUND, detail="课次不存在"
         )
     return _build_risks(db, [(course, session)], lead_days)[0]
+
+
+def _load_review_tags(value: str | None) -> list[str]:
+    if not value:
+        return []
+    try:
+        parsed = json.loads(value)
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return [item for item in parsed if isinstance(item, str)]
+
+
+def _dump_review_tags(tags: list[str]) -> str:
+    return json.dumps(tags, ensure_ascii=False)
+
+
+def _get_session(db: Session, course: Course, session_id: int) -> CourseSession:
+    session = db.get(CourseSession, session_id)
+    if session is None or session.course_id != course.id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="课次不存在"
+        )
+    return session
+
+
+def _session_day_net(
+    db: Session, class_id: int, consumable_id: int, session_date
+) -> int:
+    start = business_time.day_start(session_date)
+    end = business_time.next_day_start(session_date)
+    issued_expr = func.coalesce(
+        func.sum(case((Requisition.type == "normal", Requisition.quantity), else_=0)),
+        0,
+    )
+    reversed_expr = func.coalesce(
+        func.sum(
+            case(
+                (
+                    and_(
+                        Requisition.type == "reversal",
+                        Requisition.status == "active",
+                    ),
+                    Requisition.quantity,
+                ),
+                else_=0,
+            )
+        ),
+        0,
+    )
+    issued, reversed_quantity = db.execute(
+        select(issued_expr, reversed_expr).where(
+            Requisition.class_id == class_id,
+            Requisition.consumable_id == consumable_id,
+            Requisition.created_at >= start,
+            Requisition.created_at < end,
+        )
+    ).one()
+    return max(int(issued) - int(reversed_quantity), 0)
+
+
+def _review_recipe_items(db: Session, snapshot_id: int) -> list[CourseRecipeItem]:
+    return list(
+        db.scalars(
+            select(CourseRecipeItem)
+            .where(CourseRecipeItem.snapshot_id == snapshot_id)
+            .order_by(CourseRecipeItem.id)
+        ).all()
+    )
+
+
+def _review_recipe_items_out(
+    items: list[CourseRecipeItem], headcount: int
+) -> list[TeachingReviewRecipeItemOut]:
+    return [
+        TeachingReviewRecipeItemOut(
+            consumable_id=item.consumable_id,
+            consumable_name=item.consumable_name,
+            unit=item.unit,
+            quantity_per_person=item.quantity_per_person,
+            standard_quantity=item.quantity_per_person * headcount,
+        )
+        for item in items
+    ]
+
+
+def _review_out(db: Session, review: TeachingReview) -> TeachingReviewOut:
+    session = db.get(CourseSession, review.session_id)
+    if session is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="课次不存在"
+        )
+    course = db.get(Course, session.course_id)
+    snapshot = db.get(CourseRecipeSnapshot, review.snapshot_id)
+    items = _review_recipe_items(db, review.snapshot_id)
+    return TeachingReviewOut(
+        id=review.id,
+        class_id=review.class_id,
+        course_id=session.course_id,
+        course_name=course.name if course is not None else "",
+        session_id=review.session_id,
+        session_seq=session.seq,
+        session_date=session.session_date,
+        headcount=session.headcount,
+        snapshot_id=review.snapshot_id,
+        recipe_version=snapshot.version if snapshot is not None else None,
+        actual_net_quantity=review.actual_net_quantity,
+        standard_quantity=review.standard_quantity,
+        deviation_ratio=review.deviation_ratio,
+        deviation_available=review.deviation_ratio is not None,
+        reason_tags=_load_review_tags(review.reason_tags),
+        teacher_note=review.teacher_note,
+        created_by_name=review.created_by_name,
+        created_at=review.created_at,
+        version=review.version,
+        items=_review_recipe_items_out(items, session.headcount),
+        reason_candidates=list(REVIEW_TAG_CANDIDATES),
+    )
+
+
+def _review_snapshot(
+    db: Session, course: Course, session: CourseSession
+) -> tuple[CourseRecipeSnapshot, list[CourseRecipeItem]]:
+    if session.recipe_snapshot_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="课次未绑定配方快照，无法生成复盘",
+        )
+    snapshot = db.get(CourseRecipeSnapshot, session.recipe_snapshot_id)
+    if snapshot is None or snapshot.course_id != course.id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="课次配方快照不存在，无法生成复盘",
+        )
+    items = _review_recipe_items(db, snapshot.id)
+    if not items:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="配方快照没有耗材，无法生成复盘",
+        )
+    return snapshot, items
+
+
+def _review_numbers(
+    db: Session, course: Course, session: CourseSession, items: list[CourseRecipeItem]
+) -> tuple[int, int, float | None]:
+    standard = sum(item.quantity_per_person * session.headcount for item in items)
+    actual = sum(
+        _session_day_net(
+            db, course.class_id, item.consumable_id, session.session_date
+        )
+        for item in items
+    )
+    deviation = (
+        None if standard == 0 else round((actual - standard) / standard, 4)
+    )
+    return actual, standard, deviation
+
+
+@router.post(
+    "/{course_id}/sessions/{session_id}/reviews",
+    status_code=status.HTTP_201_CREATED,
+)
+def create_session_review(
+    course_id: int,
+    session_id: int,
+    payload: TeachingReviewCreate,
+    db: Annotated[Session, Depends(get_db)],
+    current_user: StaffUser,
+) -> TeachingReviewOut:
+    course = _get_course(db, course_id, current_user)
+    session = _get_session(db, course, session_id)
+    snapshot, items = _review_snapshot(db, course, session)
+    actual, standard, deviation = _review_numbers(db, course, session, items)
+    latest_version = (
+        db.scalar(
+            select(func.max(TeachingReview.version)).where(
+                TeachingReview.session_id == session.id
+            )
+        )
+        or 0
+    )
+    review = TeachingReview(
+        class_id=course.class_id,
+        session_id=session.id,
+        snapshot_id=snapshot.id,
+        actual_net_quantity=actual,
+        standard_quantity=standard,
+        deviation_ratio=deviation,
+        reason_tags=_dump_review_tags(payload.reason_tags),
+        teacher_note=payload.teacher_note,
+        created_by_id=current_user.id,
+        created_by_name=current_user.name,
+        version=latest_version + 1,
+    )
+    db.add(review)
+    try:
+        db.commit()
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="复盘版本冲突，请刷新后重试",
+        ) from error
+    db.refresh(review)
+    return _review_out(db, review)
+
+
+@router.get("/{course_id}/sessions/{session_id}/reviews")
+def list_session_reviews(
+    course_id: int,
+    session_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    current_user: StaffUser,
+) -> TeachingReviewListOut:
+    course = _get_course(db, course_id, current_user)
+    session = _get_session(db, course, session_id)
+    rows = db.scalars(
+        select(TeachingReview)
+        .where(
+            TeachingReview.session_id == session.id,
+            TeachingReview.class_id == course.class_id,
+        )
+        .order_by(TeachingReview.version.desc())
+        .limit(REVIEW_HISTORY_LIMIT)
+    ).all()
+    return TeachingReviewListOut(
+        items=[_review_out(db, row) for row in rows],
+        reason_candidates=list(REVIEW_TAG_CANDIDATES),
+    )
+
+
+@router.get("/reviews/{review_id}")
+def get_review(
+    review_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    current_user: StaffUser,
+) -> TeachingReviewOut:
+    review = db.get(TeachingReview, review_id)
+    if review is None or review.class_id != current_user.class_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="复盘不存在"
+        )
+    return _review_out(db, review)
+
+
+@router.patch("/reviews/{review_id}")
+def update_review(
+    review_id: int,
+    payload: TeachingReviewUpdate,
+    db: Annotated[Session, Depends(get_db)],
+    current_user: StaffUser,
+) -> TeachingReviewOut:
+    review = db.get(TeachingReview, review_id)
+    if review is None or review.class_id != current_user.class_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="复盘不存在"
+        )
+    data = payload.model_dump(exclude_unset=True)
+    if "reason_tags" in data:
+        review.reason_tags = _dump_review_tags(data["reason_tags"])
+    if "teacher_note" in data:
+        review.teacher_note = data["teacher_note"]
+    db.commit()
+    db.refresh(review)
+    return _review_out(db, review)
 
 
 @router.get("/{course_id}")
