@@ -2,7 +2,9 @@ import { defineStore } from 'pinia'
 import api from '../api'
 
 const ROLE_NAMES = {
+  super_admin: '超级管理员',
   teacher: '教师',
+  class_committee: '班委',
   admin: '班委',
   student: '学生',
 }
@@ -35,10 +37,15 @@ export const useUserStore = defineStore('user', {
     mustChangePassword: false,
     sessionEpoch: null,
     identityLocked: false,
+    availableClasses: [],
+    activeClass: null,
   }),
   getters: {
     isLoggedIn: (state) => state.user !== null,
     roleName: (state) => ROLE_NAMES[state.user?.role] ?? '未知',
+    canSwitchClass: (state) =>
+      ['teacher', 'super_admin'].includes(state.user?.role) &&
+      state.availableClasses.length > 1,
   },
   actions: {
     ensureSessionSync() {
@@ -93,6 +100,8 @@ export const useUserStore = defineStore('user', {
       this.user = data.user ?? null
       this.mustChangePassword = Boolean(data.must_change_password)
       this.sessionExpiresAt = data.session_expires_at ?? null
+      this.availableClasses = data.available_classes ?? []
+      this.activeClass = data.active_class ?? null
     },
     init(force = false) {
       this.ensureSessionSync()
@@ -155,6 +164,11 @@ export const useUserStore = defineStore('user', {
         this.mustChangePassword = false
         this.sessionExpiresAt = null
       }
+      return data
+    },
+    async switchClass(classId) {
+      const { data } = await api.post('/auth/switch-class', { class_id: classId })
+      this.applySession(data)
       return data
     },
     async changePassword(payload) {

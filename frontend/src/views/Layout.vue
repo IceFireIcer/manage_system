@@ -11,6 +11,7 @@ import {
   Odometer,
   QuestionFilled,
   Reading,
+  School,
   Setting,
   Tickets,
   TrendCharts,
@@ -28,13 +29,17 @@ const GROUP_META = {
 }
 
 const ROLE_TAG_CLASS = {
+  super_admin: 'role-tag--admin',
   teacher: 'role-tag--teacher',
+  class_committee: 'role-tag--admin',
   admin: 'role-tag--admin',
   student: 'role-tag--student',
 }
 
 const ROLE_LABEL = {
+  super_admin: '超级管理员',
   teacher: '教师',
+  class_committee: '班委',
   admin: '班委',
   student: '学生',
 }
@@ -323,6 +328,21 @@ function handleUserCommand(command) {
   }
 }
 
+const activeClassName = computed(() => userStore.activeClass?.name ?? '未选择班级')
+const activeClassTerm = computed(() => userStore.activeClass?.term_name ?? '')
+
+async function handleClassCommand(classId) {
+  const target = userStore.availableClasses.find((item) => item.id === classId)
+  if (!target || classId === userStore.activeClass?.id) return
+  try {
+    await userStore.switchClass(classId)
+    ElMessage.success(`已切换到 ${target.name}`)
+    window.location.reload()
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || '切换班级失败，请重试')
+  }
+}
+
 watch(
   () => userStore.mustChangePassword,
   (value) => {
@@ -440,6 +460,42 @@ onBeforeUnmount(() => {
           <el-icon :size="18"><QuestionFilled /></el-icon>
           <span class="layout__help-text">帮助</span>
         </button>
+
+        <el-dropdown
+          v-if="userStore.canSwitchClass"
+          trigger="click"
+          class="layout__class"
+          @command="handleClassCommand"
+        >
+          <button
+            class="layout__class-button"
+            type="button"
+            aria-label="切换班级"
+            aria-haspopup="menu"
+          >
+            <el-icon :size="16"><School /></el-icon>
+            <span class="layout__class-text">
+              <span class="layout__class-name" :title="activeClassName">{{ activeClassName }}</span>
+              <span v-if="activeClassTerm" class="layout__class-term">{{ activeClassTerm }}</span>
+            </span>
+            <el-icon :size="12" class="layout__chevron"><ArrowDown /></el-icon>
+          </button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item
+                v-for="item in userStore.availableClasses"
+                :key="item.id"
+                :command="item.id"
+                :disabled="item.id === userStore.activeClass?.id"
+              >
+                <span>{{ item.name }}</span>
+                <span v-if="item.term_name" class="layout__class-term">
+                  （{{ item.term_name }}）
+                </span>
+              </el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
 
         <span class="layout__divider" aria-hidden="true" />
 
@@ -775,6 +831,52 @@ onBeforeUnmount(() => {
   flex: 1;
 }
 
+.layout__class-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 38px;
+  padding: 0 9px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-control);
+  background: var(--surface-muted);
+  color: var(--text-secondary);
+  font-family: inherit;
+  cursor: pointer;
+  transition:
+    background-color var(--duration-hover) ease,
+    color var(--duration-hover) ease;
+}
+
+.layout__class-button:hover {
+  background: var(--surface-sunken);
+  color: var(--text);
+}
+
+.layout__class-text {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  min-width: 0;
+}
+
+.layout__class-name {
+  max-width: 130px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 13px;
+  line-height: 16px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.layout__class-term {
+  font-size: 11px;
+  line-height: 14px;
+  color: var(--text-muted);
+}
+
 .layout__account {
   display: inline-flex;
   align-items: center;
@@ -823,6 +925,16 @@ onBeforeUnmount(() => {
 .layout__avatar--student {
   background: var(--surface-muted);
   color: var(--text-secondary);
+}
+
+.layout__avatar--super_admin {
+  background: var(--info-soft);
+  color: var(--info);
+}
+
+.layout__avatar--class_committee {
+  background: var(--success-soft);
+  color: var(--success);
 }
 
 .layout__account-text {

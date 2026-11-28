@@ -37,6 +37,66 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
 
 
+class Class(Base):
+    __tablename__ = "classes"
+    __table_args__ = (
+        UniqueConstraint("name", name="uq_classes_name"),
+        CheckConstraint(
+            "status IN ('enabled','disabled')", name="ck_classes_status"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    code: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="enabled")
+    created_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
+    updated_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
+
+
+class ClassTerm(Base):
+    __tablename__ = "class_terms"
+    __table_args__ = (
+        UniqueConstraint("class_id", "name", name="uq_class_terms_class_name"),
+        CheckConstraint(
+            "status IN ('planned','active','archived')",
+            name="ck_class_terms_status",
+        ),
+        Index("ix_class_terms_class_status", "class_id", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    class_id: Mapped[int] = mapped_column(
+        ForeignKey("classes.id"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(64), nullable=False)
+    start_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="active")
+    created_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
+    updated_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
+
+
+class ClassMembership(Base):
+    __tablename__ = "class_memberships"
+    __table_args__ = (
+        UniqueConstraint(
+            "class_id", "user_id", name="uq_class_memberships_class_user"
+        ),
+        Index("ix_class_memberships_user", "user_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    class_id: Mapped[int] = mapped_column(
+        ForeignKey("classes.id"), nullable=False, index=True
+    )
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id"), nullable=False, index=True
+    )
+    role: Mapped[str] = mapped_column(String(16), nullable=False, default="teacher")
+    created_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
+
+
 class Consumable(Base):
     __tablename__ = "consumables"
     __table_args__ = (

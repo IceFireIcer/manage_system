@@ -7,13 +7,26 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.auth_logs import trim_auth_logs
+from app.class_scope import (
+    available_class_briefs,
+    can_access_class,
+    can_switch_class,
+    class_display_name,
+    resolve_active_class_id,
+)
 from app.config import get_settings
 from app.database import get_db
 from app.deps import CurrentUser
 from app.login_throttle import login_throttle
 from app.models import User
 from app.operation_log import record_operation, user_label
-from app.schemas import ChangePasswordRequest, LoginRequest, SessionOut, UserOut
+from app.schemas import (
+    ChangePasswordRequest,
+    LoginRequest,
+    SessionClassOut,
+    SessionOut,
+    UserOut,
+)
 from app.security import (
     TOKEN_COOKIE_NAME,
     create_access_token,
@@ -22,9 +35,15 @@ from app.security import (
     resolve_client_source,
     verify_password,
 )
+from pydantic import BaseModel
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 LOGIN_THROTTLED_DETAIL = "登录尝试过于频繁，请稍后重试"
+INVALID_CLASS_DETAIL = "无权切换到该班级"
+
+
+class SwitchClassRequest(BaseModel):
+    class_id: int
 
 
 def _log_login(
@@ -70,6 +89,49 @@ def _session_expires_at(request: Request) -> datetime | None:
     if not isinstance(exp, int | float):
         return None
     return datetime.fromtimestamp(exp, UTC)
+
+
+def _requested_class_id(request: Request) -> int | None:
+    token = request.cookies.get(TOKEN_COOKIE_NAME)
+    payload = decode_access_token(token) if token else None
+    if not payload:
+        return None
+    cid = payload.get("cid")
+    if isinstance(cid, str) and cid.lstrip("-").isdigit():
+        return int(cid)
+    return cid if isinstance(cid, int) else None
+
+
+def _active_class_id(db: Session, user: User, request: Request) -> int:
+    return resolve_active_class_id(db, user, _requested_class_id(request))
+
+
+def _build_session(
+    db: Session,
+    user: User,
+    request: Request,
+    *,
+    must_change_password: bool,
+    session_expires_at: datetime | None,
+    active_id: int | None = None,
+) -> SessionOut:
+    if active_id is None:
+        active_id = _active_class_id(db, user, request)
+    briefs = available_class_briefs(db, user)
+    return SessionOut(
+        user=UserOut.model_validate(user),
+        must_change_password=must_change_password,
+        session_expires_at=session_expires_at,
+        available_classes=[SessionClassOut.model_validate(brief) for brief in briefs],
+        active_class=SessionClassOut(
+            id=active_id,
+            name=class_display_name(db, active_id),
+            term_name=next(
+                (b["term_name"] for b in briefs if b["id"] == active_id), None
+            ),
+        ),
+        can_switch_class=can_switch_class(user) and len(briefs) > 1,
+    )
 
 
 @router.post("/login")
@@ -121,7 +183,9 @@ def login(
     if trim_auth_logs(db, settings) > 0:
         db.commit()
 
-    token, expire_seconds = create_access_token(user.id, user.role, user.session_version)
+    token, expire_seconds = create_access_token(
+        user.id, user.role, user.session_version, user.class_id
+    )
     _set_session_cookie(response, token, expire_seconds)
     return user
 
@@ -129,12 +193,59 @@ def login(
 @router.get("/session")
 def session_info(
     request: Request,
+    db: Annotated[Session, Depends(get_db)],
     current_user: CurrentUser,
 ) -> SessionOut:
-    return SessionOut(
-        user=UserOut.model_validate(current_user),
+    return _build_session(
+        db,
+        current_user,
+        request,
         must_change_password=current_user.must_change_password,
         session_expires_at=_session_expires_at(request),
+    )
+
+
+@router.post("/switch-class")
+def switch_class(
+    payload: SwitchClassRequest,
+    response: Response,
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+    current_user: CurrentUser,
+) -> SessionOut:
+    if not can_switch_class(current_user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail=INVALID_CLASS_DETAIL
+        )
+    if not can_access_class(db, current_user, payload.class_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail=INVALID_CLASS_DETAIL
+        )
+    token, expire_seconds = create_access_token(
+        current_user.id,
+        current_user.role,
+        current_user.session_version,
+        payload.class_id,
+    )
+    _set_session_cookie(response, token, expire_seconds)
+    record_operation(
+        db,
+        action="switch_class",
+        operator=current_user,
+        target_type="class",
+        target_id=payload.class_id,
+        target_label=class_display_name(db, payload.class_id),
+        after_value=json.dumps({"class_id": payload.class_id}, ensure_ascii=False),
+        remark=f"账号 {current_user.account} 切换班级",
+    )
+    db.commit()
+    return _build_session(
+        db,
+        current_user,
+        request,
+        must_change_password=current_user.must_change_password,
+        session_expires_at=datetime.now(UTC) + timedelta(seconds=expire_seconds),
+        active_id=payload.class_id,
     )
 
 
@@ -142,6 +253,7 @@ def session_info(
 def change_password(
     payload: ChangePasswordRequest,
     response: Response,
+    request: Request,
     db: Annotated[Session, Depends(get_db)],
     current_user: CurrentUser,
 ) -> SessionOut:
@@ -176,12 +288,15 @@ def change_password(
     db.commit()
     db.refresh(current_user)
 
+    active_id = _active_class_id(db, current_user, request)
     token, expire_seconds = create_access_token(
-        current_user.id, current_user.role, current_user.session_version
+        current_user.id, current_user.role, current_user.session_version, active_id
     )
     _set_session_cookie(response, token, expire_seconds)
-    return SessionOut(
-        user=UserOut.model_validate(current_user),
+    return _build_session(
+        db,
+        current_user,
+        request,
         must_change_password=current_user.must_change_password,
         session_expires_at=datetime.now(UTC) + timedelta(seconds=expire_seconds),
     )

@@ -4,6 +4,7 @@ from typing import Annotated
 from fastapi import Cookie, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
+from app.class_scope import ROLE_SUPER_ADMIN, resolve_active_class_id
 from app.database import get_db
 from app.models import User
 from app.security import decode_access_token
@@ -40,14 +41,34 @@ def get_current_user(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=CHANGE_PASSWORD_REQUIRED_DETAIL,
         )
+    request.state.token_payload = payload
     return user
 
 
 CurrentUser = Annotated[User, Depends(get_current_user)]
 
 
+def get_active_class_id(
+    request: Request,
+    current_user: CurrentUser,
+    db: Annotated[Session, Depends(get_db)],
+) -> int:
+    payload = getattr(request.state, "token_payload", None) or {}
+    requested = payload.get("cid")
+    if isinstance(requested, str) and requested.lstrip("-").isdigit():
+        requested = int(requested)
+    if not isinstance(requested, int):
+        requested = None
+    return resolve_active_class_id(db, current_user, requested)
+
+
+CurrentClassId = Annotated[int, Depends(get_active_class_id)]
+
+
 def require_role(*allowed_roles: str) -> Callable:
     def checker(current_user: CurrentUser) -> User:
+        if current_user.role == ROLE_SUPER_ADMIN:
+            return current_user
         if current_user.role not in allowed_roles:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
