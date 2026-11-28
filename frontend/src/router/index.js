@@ -14,7 +14,16 @@ const routes = [
     path: '/',
     component: Layout,
     children: [
-      { path: '', redirect: '/overview' },
+      { path: '', redirect: '/dashboard' },
+      {
+        path: 'dashboard',
+        name: 'dashboard',
+        component: () => import('../views/Dashboard.vue'),
+        meta: {
+          title: '工作台',
+          nav: { group: 'dashboard', icon: 'Odometer', order: 1 },
+        },
+      },
       {
         path: 'overview',
         name: 'overview',
@@ -118,7 +127,7 @@ router.beforeEach(async (to) => {
 
   if (to.meta.public) {
     if (to.name === 'login' && userStore.isLoggedIn) {
-      return { path: '/overview' }
+      return { path: '/dashboard' }
     }
     return true
   }

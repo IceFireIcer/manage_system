@@ -8,6 +8,7 @@ import {
   Box,
   Expand,
   Fold,
+  Odometer,
   QuestionFilled,
   Setting,
   Tickets,
@@ -97,6 +98,7 @@ const navGroups = computed(() => {
   for (const record of router.getRoutes()) {
     const nav = record.meta?.nav
     if (!nav) continue
+    if (nav.group === 'dashboard') continue
     const allowedRoles = record.meta.roles
     if (allowedRoles && !allowedRoles.includes(role)) continue
     const groupMeta = GROUP_META[nav.group]
@@ -117,6 +119,14 @@ const navGroups = computed(() => {
       ...group,
       items: group.items.sort((left, right) => left.order - right.order),
     }))
+})
+
+const dashboardItem = computed(() => {
+  const record = router
+    .getRoutes()
+    .find((item) => item.meta?.nav?.group === 'dashboard')
+  if (!record) return null
+  return { path: record.path, title: record.meta?.title ?? '工作台' }
 })
 
 function handleResize() {
@@ -479,6 +489,10 @@ onBeforeUnmount(() => {
           router
           @select="handleMenuSelect"
         >
+          <el-menu-item v-if="dashboardItem" :index="dashboardItem.path">
+            <el-icon :size="18"><Odometer /></el-icon>
+            <span>{{ dashboardItem.title }}</span>
+          </el-menu-item>
           <el-sub-menu
             v-for="group in navGroups"
             :key="group.key"
@@ -519,6 +533,10 @@ onBeforeUnmount(() => {
             router
             @select="handleMenuSelect"
           >
+            <el-menu-item v-if="dashboardItem" :index="dashboardItem.path">
+              <el-icon :size="18"><Odometer /></el-icon>
+              <span>{{ dashboardItem.title }}</span>
+            </el-menu-item>
             <el-sub-menu
               v-for="group in navGroups"
               :key="group.key"
@@ -935,6 +953,11 @@ onBeforeUnmount(() => {
   font-size: 17px;
 }
 
+.layout__menu :deep(.el-menu-item .el-icon) {
+  margin-right: 9px;
+  font-size: 17px;
+}
+
 .layout__menu :deep(.el-menu--inline) {
   background: transparent;
 }
@@ -956,6 +979,10 @@ onBeforeUnmount(() => {
 .layout__aside--collapsed .layout__menu :deep(.el-menu-item) {
   justify-content: center;
   padding: 0;
+}
+
+.layout__aside--collapsed .layout__menu :deep(.el-menu-item .el-icon) {
+  margin-right: 0;
 }
 
 .layout__drawer-head {

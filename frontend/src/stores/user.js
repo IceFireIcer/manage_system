@@ -207,7 +207,7 @@ export const useUserStore = defineStore('user', {
     takeRedirect() {
       const path = sessionStorage.getItem(REDIRECT_KEY)
       sessionStorage.removeItem(REDIRECT_KEY)
-      return path || '/overview'
+      return path || '/dashboard'
     },
   },
 })
