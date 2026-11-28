@@ -60,11 +60,12 @@ curl -fsS http://127.0.0.1:4900/api/v1/health
 
 后端容器启动时依次执行 `alembic upgrade head` 与 `scripts/bootstrap_admin.py`：
 
-- 不存在启用的管理员时，创建 `role=admin` 账号并启用；密码取 `ADMIN_INIT_PASSWORD`，未设置则随机生成并打印到后端日志
+- 空库（没有任何账号）时创建 `role=admin` 账号并启用；密码取 `ADMIN_INIT_PASSWORD`，未设置则随机生成并打印到后端日志
 - 已存在启用的管理员时跳过，不覆盖密码；`ADMIN_INIT_PASSWORD` 仅对首次创建生效
+- 存在账号但无可用管理员时进入“需恢复”，不会自动补建；教师开通、班委交接与管理员恢复使用 `scripts/manage_accounts.py`（见 README）
 - 系统不预置任何业务数据或账号
 
-获取与修改初始密码的完整步骤见 [README「管理员初始化」](../README.md#管理员初始化)。当前版本无网页端自助改密接口，可通过后端容器内脚本更新密码哈希。
+获取与修改初始密码的完整步骤见 [README「管理员初始化」](../README.md#管理员初始化)。
 
 ## 5. 本地开发与启动
 

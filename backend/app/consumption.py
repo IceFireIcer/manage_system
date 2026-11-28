@@ -1,26 +1,28 @@
 import json
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 from sqlalchemy import and_, case, func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
+from app import business_time
 from app.models import OperationLog, Requisition
 
-SHANGHAI_TZ = timezone(timedelta(hours=8))
 VALID_WINDOWS = (7, 30)
 DEFAULT_WINDOW = 7
 
 REQUISITION_SOURCES = {"normal": "requisition", "reversal": "reversal"}
 
+PROVISIONING_SCOPE = (
+    "备料估算按原领用归因：红冲通过关联原领用单抵扣原领用所在窗口的净消耗，"
+    "原领用早于当前窗口的红冲只在本窗口计为跨期纠错，不改变本窗口的备料净消耗。"
+)
+
 
 def local_day_start(days_ago: int = 0, now: datetime | None = None) -> datetime:
-    reference = now or datetime.now(SHANGHAI_TZ)
-    day_start = reference.astimezone(SHANGHAI_TZ).replace(
-        hour=0, minute=0, second=0, microsecond=0
-    )
-    return (day_start - timedelta(days=days_ago)).astimezone().replace(tzinfo=None)
+    reference = business_time.normalize(now) if now is not None else business_time.now()
+    return business_time.day_start(reference.date() - timedelta(days=days_ago))
 
 
 def window_start(window: int, now: datetime | None = None) -> datetime:
@@ -28,72 +30,176 @@ def window_start(window: int, now: datetime | None = None) -> datetime:
 
 
 def window_end(now: datetime | None = None) -> datetime:
-    return (now or datetime.now(SHANGHAI_TZ)).astimezone().replace(tzinfo=None)
+    return business_time.normalize(now) if now is not None else business_time.now()
 
 
 def daily_rate(quantity: int, window: int) -> float:
     return round(quantity / window, 2)
 
 
-def _type_totals(issued_condition, reversed_condition):
+@dataclass(frozen=True)
+class WindowFlow:
+    issued: int
+    reversed_quantity: int
+    cross_period_reversed: int
+    records: int
+
+    @property
+    def net(self) -> int:
+        return max(self.issued - self.reversed_quantity, 0)
+
+    @property
+    def attributed_reversed(self) -> int:
+        return self.reversed_quantity - self.cross_period_reversed
+
+    @property
+    def attributed_net(self) -> int:
+        return max(self.issued - self.attributed_reversed, 0)
+
+
+def _flow_columns(start: datetime):
+    origin = aliased(Requisition)
+    issued = func.coalesce(
+        func.sum(case((Requisition.type == "normal", Requisition.quantity), else_=0)), 0
+    )
+    reversed_quantity = func.coalesce(
+        func.sum(
+            case(
+                (
+                    and_(
+                        Requisition.type == "reversal",
+                        Requisition.status == "active",
+                    ),
+                    Requisition.quantity,
+                ),
+                else_=0,
+            )
+        ),
+        0,
+    )
+    cross_period_reversed = func.coalesce(
+        func.sum(
+            case(
+                (
+                    and_(
+                        Requisition.type == "reversal",
+                        Requisition.status == "active",
+                        origin.id.is_not(None),
+                        origin.created_at < start,
+                    ),
+                    Requisition.quantity,
+                ),
+                else_=0,
+            )
+        ),
+        0,
+    )
+    return origin, issued, reversed_quantity, cross_period_reversed
+
+
+def _window_filters(
+    consumable_id: int,
+    start: datetime,
+    end: datetime,
+    end_inclusive: bool,
+) -> tuple:
+    end_filter = (
+        Requisition.created_at <= end
+        if end_inclusive
+        else Requisition.created_at < end
+    )
     return (
-        func.coalesce(func.sum(case((issued_condition, Requisition.quantity), else_=0)), 0),
-        func.coalesce(func.sum(case((reversed_condition, Requisition.quantity), else_=0)), 0),
+        Requisition.consumable_id == consumable_id,
+        Requisition.created_at >= start,
+        end_filter,
+    )
+
+
+def window_flow(
+    db: Session,
+    consumable_id: int,
+    start: datetime,
+    end: datetime,
+    *,
+    end_inclusive: bool = True,
+) -> WindowFlow:
+    origin, issued, reversed_quantity, cross_period_reversed = _flow_columns(start)
+    issued_total, reversed_sum, cross_sum, records = db.execute(
+        select(issued, reversed_quantity, cross_period_reversed, func.count())
+        .select_from(Requisition)
+        .outerjoin(origin, origin.id == Requisition.reversal_of)
+        .where(*_window_filters(consumable_id, start, end, end_inclusive))
+    ).one()
+    return WindowFlow(
+        issued=int(issued_total),
+        reversed_quantity=int(reversed_sum),
+        cross_period_reversed=int(cross_sum),
+        records=int(records),
     )
 
 
 def window_net(
-    db: Session, consumable_id: int, start: datetime, end: datetime
+    db: Session,
+    consumable_id: int,
+    start: datetime,
+    end: datetime,
+    *,
+    end_inclusive: bool = True,
 ) -> int:
-    window_filters = (
-        Requisition.consumable_id == consumable_id,
-        Requisition.created_at >= start,
-        Requisition.created_at <= end,
-    )
-    issued, reversed_quantity = db.execute(
-        select(
-            *_type_totals(
-                Requisition.type == "normal",
-                and_(
-                    Requisition.type == "reversal",
-                    Requisition.status == "active",
-                ),
-            )
-        ).where(*window_filters)
-    ).one()
-    return max(issued - reversed_quantity, 0)
+    return window_flow(
+        db, consumable_id, start, end, end_inclusive=end_inclusive
+    ).net
 
 
-def net_by_consumable(
+@dataclass(frozen=True)
+class FlowBreakdown:
+    consumable_id: int
+    issued: int
+    reversed_quantity: int
+    cross_period_reversed: int
+
+    @property
+    def net(self) -> int:
+        return max(self.issued - self.reversed_quantity, 0)
+
+
+def flow_by_consumable(
     db: Session, start: datetime, end: datetime
-) -> list[tuple[int, int]]:
-    issued, reversed_quantity = _type_totals(
-        Requisition.type == "normal",
-        and_(Requisition.type == "reversal", Requisition.status == "active"),
-    )
-    aggregated = (
+) -> list[FlowBreakdown]:
+    origin, issued, reversed_quantity, cross_period_reversed = _flow_columns(start)
+    rows = db.execute(
         select(
-            Requisition.consumable_id.label("consumable_id"),
-            issued.label("issued"),
-            reversed_quantity.label("reversed"),
+            Requisition.consumable_id,
+            issued,
+            reversed_quantity,
+            cross_period_reversed,
         )
+        .select_from(Requisition)
+        .outerjoin(origin, origin.id == Requisition.reversal_of)
         .where(
             Requisition.created_at >= start,
             Requisition.created_at <= end,
         )
         .group_by(Requisition.consumable_id)
-        .subquery()
-    )
-    rows = db.execute(
-        select(
-            aggregated.c.consumable_id,
-            aggregated.c.issued,
-            aggregated.c.reversed,
-        ).order_by(aggregated.c.consumable_id)
+        .order_by(Requisition.consumable_id)
     ).all()
     return [
-        (consumable_id, max(issued_quantity - reversed_sum, 0))
-        for consumable_id, issued_quantity, reversed_sum in rows
+        FlowBreakdown(
+            consumable_id=consumable_id,
+            issued=int(issued_total),
+            reversed_quantity=int(reversed_sum),
+            cross_period_reversed=int(cross_sum),
+        )
+        for consumable_id, issued_total, reversed_sum, cross_sum in rows
+    ]
+
+
+def net_by_consumable(
+    db: Session, start: datetime, end: datetime
+) -> list[tuple[int, int]]:
+    return [
+        (flow.consumable_id, flow.net)
+        for flow in flow_by_consumable(db, start, end)
     ]
 
 
@@ -132,7 +238,7 @@ def audit_events(
 
     restock_logs = db.scalars(
         select(OperationLog).where(
-            OperationLog.action == "restock",
+            OperationLog.action.in_(("restock", "restock_correction")),
             OperationLog.target_id == consumable_id,
         )
     ).all()

@@ -1,11 +1,15 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import api from '../api'
 import { useUserStore } from '../stores/user'
 import PageHeader from '../components/PageHeader.vue'
 import EmptyState from '../components/EmptyState.vue'
+import { businessToday } from '../utils/businessDate'
+import { announce } from '../utils/announcer'
+import { copyRequestId, recordRequestId, requestIdOf } from '../utils/requestTrace'
+import { keepFocusedFieldVisible } from '../utils/mobileFocus'
 
 const TIER_META = {
   urgent: { label: '紧急', tagClass: 'status-tag--danger' },
@@ -15,6 +19,18 @@ const TIER_META = {
 
 const TIER_ORDER = { urgent: 0, moderate: 1, observe: 2 }
 
+const DISPOSITION_META = {
+  pending: { label: '待跟进', tagClass: 'status-tag--warning' },
+  awaiting: { label: '待到货', tagClass: 'status-tag--info' },
+  partial: { label: '部分到货', tagClass: 'status-tag--warning' },
+  resolved: { label: '风险解除', tagClass: 'status-tag--success' },
+}
+
+const RATIONALE_SOURCE_META = {
+  llm: { label: '模型润色', tagClass: 'status-tag--info' },
+  rules: { label: '规则模板', tagClass: 'status-tag--success' },
+}
+
 const TIER_FILTERS = [
   { value: 'all', label: '全部' },
   { value: 'urgent', label: '紧急' },
@@ -23,10 +39,12 @@ const TIER_FILTERS = [
 ]
 
 const router = useRouter()
+const route = useRoute()
 const userStore = useUserStore()
 const isAdmin = computed(() => userStore.user?.role === 'admin')
 
 const items = ref([])
+const ruleSpec = ref(null)
 const generatedAt = ref('')
 const loading = ref(false)
 const requestError = ref('')
@@ -34,16 +52,31 @@ const staleError = ref(false)
 const handledAll = ref(false)
 const tierFilter = ref('all')
 const quantityRef = ref(null)
+const focusId = ref(0)
+const hasFetched = ref(false)
+const restockTrigger = ref(null)
+const errorRequestId = ref('')
 
 const restockDialog = reactive({
   visible: false,
   item: null,
   quantity: null,
+  receivedDate: businessToday(),
+  source: '',
   remark: '',
+  requestId: '',
+  lastSignature: '',
   submitting: false,
   fieldError: '',
   errorKind: '',
   errorMessage: '',
+})
+
+const receiptDialog = reactive({
+  visible: false,
+  loading: false,
+  error: '',
+  data: null,
 })
 
 let requestSeq = 0
@@ -78,6 +111,13 @@ const currentTierLabel = computed(
   () => TIER_FILTERS.find((option) => option.value === tierFilter.value)?.label ?? '',
 )
 
+const focusedMissing = computed(
+  () =>
+    Boolean(focusId.value) &&
+    hasFetched.value &&
+    !items.value.some((item) => item.consumable_id === focusId.value),
+)
+
 const generatedAtText = computed(() => formatGeneratedAt(generatedAt.value))
 
 const emptyTitle = computed(() => {
@@ -101,15 +141,11 @@ const expectedStock = computed(() => {
 
 function formatGeneratedAt(value) {
   if (!value) return '—'
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return String(value).replace('T', ' ').slice(0, 16)
-  const now = new Date()
-  const time = `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
-  const sameDay =
-    date.getFullYear() === now.getFullYear() &&
-    date.getMonth() === now.getMonth() &&
-    date.getDate() === now.getDate()
-  return sameDay ? time : `${date.getMonth() + 1}-${date.getDate()} ${time}`
+  const text = String(value).replace('T', ' ')
+  const day = text.slice(0, 10)
+  const time = text.slice(11, 16)
+  if (!day || !time) return text.slice(0, 16)
+  return day === businessToday() ? time : `${day.slice(5)} ${time}`
 }
 
 function formatDecimal(value) {
@@ -143,6 +179,7 @@ async function fetchSuggestions(force = false) {
       : await api.get('/inventory/suggestions')
     if (seq !== requestSeq || !active) return
     items.value = Array.isArray(data.items) ? data.items : []
+    ruleSpec.value = data.rules ?? null
     generatedAt.value = data.generated_at ?? ''
     handledAll.value = false
     if (force) ElMessage.success('已完成库存巡检')
@@ -154,24 +191,59 @@ async function fetchSuggestions(force = false) {
       requestError.value = '库存巡检暂时不可用，请稍后重试。'
     }
   } finally {
-    if (seq === requestSeq) loading.value = false
+    if (seq === requestSeq) {
+      loading.value = false
+      hasFetched.value = true
+    }
   }
 }
 
-function openRestock(item) {
+function newRequestId() {
+  if (globalThis.crypto?.randomUUID) {
+    return globalThis.crypto.randomUUID().replaceAll('-', '')
+  }
+  return `rst-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`
+}
+
+function openRestock(item, event) {
+  restockTrigger.value = event?.currentTarget ?? null
   restockDialog.item = item
   restockDialog.quantity = item.recommended_quantity > 0 ? item.recommended_quantity : null
+  restockDialog.receivedDate = businessToday()
+  restockDialog.source = '建议补货'
   restockDialog.remark = ''
+  restockDialog.requestId = newRequestId()
+  restockDialog.lastSignature = ''
   restockDialog.fieldError = ''
   restockDialog.errorKind = ''
   restockDialog.errorMessage = ''
   restockDialog.submitting = false
+  errorRequestId.value = ''
   restockDialog.visible = true
 }
 
 function handleDialogClose(done) {
   if (restockDialog.submitting) return
   done()
+}
+
+function handleRestockClosed() {
+  nextTick(() => {
+    const trigger = restockTrigger.value
+    if (trigger?.isConnected) {
+      trigger.focus()
+      return
+    }
+    document.querySelector('.restock__filters button')?.focus?.()
+  })
+}
+
+async function copyRestockRequest() {
+  const value = errorRequestId.value || restockDialog.requestId
+  if (!value) return
+  const ok = await copyRequestId(value)
+  if (ok) ElMessage.success('请求编号已复制')
+  else ElMessage.error('复制失败，请手动选择请求编号')
 }
 
 function clearQuantityError() {
@@ -186,32 +258,48 @@ async function submitRestock() {
   if (!Number.isInteger(quantity) || quantity <= 0) {
     restockDialog.fieldError = '请输入正整数入库数量'
     quantityRef.value?.focus?.()
+    announce(restockDialog.fieldError, { assertive: true })
     return
   }
   restockDialog.fieldError = ''
   restockDialog.errorKind = ''
   restockDialog.errorMessage = ''
   restockDialog.submitting = true
+  const signature = JSON.stringify([
+    item.consumable_id,
+    quantity,
+    restockDialog.receivedDate,
+    restockDialog.source.trim(),
+    restockDialog.remark.trim(),
+  ])
+  if (signature !== restockDialog.lastSignature) {
+    restockDialog.requestId = newRequestId()
+    restockDialog.lastSignature = signature
+  }
   try {
-    const { data } = await api.post('/inventory/restock', {
-      consumable_id: item.consumable_id,
-      quantity,
+    const { data } = await api.post('/inventory/restock/orders', {
+      items: [{ consumable_id: item.consumable_id, quantity }],
+      received_at: restockDialog.receivedDate
+        ? `${restockDialog.receivedDate}T00:00:00`
+        : null,
+      source: restockDialog.source.trim() || null,
       remark: restockDialog.remark.trim() || null,
+      request_id: restockDialog.requestId,
     })
-    items.value = items.value.filter((row) => row.consumable_id !== data.consumable_id)
-    if (!items.value.length) handledAll.value = true
     restockDialog.visible = false
-    const unit = data.unit || item.unit
-    ElMessage.success(
-      `已入库 ${data.quantity}${unit}，当前库存 ${data.stock_after}${unit}`,
-    )
+    const line = Array.isArray(data.lines) ? data.lines[0] : null
+    const stockText = line ? `，当前库存 ${line.stock_after}${line.unit}` : ''
+    announce(`已生成入库单 ${data.order_no}${stockText}`)
+    ElMessage.success(`已生成入库单 ${data.order_no}${stockText}`)
+    await fetchSuggestions(true)
   } catch (error) {
+    errorRequestId.value = recordRequestId(requestIdOf(error) || restockDialog.requestId)
     if (!error.response) {
       restockDialog.errorKind = 'unconfirmed'
       restockDialog.errorMessage = '网络异常或请求超时，暂未确认本次入库是否成功。'
     } else {
       const status = error.response.status
-      if ([400, 404, 422].includes(status)) {
+      if ([400, 404, 409, 422].includes(status)) {
         restockDialog.errorKind = 'rule'
         restockDialog.errorMessage =
           error.response.data?.detail || '该耗材当前无法入库，请刷新建议后重试。'
@@ -220,6 +308,12 @@ async function submitRestock() {
         restockDialog.errorMessage = '入库失败，请稍后重试。'
       }
     }
+    announce(
+      `${restockDialog.errorMessage}${
+        errorRequestId.value ? `。请求编号 ${errorRequestId.value}` : ''
+      }`,
+      { assertive: true },
+    )
   } finally {
     restockDialog.submitting = false
   }
@@ -235,8 +329,73 @@ function goLogs() {
   router.push('/logs')
 }
 
+function goArchiveItem() {
+  if (!focusId.value) return
+  router.push({ path: '/consumables', query: { consumable_id: String(focusId.value) } })
+}
+
+function goOverview() {
+  router.push('/overview')
+}
+
+function formatReceiptTime(value) {
+  if (!value) return '—'
+  const matched = String(value)
+    .replace('T', ' ')
+    .match(/^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})/)
+  return matched ? `${matched[1]} ${matched[2]}` : String(value)
+}
+
+function receiptStatusLabel(status) {
+  return (
+    { submitted: '已提交', processing: '处理中', rejected: '已驳回' }[status] ?? status
+  )
+}
+
+async function openRouteReceipt() {
+  const orderNo = route.query.order_no
+  if (!orderNo) return
+  receiptDialog.visible = true
+  receiptDialog.loading = true
+  receiptDialog.error = ''
+  try {
+    const { data } = await api.get(
+      `/inventory/restock/orders/${encodeURIComponent(String(orderNo))}`,
+    )
+    receiptDialog.data = data
+  } catch {
+    receiptDialog.data = null
+    receiptDialog.error = '入库单读取失败，可能尚未生成回执或已被替代。'
+  } finally {
+    receiptDialog.loading = false
+  }
+}
+
+function parseFocusId(value) {
+  const parsed = Number(value)
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : 0
+}
+
+watch(
+  () => route.query.consumable_id,
+  (value) => {
+    focusId.value = parseFocusId(value)
+  },
+)
+
+watch(visibleItems, async (list) => {
+  if (!focusId.value) return
+  if (!list.some((item) => item.consumable_id === focusId.value)) return
+  await nextTick()
+  document
+    .getElementById(`restock-suggestion-${focusId.value}`)
+    ?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+})
+
 onMounted(() => {
+  focusId.value = parseFocusId(route.query.consumable_id)
   fetchSuggestions()
+  openRouteReceipt()
 })
 
 onBeforeUnmount(() => {
@@ -267,6 +426,47 @@ onBeforeUnmount(() => {
         </el-radio-button>
       </el-radio-group>
     </div>
+
+    <div v-if="focusedMissing" class="restock__notice">
+      <el-alert
+        type="warning"
+        :closable="false"
+        show-icon
+        title="该耗材当前没有补货建议"
+        description="库存已补足，或安全库存线为 0（未设预警线）而不进入补货巡检。"
+      />
+      <el-button v-if="isAdmin" link type="primary" @click="goArchiveItem">
+        查看档案
+      </el-button>
+      <el-button v-else link type="primary" @click="goOverview">返回库存总览</el-button>
+    </div>
+
+    <details v-if="ruleSpec" class="panel restock__rules">
+      <summary class="restock__rules-summary">
+        补货规则说明 · 规则版本 {{ ruleSpec.version }}
+      </summary>
+      <div class="restock__rules-body">
+        <p class="restock__rules-text">{{ ruleSpec.window_rule }}</p>
+        <ul class="restock__rules-list">
+          <li v-for="tier in ruleSpec.tiers" :key="tier.code">
+            <span
+              class="status-tag"
+              :class="TIER_META[tier.code]?.tagClass"
+            >
+              {{ tier.label }}
+            </span>
+            {{ tier.condition }}
+          </li>
+        </ul>
+        <p class="restock__rules-text"><strong>计算：</strong>{{ ruleSpec.formula }}</p>
+        <p v-if="ruleSpec.sort_rule" class="restock__rules-text">
+          <strong>排序：</strong>{{ ruleSpec.sort_rule }}
+        </p>
+        <p class="restock__rules-text">
+          <strong>跳过条件：</strong>{{ ruleSpec.skip_conditions.join('；') }}
+        </p>
+      </div>
+    </details>
 
     <div v-if="loading && items.length" class="restock__notice">
       <el-alert
@@ -320,9 +520,13 @@ onBeforeUnmount(() => {
     <div v-else class="restock__grid" :aria-busy="loading">
       <article
         v-for="item in visibleItems"
+        :id="`restock-suggestion-${item.consumable_id}`"
         :key="item.consumable_id"
         class="panel restock__card"
-        :class="`restock__card--${item.tier}`"
+        :class="[
+          `restock__card--${item.tier}`,
+          { 'restock__card--focus': item.consumable_id === focusId },
+        ]"
       >
         <header class="restock__card-head">
           <div class="restock__card-heading">
@@ -344,11 +548,24 @@ onBeforeUnmount(() => {
             <span class="restock__amount">
               {{ item.recommended_quantity }}<span class="restock__amount-unit">{{ item.unit }}</span>
             </span>
-            <el-button v-if="isAdmin" type="primary" @click="openRestock(item)">
+            <el-button v-if="isAdmin" type="primary" @click="openRestock(item, $event)">
               处置入库
             </el-button>
           </div>
         </header>
+
+        <div v-if="item.disposition_status" class="restock__disposition">
+          <span
+            class="status-tag"
+            :class="DISPOSITION_META[item.disposition_status]?.tagClass"
+          >
+            {{ DISPOSITION_META[item.disposition_status]?.label ?? item.disposition_status }}
+          </span>
+          <span v-if="item.disposition_handler_name">
+            处理人 {{ item.disposition_handler_name }}
+          </span>
+          <span v-if="item.disposition_order_no">入库单 {{ item.disposition_order_no }}</span>
+        </div>
 
         <dl class="restock__metrics">
           <div class="restock__metric">
@@ -377,12 +594,40 @@ onBeforeUnmount(() => {
           </div>
         </dl>
 
-        <p v-if="item.days_of_supply === null || item.days_of_supply === undefined" class="restock__hint">
-          近 7 天无净消耗
+        <div v-if="item.reasons?.length" class="restock__reasons">
+          <span class="restock__reasons-title">命中原因</span>
+          <span
+            v-for="reason in item.reasons"
+            :key="reason"
+            class="status-tag status-tag--info"
+          >
+            {{ reason }}
+          </span>
+        </div>
+
+        <p v-if="item.consumption_note" class="restock__hint">
+          {{ item.consumption_note }}
         </p>
 
         <div class="restock__rationale">
-          <span class="restock__rationale-title">判断依据</span>
+          <div class="restock__rationale-head">
+            <span class="restock__rationale-title">判断依据</span>
+            <span
+              class="status-tag"
+              :class="RATIONALE_SOURCE_META[item.rationale_source]?.tagClass"
+            >
+              {{ RATIONALE_SOURCE_META[item.rationale_source]?.label ?? item.rationale_source }}
+            </span>
+            <span
+              v-if="item.rationale_degraded"
+              class="status-tag status-tag--warning"
+            >
+              已降级
+            </span>
+            <span class="restock__rationale-time">
+              数据时点 {{ formatGeneratedAt(item.computed_at) }}
+            </span>
+          </div>
           <p class="restock__rationale-text">{{ item.rationale }}</p>
         </div>
       </article>
@@ -396,8 +641,13 @@ onBeforeUnmount(() => {
       :close-on-click-modal="!restockDialog.submitting"
       :close-on-press-escape="!restockDialog.submitting"
       :show-close="!restockDialog.submitting"
+      @closed="handleRestockClosed"
     >
-      <div v-if="restockDialog.item" class="restock__dialog">
+      <div
+        v-if="restockDialog.item"
+        class="restock__dialog"
+        @focusin="keepFocusedFieldVisible"
+      >
         <div class="restock__summary">
           <div class="restock__summary-row">
             <span class="restock__summary-label">耗材</span>
@@ -436,11 +686,31 @@ onBeforeUnmount(() => {
               :disabled="restockDialog.submitting"
               controls-position="right"
               class="restock__quantity"
+              aria-label="实际入库数量"
               @change="clearQuantityError"
             />
             <p v-if="expectedStock !== null" class="restock__hint">
               预计入库后 {{ expectedStock }}{{ restockDialog.item.unit }}
             </p>
+          </el-form-item>
+          <el-form-item label="实收日期" required>
+            <el-date-picker
+              v-model="restockDialog.receivedDate"
+              type="date"
+              value-format="YYYY-MM-DD"
+              :disabled="restockDialog.submitting"
+              class="restock__quantity"
+              aria-label="实收日期"
+            />
+          </el-form-item>
+          <el-form-item label="来源">
+            <el-input
+              v-model="restockDialog.source"
+              maxlength="64"
+              :disabled="restockDialog.submitting"
+              placeholder="如：建议补货、采购回库"
+              aria-label="来源"
+            />
           </el-form-item>
           <el-form-item label="备注">
             <el-input
@@ -451,6 +721,7 @@ onBeforeUnmount(() => {
               show-word-limit
               :disabled="restockDialog.submitting"
               placeholder="可选，如采购回库"
+              aria-label="备注"
             />
           </el-form-item>
         </el-form>
@@ -462,7 +733,16 @@ onBeforeUnmount(() => {
             show-icon
             :title="restockDialog.errorKind === 'unconfirmed' ? '暂未确认提交结果' : '无法完成入库'"
             :description="restockDialog.errorMessage"
-          />
+            role="alert"
+          >
+            <template #default>
+              <p v-if="errorRequestId" class="restock__hint">
+                请求编号
+                <code class="restock__request-id" tabindex="0">{{ errorRequestId }}</code>
+                <el-button link type="primary" @click="copyRestockRequest">复制请求编号</el-button>
+              </p>
+            </template>
+          </el-alert>
           <div class="restock__dialog-error-action">
             <el-button v-if="restockDialog.errorKind === 'rule'" @click="returnAndRefresh">
               返回并刷新建议
@@ -491,6 +771,84 @@ onBeforeUnmount(() => {
         >
           确认入库
         </el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog
+      v-model="receiptDialog.visible"
+      :title="receiptDialog.data ? `入库单 ${receiptDialog.data.order_no}` : '入库单详情'"
+      width="680px"
+    >
+      <div v-if="receiptDialog.loading" class="restock__receipt">
+        <el-skeleton :rows="4" animated />
+      </div>
+      <div v-else-if="receiptDialog.error" class="restock__receipt">
+        <el-alert
+          type="error"
+          :closable="false"
+          show-icon
+          title="无法读取入库单"
+          :description="receiptDialog.error"
+        />
+      </div>
+      <div v-else-if="receiptDialog.data" class="restock__receipt">
+        <div class="restock__summary">
+          <div class="restock__summary-row">
+            <span class="restock__summary-label">状态</span>
+            <span class="restock__summary-value">
+              {{ receiptStatusLabel(receiptDialog.data.status) }}
+            </span>
+          </div>
+          <div class="restock__summary-row">
+            <span class="restock__summary-label">经办人</span>
+            <span class="restock__summary-value">{{ receiptDialog.data.operator_name }}</span>
+          </div>
+          <div class="restock__summary-row">
+            <span class="restock__summary-label">业务时间</span>
+            <span class="restock__summary-value">
+              {{ formatReceiptTime(receiptDialog.data.business_at) }}
+            </span>
+          </div>
+          <div class="restock__summary-row">
+            <span class="restock__summary-label">入账时间</span>
+            <span class="restock__summary-value">
+              {{ formatReceiptTime(receiptDialog.data.posted_at) }}
+            </span>
+          </div>
+          <div v-if="receiptDialog.data.source" class="restock__summary-row">
+            <span class="restock__summary-label">来源</span>
+            <span class="restock__summary-value">{{ receiptDialog.data.source }}</span>
+          </div>
+          <div v-if="receiptDialog.data.remark" class="restock__summary-row">
+            <span class="restock__summary-label">备注</span>
+            <span class="restock__summary-value">{{ receiptDialog.data.remark }}</span>
+          </div>
+        </div>
+
+        <el-table :data="receiptDialog.data.lines" class="table-dense">
+          <el-table-column label="耗材" min-width="140">
+            <template #default="{ row }">{{ row.consumable_name }}</template>
+          </el-table-column>
+          <el-table-column label="入库数量" width="110" align="right">
+            <template #default="{ row }">{{ row.quantity }}{{ row.unit }}</template>
+          </el-table-column>
+          <el-table-column label="变动前" width="90" align="right">
+            <template #default="{ row }">{{ row.stock_before }}</template>
+          </el-table-column>
+          <el-table-column label="变动后" width="90" align="right">
+            <template #default="{ row }">{{ row.stock_after }}</template>
+          </el-table-column>
+          <el-table-column label="已纠错" width="90" align="right">
+            <template #default="{ row }">{{ row.corrected_quantity }}</template>
+          </el-table-column>
+          <el-table-column label="入账时间" min-width="160">
+            <template #default="{ row }">{{ formatReceiptTime(row.posted_at) }}</template>
+          </el-table-column>
+        </el-table>
+      </div>
+
+      <template #footer>
+        <el-button type="primary" @click="receiptDialog.visible = false">关闭</el-button>
       </template>
     </el-dialog>
   </div>
@@ -557,6 +915,11 @@ onBeforeUnmount(() => {
   border-left-color: var(--info);
 }
 
+.restock__card--focus {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
 .restock__card-head {
   display: flex;
   flex-wrap: wrap;
@@ -614,6 +977,16 @@ onBeforeUnmount(() => {
   color: var(--text-secondary);
 }
 
+.restock__disposition {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--text-muted);
+}
+
 .restock__metrics {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
@@ -647,6 +1020,65 @@ onBeforeUnmount(() => {
   font-variant-numeric: tabular-nums;
 }
 
+.restock__rules {
+  margin-bottom: 16px;
+  padding: 16px 20px;
+}
+
+.restock__rules-summary {
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 22px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.restock__rules-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.restock__rules-text {
+  margin: 0;
+  font-size: 13px;
+  line-height: 21px;
+  color: var(--text-secondary);
+}
+
+.restock__rules-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding-left: 0;
+  list-style: none;
+  font-size: 13px;
+  line-height: 21px;
+  color: var(--text-secondary);
+}
+
+.restock__rules-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.restock__reasons {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.restock__reasons-title {
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--text-muted);
+}
+
 .restock__hint {
   margin: 0;
   font-size: 13px;
@@ -660,6 +1092,21 @@ onBeforeUnmount(() => {
   gap: 6px;
   padding-top: 16px;
   border-top: 1px solid var(--line);
+}
+
+.restock__rationale-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.restock__rationale-time {
+  margin-left: auto;
+  font-size: 12px;
+  line-height: 20px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
 }
 
 .restock__rationale-title {
@@ -681,6 +1128,12 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   gap: 20px;
+}
+
+.restock__receipt {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
 }
 
 .restock__summary {
@@ -724,6 +1177,17 @@ onBeforeUnmount(() => {
   gap: 12px;
 }
 
+.restock__request-id {
+  padding: 2px 6px;
+  border-radius: var(--radius-control);
+  background: var(--surface-muted);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 20px;
+  word-break: break-all;
+  user-select: all;
+}
+
 .restock__dialog-error-action {
   display: flex;
   justify-content: flex-end;
@@ -737,6 +1201,10 @@ onBeforeUnmount(() => {
   .restock__amount {
     font-size: 24px;
     line-height: 32px;
+  }
+
+  .restock__dialog-error-action .el-button {
+    min-height: 44px;
   }
 }
 </style>

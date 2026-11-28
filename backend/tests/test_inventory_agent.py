@@ -191,6 +191,25 @@ def test_suggestions_sorted_tiers_with_metrics(
     assert trend_item["recommended_quantity"] == 15
 
 
+def test_suggestions_same_tier_sorted_by_supply_days(
+    admin_client: TestClient, db_session
+) -> None:
+    _create_consumable(admin_client, name="铝板", safety_stock=20, current_stock=4)
+    fast = _create_consumable(
+        admin_client, name="焊丝", safety_stock=5, current_stock=1
+    )
+    _insert_requisition(db_session, fast["id"], 7)
+
+    data = admin_client.get(SUGGESTIONS_URL).json()
+    items = data["items"]
+
+    assert data["rules"]["sort_rule"]
+    assert [item["tier"] for item in items] == ["urgent", "urgent"]
+    assert [item["name"] for item in items] == ["焊丝", "铝板"]
+    assert items[0]["days_of_supply"] == 1
+    assert items[1]["days_of_supply"] is None
+
+
 def test_rationale_falls_back_without_api_key(admin_client: TestClient) -> None:
     _create_consumable(admin_client, name="焊丝", safety_stock=5, current_stock=3)
 
@@ -255,7 +274,14 @@ def test_cache_reused_until_refresh(
 
     refreshed = admin_client.post(REFRESH_URL).json()
     assert stub.calls == 4
-    assert refreshed["items"] == first["items"]
+    assert [
+        {key: value for key, value in item.items() if key != "computed_at"}
+        for item in refreshed["items"]
+    ] == [
+        {key: value for key, value in item.items() if key != "computed_at"}
+        for item in first["items"]
+    ]
+    assert refreshed["items"][0]["computed_at"] >= first["items"][0]["computed_at"]
 
 
 def test_suggestions_generate_rationales_concurrently(

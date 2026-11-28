@@ -1,13 +1,16 @@
 <script setup>
-import { computed, nextTick, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '../api'
 import { useUserStore } from '../stores/user'
 import PageHeader from '../components/PageHeader.vue'
 import EmptyState from '../components/EmptyState.vue'
 import RecordDetailDrawer from '../components/RecordDetailDrawer.vue'
 import ReversalDialog from '../components/ReversalDialog.vue'
+import CorrectionDialog from '../components/CorrectionDialog.vue'
+import ReturnScrapDialog from '../components/ReturnScrapDialog.vue'
+import { validateDateRange } from '../utils/businessDate'
 
 const QUICK_OPTIONS = [
   { key: 'all', label: '全部' },
@@ -76,8 +79,14 @@ const exporting = ref(false)
 
 const detailVisible = ref(false)
 const detailId = ref(null)
+const detailRefresh = ref(0)
 const reversalVisible = ref(false)
 const reversalRecord = ref(null)
+const correctionVisible = ref(false)
+const correctionRecord = ref(null)
+const stockActionVisible = ref(false)
+const stockActionRecord = ref(null)
+const stockActionKind = ref('return')
 const receipt = ref(null)
 
 const tableRegion = ref(null)
@@ -85,13 +94,6 @@ const lastTrigger = ref(null)
 let requestSerial = 0
 let pendingRequisitionId = null
 
-const unitByName = computed(() => {
-  const map = new Map()
-  for (const item of consumables.value) {
-    if (item.name) map.set(item.name, item.unit || '')
-  }
-  return map
-})
 
 const quickKey = computed(() => {
   if (!applied.type && !applied.status) return 'all'
@@ -188,11 +190,22 @@ function formatTime(value) {
 }
 
 function rowUnit(row) {
-  return unitByName.value.get(row.consumable_name) ?? ''
+  return row.unit || '待核对'
 }
 
 function consumableLabel(row) {
   return row.consumable_spec ? `${row.consumable_name}（${row.consumable_spec}）` : row.consumable_name
+}
+
+function consumableOptionLabel(item) {
+  const base = item.spec ? `${item.name}（${item.spec}）` : item.name
+  return item.status === 'disabled' ? `${base}（已停用）` : base
+}
+
+function userOptionLabel(option) {
+  const role = option.role === 'teacher' ? '教师' : option.role === 'admin' ? '班委' : '学生'
+  const disabled = option.status === 'disabled' ? '·已停用' : ''
+  return `${option.name}（${role}·${option.account}${disabled}）`
 }
 
 function quantityText(row) {
@@ -213,11 +226,50 @@ function typeMeta(row) {
   return { label: '领用', className: 'status-tag--info' }
 }
 
+const CORRECTION_STATUS_META = {
+  submitted: { label: '待处理', className: 'status-tag--warning' },
+  accepted: { label: '已处理', className: 'status-tag--success' },
+  rejected: { label: '已驳回', className: 'status-tag--neutral' },
+}
+
 function statusMeta(row) {
   if (row.status === 'reversed') {
     return { label: '已撤销', className: 'status-tag--neutral' }
   }
   return { label: '有效', className: 'status-tag--success' }
+}
+
+function correctionMeta(row) {
+  return (
+    CORRECTION_STATUS_META[row.correction_status] ?? {
+      label: row.correction_status ?? '',
+      className: 'status-tag--neutral',
+    }
+  )
+}
+
+const BACKFILL_META = {
+  normal: { label: '区间补录', className: 'status-tag--info' },
+  controlled: { label: '受控调整', className: 'status-tag--warning' },
+  counted: { label: '已盘点', className: 'status-tag--success' },
+  opening: { label: '期初已含', className: 'status-tag--neutral' },
+}
+
+function backfillMeta(row) {
+  return (
+    BACKFILL_META[row.backfill_mode] ?? {
+      label: row.backfill_mode ?? '',
+      className: 'status-tag--neutral',
+    }
+  )
+}
+
+function backfillTitle(row) {
+  const parts = []
+  if (row.backfill_reason) parts.push(`补录原因：${row.backfill_reason}`)
+  if (row.operator_name) parts.push(`经办人：${row.operator_name}`)
+  if (row.linked_count_order_no) parts.push(`关联盘点单：${row.linked_count_order_no}`)
+  return parts.join('；')
 }
 
 function relatedLabel(row) {
@@ -227,6 +279,14 @@ function relatedLabel(row) {
 
 function canReverseRow(row) {
   return isStaff.value && row.type === 'normal' && row.status === 'active'
+}
+
+function canStockActionRow(row) {
+  return row.type === 'normal' && row.status === 'active'
+}
+
+function canScrapRow(row) {
+  return isStaff.value && canStockActionRow(row)
 }
 
 function rowClassName({ row }) {
@@ -256,6 +316,7 @@ function buildRouteQuery() {
     query.start_date = applied.dateRange[0]
     query.end_date = applied.dateRange[1]
   }
+  if (page.current > 1) query.page = page.current
   return query
 }
 
@@ -263,12 +324,6 @@ function syncRouteQuery() {
   router.replace({ query: buildRouteQuery() }).catch(() => {})
 }
 
-function validateDateRange(range) {
-  if (!Array.isArray(range) || range.length !== 2) return ''
-  const [start, end] = range
-  if (start && end && start > end) return '开始日期应早于或等于结束日期'
-  return ''
-}
 
 function applyDraftFilters() {
   applied.consumableId = draft.consumableId
@@ -358,21 +413,23 @@ function handleQuick(key) {
 
 function handlePageChange(nextPage) {
   page.current = nextPage
+  syncRouteQuery()
   fetchRecords()
 }
 
 function handleSizeChange(nextSize) {
   page.size = nextSize
   page.current = 1
+  syncRouteQuery()
   fetchRecords()
 }
 
 async function fetchConsumableOptions() {
   consumablesLoadError.value = ''
   try {
-    const { data } = await api.get('/consumables', {
-      params: isStaff.value ? { status: 'all' } : {},
-    })
+    const { data } = isStudent.value
+      ? await api.get('/requisitions/consumable-options')
+      : await api.get('/consumables', { params: { status: 'all' } })
     consumables.value = data
   } catch {
     consumablesLoadError.value = '耗材筛选选项加载失败'
@@ -384,7 +441,7 @@ async function fetchUserOptions() {
   if (!isStaff.value) return
   userLoadError.value = ''
   try {
-    const { data } = await api.get('/users/options')
+    const { data } = await api.get('/users/history-options')
     userOptions.value = data
   } catch {
     userLoadError.value = '领用人筛选选项加载失败'
@@ -396,29 +453,73 @@ async function handleExport() {
   if (!isStaff.value || exporting.value) return
   exporting.value = true
   try {
-    const response = await api.get('/requisitions/export', {
-      params: buildParams(),
-      responseType: 'blob',
-    })
-    const disposition = response.headers['content-disposition'] || ''
-    const matched = disposition.match(/filename="?([^";]+)"?/)
-    let filename = matched ? matched[1] : ''
-    if (filename) {
-      try {
-        filename = decodeURIComponent(filename)
-      } catch {
-        filename = matched[1]
+    const params = buildParams()
+    const { data: preview } = await api.get('/requisitions/export/preview', { params })
+    const total = Number(preview.total ?? 0)
+    if (!total) {
+      ElMessage.info('当前筛选条件下没有可导出的记录')
+      return
+    }
+    const segmentLimit = Number(preview.limit ?? 0) || total
+    const segments = Math.max(1, Math.ceil(total / segmentLimit))
+    const range =
+      preview.first_at && preview.last_at
+        ? `业务时间 ${formatTime(preview.first_at)} 至 ${formatTime(preview.last_at)}`
+        : ''
+    const segmentNote = segments > 1 ? `，将分 ${segments} 段完整导出` : ''
+    try {
+      await ElMessageBox.confirm(
+        `匹配 ${total} 条${range ? `（${range}）` : ''}${segmentNote}。`,
+        '确认导出',
+        {
+          confirmButtonText: '开始导出',
+          cancelButtonText: '取消',
+          type: 'info',
+        },
+      )
+    } catch {
+      return
+    }
+
+    const chunks = []
+    let exported = 0
+    let beforeCreatedAt = null
+    let beforeId = null
+    let hasMore = false
+    for (let guard = 0; guard < 1000; guard += 1) {
+      const segmentParams = { ...params, include_header: chunks.length === 0 }
+      if (beforeCreatedAt && beforeId) {
+        segmentParams.before_created_at = beforeCreatedAt
+        segmentParams.before_id = beforeId
       }
+      const response = await api.get('/requisitions/export', {
+        params: segmentParams,
+        responseType: 'blob',
+        timeout: 60000,
+      })
+      const blob =
+        response.data instanceof Blob
+          ? response.data
+          : new Blob([response.data], { type: 'text/csv;charset=utf-8' })
+      const text = await blob.text()
+      chunks.push(
+        chunks.length === 0 ? text : text.replace(/^\uFEFF/, ''),
+      )
+      const headers = response.headers || {}
+      exported += Number(headers['x-export-this-segment'] || 0)
+      hasMore = String(headers['x-export-has-more']).toLowerCase() === 'true'
+      if (!hasMore) break
+      beforeCreatedAt = headers['x-export-next-before-created-at']
+      beforeId = headers['x-export-next-before-id']
+      if (!beforeCreatedAt || !beforeId) break
     }
-    if (!filename) {
-      const pad = (value) => String(value).padStart(2, '0')
-      const now = new Date()
-      filename = `requisitions_${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}.csv`
-    }
-    const blob = response.data instanceof Blob
-      ? response.data
-      : new Blob([response.data], { type: 'text/csv;charset=utf-8' })
-    const url = URL.createObjectURL(blob)
+
+    const pad = (value) => String(value).padStart(2, '0')
+    const now = new Date()
+    const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}`
+    const filename = `requisitions_${stamp}_${exported}条.csv`
+    const output = new Blob(chunks, { type: 'text/csv;charset=utf-8' })
+    const url = URL.createObjectURL(output)
     const link = document.createElement('a')
     link.href = url
     link.download = filename
@@ -426,7 +527,11 @@ async function handleExport() {
     link.click()
     document.body.removeChild(link)
     URL.revokeObjectURL(url)
-    ElMessage.success('已开始下载 CSV')
+    if (exported === total) {
+      ElMessage.success(`已完整导出 ${exported} 条`)
+    } else {
+      ElMessage.warning(`已导出 ${exported} / ${total} 条，请重试或收窄条件`)
+    }
   } catch {
     ElMessage.error('导出失败，请稍后重试')
   } finally {
@@ -450,6 +555,64 @@ function handleDetailClosed() {
   })
 }
 
+function handleDetailReverse(record) {
+  reversalRecord.value = { ...record }
+  reversalVisible.value = true
+}
+
+function handleDetailCorrect(record) {
+  correctionRecord.value = { ...record }
+  correctionVisible.value = true
+}
+
+function handleCorrectionSuccess() {
+  correctionRecord.value = null
+  detailRefresh.value += 1
+  fetchRecords()
+  ElMessage.success('纠错申请已提交，等待教师处理')
+}
+
+async function openStockAction(record, kind, event) {
+  if (event?.currentTarget) {
+    lastTrigger.value = event.currentTarget
+  }
+  let target = { ...record, unit: record.unit || rowUnit(record) }
+  if (target.returnable_quantity === undefined) {
+    try {
+      const { data } = await api.get(`/requisitions/${record.id}`)
+      target = { ...target, ...data }
+    } catch {
+      ElMessage.error('记录读取失败，请稍后重试')
+      return
+    }
+  }
+  if (Number(target.returnable_quantity ?? 0) <= 0) {
+    ElMessage.warning('该记录已无可退或可报损数量')
+    return
+  }
+  stockActionKind.value = kind
+  stockActionRecord.value = target
+  stockActionVisible.value = true
+}
+
+function handleDetailReturn(record) {
+  openStockAction(record, 'return')
+}
+
+function handleDetailScrap(record) {
+  openStockAction(record, 'scrap')
+}
+
+function handleStockActionSuccess() {
+  ElMessage.success(
+    stockActionKind.value === 'scrap' ? '报损已登记' : '退库已登记，库存已按实收数量回加',
+  )
+  stockActionVisible.value = false
+  stockActionRecord.value = null
+  detailRefresh.value += 1
+  fetchRecords()
+}
+
 function openReversal(row, event) {
   lastTrigger.value = event?.currentTarget ?? null
   reversalRecord.value = { ...row, unit: rowUnit(row) }
@@ -460,12 +623,22 @@ function handleReversalSuccess(data) {
   const originId = reversalRecord.value?.id ?? data.reversal_of
   receipt.value = {
     id: data.id,
+    orderNo: data.order_no || '',
     quantity: data.quantity,
     unit: data.unit || '',
     stockAfter: data.stock_after,
     originId,
+    reentry: data.reentry
+      ? {
+          id: data.reentry.id,
+          orderNo: data.reentry.order_no || '',
+          quantity: data.reentry.quantity,
+        }
+      : null,
+    correctionAccepted: data.correction?.status === 'accepted',
   }
   reversalRecord.value = null
+  detailRefresh.value += 1
   fetchRecords()
 }
 
@@ -501,6 +674,10 @@ function applyRouteQuery() {
   if (Number.isInteger(requisitionId) && requisitionId > 0) {
     pendingRequisitionId = requisitionId
   }
+  const routePage = Number(query.page)
+  if (Number.isInteger(routePage) && routePage > 0) {
+    page.current = routePage
+  }
 }
 
 async function openRouteRequisition() {
@@ -509,11 +686,26 @@ async function openRouteRequisition() {
   if (!id) return
   try {
     await api.get(`/requisitions/${id}`)
-  } catch {
+  } catch (error) {
+    const code = error.response?.status
+    if (code === 404 || code === 403) {
+      ElMessage.warning('该流水不存在或无权查看')
+    }
     return
   }
   openDetail(id)
 }
+
+watch(
+  () => route.query.requisition_id,
+  (value) => {
+    const id = Number(value)
+    if (!value || !Number.isInteger(id) || id <= 0) return
+    if (detailVisible.value && detailId.value === id) return
+    pendingRequisitionId = id
+    openRouteRequisition()
+  },
+)
 
 onMounted(async () => {
   applyRouteQuery()
@@ -549,13 +741,24 @@ onMounted(async () => {
       @close="receipt = null"
     >
       <template #title>
-        已撤销，库存已回加 {{ receiptQuantityText }}
+        已红冲，库存已回加 {{ receiptQuantityText }}<template v-if="receipt.reentry">，并生成关联重登单</template>
       </template>
       <template #default>
         <p class="records__receipt-text">
-          原流水 #{{ receipt.originId }} 已标记为已撤销，并生成红冲流水 #{{ receipt.id }}，变动后库存 {{ receiptStockText }}。
+          原流水 #{{ receipt.originId }} 已标记为已撤销，生成红冲单 #{{ receipt.id }}<template v-if="receipt.orderNo">（{{ receipt.orderNo }}）</template>，变动后库存 {{ receiptStockText }}。
+          <template v-if="receipt.reentry">
+            关联重登 #{{ receipt.reentry.id }}<template v-if="receipt.reentry.orderNo">（{{ receipt.reentry.orderNo }}）</template>已按 {{ receipt.reentry.quantity }}{{ receipt.unit ? ` ${receipt.unit}` : '' }} 重新登记。
+          </template>
         </p>
         <el-button link type="primary" @click="openDetail(receipt.id, $event)">查看红冲流水</el-button>
+        <el-button
+          v-if="receipt.reentry"
+          link
+          type="primary"
+          @click="openDetail(receipt.reentry.id, $event)"
+        >
+          查看重登流水
+        </el-button>
       </template>
     </el-alert>
 
@@ -574,7 +777,7 @@ onMounted(async () => {
             <el-option
               v-for="item in consumables"
               :key="item.id"
-              :label="item.spec ? `${item.name}（${item.spec}）` : item.name"
+              :label="consumableOptionLabel(item)"
               :value="item.id"
             />
           </el-select>
@@ -593,7 +796,7 @@ onMounted(async () => {
             <el-option
               v-for="option in userOptions"
               :key="option.id"
-              :label="`${option.name}（${option.role === 'teacher' ? '教师' : option.role === 'admin' ? '班委' : '学生'}）`"
+              :label="userOptionLabel(option)"
               :value="option.id"
             />
           </el-select>
@@ -773,6 +976,37 @@ onMounted(async () => {
               </span>
             </template>
           </el-table-column>
+          <el-table-column label="备注" min-width="160" show-overflow-tooltip>
+            <template #default="{ row }">
+              <span :class="{ 'records__muted': !row.remark }">{{ row.remark || '—' }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="补录" width="110">
+            <template #default="{ row }">
+              <el-tooltip
+                v-if="row.backfill_mode"
+                :content="backfillTitle(row)"
+                placement="top"
+              >
+                <span class="status-tag" :class="backfillMeta(row).className">
+                  {{ backfillMeta(row).label }}
+                </span>
+              </el-tooltip>
+              <span v-else class="records__muted">—</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="纠错" width="100">
+            <template #default="{ row }">
+              <span
+                v-if="row.correction_status"
+                class="status-tag"
+                :class="correctionMeta(row).className"
+              >
+                {{ correctionMeta(row).label }}
+              </span>
+              <span v-else class="records__muted">—</span>
+            </template>
+          </el-table-column>
           <el-table-column label="关联" min-width="150">
             <template #default="{ row }">
               <el-button
@@ -786,16 +1020,32 @@ onMounted(async () => {
               <span v-else class="records__muted">—</span>
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="180" fixed="right">
+          <el-table-column label="操作" width="260" fixed="right">
             <template #default="{ row }">
               <el-button link type="primary" @click="openDetail(row, $event)">查看详情</el-button>
+              <el-button
+                v-if="canStockActionRow(row)"
+                link
+                type="primary"
+                @click="openStockAction(row, 'return', $event)"
+              >
+                退库
+              </el-button>
+              <el-button
+                v-if="canScrapRow(row)"
+                link
+                type="warning"
+                @click="openStockAction(row, 'scrap', $event)"
+              >
+                报损
+              </el-button>
               <el-button
                 v-if="canReverseRow(row)"
                 link
                 type="danger"
                 @click="openReversal(row, $event)"
               >
-                撤销领用
+                红冲
               </el-button>
             </template>
           </el-table-column>
@@ -829,13 +1079,32 @@ onMounted(async () => {
     <RecordDetailDrawer
       v-model="detailVisible"
       :record-id="detailId"
+      :refresh-token="detailRefresh"
       @closed="handleDetailClosed"
+      @reverse="handleDetailReverse"
+      @correct="handleDetailCorrect"
+      @return="handleDetailReturn"
+      @scrap="handleDetailScrap"
     />
 
     <ReversalDialog
       v-model="reversalVisible"
       :record="reversalRecord"
       @success="handleReversalSuccess"
+      @refresh="fetchRecords"
+    />
+
+    <CorrectionDialog
+      v-model="correctionVisible"
+      :record="correctionRecord"
+      @success="handleCorrectionSuccess"
+    />
+
+    <ReturnScrapDialog
+      v-model="stockActionVisible"
+      :record="stockActionRecord"
+      :action="stockActionKind"
+      @success="handleStockActionSuccess"
       @refresh="fetchRecords"
     />
   </div>

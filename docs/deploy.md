@@ -42,7 +42,7 @@ cd manage_system
 # 生产环境必须替换密钥（详见第 5 节）
 cp .env.example .env
 chmod 600 .env
-# 编辑 .env：MYSQL_ROOT_PASSWORD、JWT_SECRET_KEY 填随机值
+# 编辑 .env：MYSQL_ROOT_PASSWORD、MYSQL_APP_PASSWORD、MYSQL_MIGRATE_PASSWORD、MYSQL_BACKUP_PASSWORD、JWT_SECRET_KEY 填随机值
 ```
 
 **第 3 步：拉取 GHCR 镜像并启动（不要构建）**
@@ -78,7 +78,7 @@ docker compose logs backend | grep bootstrap
 - 已存在启用的管理员时日志为 `[bootstrap] 管理员账号已存在，跳过`；`ADMIN_INIT_PASSWORD` 不会重置已有账号密码
 - 修改初始密码的方法见 [README「管理员初始化」](../README.md#管理员初始化)
 
-访问 `http://<服务器IP>:4900/` 登录；新建耗材档案与用户后即可开始日常使用。
+访问 `http://<服务器IP>:4900/` 登录（演示/联调）；**正式环境必须按第 5.1 节叠加 `docker-compose.https.yml` 以 HTTPS 访问**；新建耗材档案与用户后即可开始日常使用。
 
 > GHCR 包默认私有：可在 GitHub Packages 将 `labstock-api` / `labstock-web` 设为 public；或服务器使用带 `read:packages` 权限的 PAT 执行 `docker login ghcr.io -u <GitHub 用户名>`。拉取慢时优先按第 3.1 节加速或重试；仍失败时再把镜像转存自有仓库。**本地构建不是服务器部署路径**，仅作无法访问 GHCR 时的临时手段（见 0.2）。
 
@@ -236,6 +236,8 @@ sed -i "s/^JWT_SECRET_KEY=.*/JWT_SECRET_KEY=${JWT_SECRET}/" .env
 DB_PASS="$(openssl rand -hex 12)"
 sed -i "s/^MYSQL_ROOT_PASSWORD=.*/MYSQL_ROOT_PASSWORD=${DB_PASS}/" .env
 
+# 应用、迁移、备份使用独立最小权限账号，密码按 5.3 生成
+
 # 可选：指定首次创建的管理员账号/密码；不填则随机生成并打印到日志
 # ADMIN_INIT_ACCOUNT=admin
 # ADMIN_INIT_PASSWORD=<强密码>
@@ -250,16 +252,167 @@ vi .env
 
 | 变量 | 说明 |
 | --- | --- |
-| `MYSQL_ROOT_PASSWORD` | MySQL root 密码；会拼进 `DATABASE_URL`，**建议只用字母数字**；生产必填 |
+| `MYSQL_ROOT_PASSWORD` | MySQL root 密码，仅用于首次初始化与应急运维；应用连接改用 `MYSQL_APP_PASSWORD`（见 5.3）；生产必填 |
 | `JWT_SECRET_KEY` | JWT 签名密钥，至少 32 位随机字符；变更后旧登录态失效；生产必填 |
 | `ADMIN_INIT_ACCOUNT` / `ADMIN_INIT_PASSWORD` / `ADMIN_INIT_NAME` | 首次创建的管理员账号、密码、姓名；仅首次创建生效 |
 | `LLM_API_KEY` / `LLM_BASE_URL` / `LLM_MODEL` | OpenAI 兼容接口；留空则只用规则引擎 |
+| `APP_ENV` | 应用环境；`prod` 正式（强制 HTTPS/Secure Cookie 与密钥校验），`demo` 演示（可 HTTP，Cookie 不带 Secure） |
+| `COOKIE_SECURE` | 登录 Cookie 的 `Secure` 属性；留空时随 `APP_ENV` 自动决定（prod 为 true） |
+| `TRUSTED_HOSTS` | 允许的来源主机，逗号分隔；留空不限制，正式建议填写公网域名 |
+| `TRUSTED_PROXIES` | 可信反向代理来源 IP/网段（支持 CIDR）；仅这些来源的 `X-Forwarded-Proto` 会被采信 |
 | `WEB_PORT` | 对外 HTTP 端口，默认 `4900` |
+| `HTTPS_PORT` | 叠加 HTTPS 文件时对外 443 端口，默认 `443` |
 | `IMAGE_TAG` | 应用镜像版本标签，默认 `latest`；升级/回滚切换为 `sha-<short>` 或 `v*` 版本标签 |
 
 > `.env` 已在 `.gitignore` 中，**不要提交**。密码若包含 `@ : / # ?` 等字符，需要 URL 编码（`DATABASE_URL` 由 Compose 自动拼接，未编码会连不上库）。
 
 `backend/.env` 是**本地零 Docker 开发**用的配置，云端不使用它（容器内配置全部来自 Compose 的 `environment`）。
+
+### 5.1 启用 HTTPS 与安全头（正式必做）
+
+正式入口由 `docker-compose.https.yml` 叠加提供 TLS 终止、HTTP→HTTPS 跳转与安全响应头，应用层同时校验协议、代理与来源主机：
+
+1. 准备证书：将由 CA 签发的 `fullchain.pem` 与 `privkey.pem` 放入仓库根 `certs/`（仅放服务器，勿提交仓库）。自测可用自签证书临时验证：
+
+   ```bash
+   mkdir -p certs
+   openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+     -keyout certs/privkey.pem -out certs/fullchain.pem \
+     -subj "/CN=<正式域名>"
+   ```
+
+2. 在 `.env` 确认 `APP_ENV=prod`、`TRUSTED_HOSTS=<正式域名>`，并按实际反向代理网段设置 `TRUSTED_PROXIES`（Compose 默认 `172.16.0.0/12` 覆盖容器内网）。
+3. 叠加启动并核对：
+
+   ```bash
+   docker compose -f docker-compose.yml -f docker-compose.https.yml up -d
+   docker compose -f docker-compose.yml -f docker-compose.https.yml ps
+   curl -fsSI https://<正式域名>/ | grep -i strict-transport-security   # 期望出现 max-age=
+   curl -fsS  https://<正式域名>/api/v1/health                            # 期望 {"status":"ok"}
+   ```
+
+   叠加文件挂载 `frontend/nginx.https.conf`：80 端口 301 跳转 443，443 启用 TLSv1.2/1.3、HSTS、`X-Content-Type-Options`、`X-Frame-Options`、`Referrer-Policy`，并以 `X-Forwarded-Proto: https` 转发到后端。
+
+4. 后端行为：`APP_ENV=prod` 时，非 HTTPS 请求、缺失/不可信代理来源、非允许主机的请求返回 400；登录 Cookie 带 `Secure`（同时保留 `HttpOnly`、`SameSite=Lax`）。`/api/v1/health` 仅允许容器内回环直连，不对外暴露。
+
+> 演示/联调：设 `APP_ENV=demo` 即可用 HTTP 启动，此时不校验生产密钥、Cookie 不带 `Secure`，与正式配置明确区分；演示环境不得承载真实账号与数据。
+
+### 5.2 密钥轮换步骤与会话策略
+
+JWT 密钥决定登录 Cookie 的签名。轮换后所有旧令牌立即失效，用户需重新登录（会话策略为“轮换即全量失效、保留账号与历史数据”）。可核对步骤：
+
+```bash
+cd /opt/manage_system
+
+# 1) 记录当前密钥指纹（不打印明文），便于留痕
+docker compose exec -T backend python - <<'PY'
+import hashlib, os
+print("old-jwt-sha256:", hashlib.sha256(os.environ["JWT_SECRET_KEY"].encode()).hexdigest())
+PY
+
+# 2) 生成新密钥并写入 .env（保留旧值备份以便短时回退）
+cp .env .env.bak.$(date +%Y%m%d%H%M)
+NEW_JWT="$(openssl rand -hex 32)"
+sed -i "s/^JWT_SECRET_KEY=.*/JWT_SECRET_KEY=${NEW_JWT}/" .env
+
+# 3) 仅重建后端使新密钥生效（web/db 不动，无需刷新代理）
+docker compose up -d backend
+
+# 4) 核对：旧会话失效、需重新登录；新指纹生效
+curl -s -o /dev/null -w "%{http_code}\n" https://<正式域名>/api/v1/auth/me   # 旧 Cookie 期望 401
+docker compose exec -T backend python - <<'PY'
+import hashlib, os
+print("new-jwt-sha256:", hashlib.sha256(os.environ["JWT_SECRET_KEY"].encode()).hexdigest())
+PY
+```
+
+轮换核对清单：轮换后原登录态全部 401；用 `ADMIN_INIT_ACCOUNT` 或既有账号重新登录成功且 Cookie 带 `Secure`；账号、耗材、领用、入库与操作日志数据不受影响；`certs/`、`.env` 权限 600 且未入库。数据库凭据轮换按 FR-S7-03（P1-25）流程单独执行，本节不替代。
+
+### 5.3 数据库最小权限、凭据轮换与登录节流
+
+对应补充 PRD FR-S7-03 / P1-25。应用、迁移、备份使用三个独立账号；Compose 已把应用与迁移连接分别注入 `DATABASE_URL`、`MIGRATION_DATABASE_URL`，后端启动时迁移只使用迁移账号，备份脚本只使用备份账号，root 仅用于首次初始化和应急运维。
+
+#### 5.3.1 账号权限与首次初始化
+
+| 账号（默认） | `.env` 变量 | 权限范围 |
+| --- | --- | --- |
+| `appuser` | `MYSQL_APP_USER` / `MYSQL_APP_PASSWORD` | `SELECT, INSERT, UPDATE` on `manage_system.*`；无 DDL、无 DELETE |
+| `labstock_migrator` | `MYSQL_MIGRATE_USER` / `MYSQL_MIGRATE_PASSWORD` | 读写与 DDL（`CREATE/ALTER/DROP/INDEX/...`），仅供 `alembic upgrade head` |
+| `labstock_backup` | `MYSQL_BACKUP_USER` / `MYSQL_BACKUP_PASSWORD` | `SELECT, LOCK TABLES, SHOW VIEW, EVENT, TRIGGER` + 全局 `PROCESS`，仅供 `mysqldump` |
+
+初始化 SQL 位于 `scripts/db-init/01-least-privilege-accounts.sh`，Compose 将其挂载到 MySQL 的 `/docker-entrypoint-initdb.d`，空数据卷首次启动时自动执行；脚本可重复执行，只调整账号与授权，不删除或重建数据库。11.3 的 `scripts/db-backup.sh` 与 `db-rotate-credentials.sh` 分别使用备份账号与三个账号完成备份和轮换。
+
+首次部署时在 `.env` 为三个账号分别生成随机密码（十六进制可避免 URL 转义问题）：
+
+```bash
+cd /opt/manage_system
+cp .env.example .env
+chmod 600 .env
+for key in MYSQL_APP_PASSWORD MYSQL_MIGRATE_PASSWORD MYSQL_BACKUP_PASSWORD; do
+  value="$(openssl rand -hex 16)"
+  sed -i "s|^${key}=.*|${key}=${value}|" .env
+done
+docker compose up -d
+```
+
+#### 5.3.2 已有数据的实例启用最小权限
+
+已有数据卷不会重新执行初始化脚本，需要先备份，再补建账号并重启后端。全过程不执行 `down -v`，不删除数据卷：
+
+```bash
+cd /opt/manage_system
+
+# 1) 先备份（按 11.3 执行；此时备份账号尚未创建，可暂用 root 完成一次）
+mkdir -p ./backups
+docker compose exec -T db sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysqldump -uroot \
+  --single-transaction --routines --triggers --databases manage_system' > ./backups/pre-least-privilege.sql
+
+# 2) 在 .env 写入 MYSQL_APP_*、MYSQL_MIGRATE_*、MYSQL_BACKUP_* 六个变量
+#    可用上面的 openssl 循环生成密码
+vi .env
+
+# 3) 让 db 容器加载新增环境变量与初始化脚本挂载（数据卷保留）
+docker compose up -d db
+
+# 4) 幂等补建账号与授权（只执行 CREATE/ALTER USER 与 GRANT）
+docker compose exec -T db bash /docker-entrypoint-initdb.d/01-least-privilege-accounts.sh
+
+# 5) 重建后端，切换应用与迁移连接账号
+docker compose up -d backend
+```
+
+核对应用账号权限（应只有 `SELECT, INSERT, UPDATE`，且建表应被拒绝）：
+
+```bash
+docker compose exec -T db sh -c 'MYSQL_PWD="$MYSQL_APP_PASSWORD" mysql -u"$MYSQL_APP_USER" -N -B \
+  -e "SHOW GRANTS FOR CURRENT_USER()"'
+docker compose exec -T db sh -c 'MYSQL_PWD="$MYSQL_APP_PASSWORD" mysql -u"$MYSQL_APP_USER" manage_system \
+  -e "CREATE TABLE should_fail(id INT)"'   # 期望 Access denied
+```
+
+#### 5.3.3 保留已有数据的凭据轮换
+
+`scripts/db-rotate-credentials.sh` 只执行 `ALTER USER`、更新 `.env` 并重建后端，不导出/导入数据、不删数据卷、不重建数据库；轮换后立即用应用账号读取 `consumables`，确认台账仍可访问。
+
+```bash
+cd /opt/manage_system
+./scripts/db-rotate-credentials.sh --dry-run                 # 只打印计划
+./scripts/db-rotate-credentials.sh --target app              # 仅轮换应用账号
+./scripts/db-rotate-credentials.sh --target all              # 应用、迁移、备份一起轮换
+```
+
+核对清单：脚本自动备份 `.env` 为 `.env.bak.<时间戳>`；旧密码立即失效；后端重建后健康；`consumables` 行数可读且与轮换前一致；下次备份可用新的备份账号运行；应用连接池 `pool_pre_ping` 会丢弃失效连接，无需手工清池。轮换只改密码，不改数据库名、主机与数据文件，因此已有台账无需迁移。
+
+#### 5.3.4 登录节流与认证日志容量
+
+登录按“账号”和“来源”两个维度在单进程内存中计数，超限返回 `429` 与 `Retry-After`：
+
+- 账号维度：`LOGIN_THROTTLE_ACCOUNT_MAX_ATTEMPTS=5` 次失败 / `LOGIN_THROTTLE_ACCOUNT_WINDOW_SECONDS=900` 秒，触发后阻塞 `LOGIN_THROTTLE_BLOCK_SECONDS=300` 秒；登录成功会清空该账号失败计数。
+- 来源维度：`LOGIN_THROTTLE_SOURCE_MAX_ATTEMPTS=100` 次失败 / `LOGIN_THROTTLE_SOURCE_WINDOW_SECONDS=300` 秒，用于识别同一出口 IP 的批量尝试；正常登录成功不计入失败次数，整班 40 人即使偶有输错也不会触发。
+- `X-Forwarded-For` 仅在直接来源属于 `TRUSTED_PROXIES` 时采信，并从右向左取第一个非可信代理地址，避免客户端伪造首段 IP。
+- 节流状态存于后端进程内存，适用于当前单副本部署；重启后计数清零。若扩展为多副本，需要改用共享存储（如 Redis），本版本不引入该运行时依赖。
+
+认证日志（`login` / `logout`）在每次登录成功后按容量修剪：超过 `AUTH_LOG_RETENTION_DAYS=90` 天的记录删除，超过 `AUTH_LOG_MAX_ROWS=20000` 行时删除最旧记录；被节流的请求每个阻塞窗口最多写一条审计，避免失败风暴放大日志表。日志仍通过 `GET /api/v1/logs` 按日期、操作人、动作查询，登录类敏感日志仅管理员可见。
 
 ## 6. 拉取镜像并启动（推荐）
 
@@ -307,26 +460,68 @@ docker compose exec backend alembic history
 
 # 手动执行管理员自举（已存在启用的管理员时自动跳过）
 docker compose exec backend python scripts/bootstrap_admin.py
+
+# 查看自举状态：ready / needs_initialization / needs_recovery
+docker compose exec backend python scripts/manage_accounts.py status
+
+# 教师开通（已有班委时仍可执行）
+docker compose exec backend python scripts/manage_accounts.py provision-teacher \
+  --account teacher01 --name 王老师 --actor "校方授权人"
+
+# 班委交接：停用原班委并开通新班委
+docker compose exec backend python scripts/manage_accounts.py handover-admin \
+  --from admin --account admin2 --name 李班委 --actor "校方授权人"
+
+# 管理员恢复：重置密码、启用账号并撤销旧会话
+docker compose exec backend python scripts/manage_accounts.py recover-admin \
+  --account admin --name 系统管理员 --actor "校方授权人"
 ```
 
-> 系统不预置任何业务数据或账号。首次登录使用 bootstrap 创建的管理员；初始密码获取与修改见第 0.1 节第 4 步与 [README](../README.md#管理员初始化)。
+> 系统不预置任何业务数据或账号。首次登录使用 bootstrap 创建的管理员；初始密码获取与修改见第 0.1 节第 4 步与 [README](../README.md#管理员初始化)。新账号与恢复后的账号首次登录必须改密；教师、学生不能通过开通或恢复流程提升为管理员；自举失败时 `GET /api/v1/bootstrap/status` 与登录页会显示“需初始化/需恢复”。
 
 ## 8. 访问验证
 
 ```bash
-# 服务器本机健康检查
+# 服务器本机健康检查（存活探针：只表示进程活着，不访问数据库）
 curl -fsS http://127.0.0.1:4900/api/v1/health
 # 期望：{"status":"ok"}
+
+# 业务就绪（数据库连通、迁移版本、初始化状态），仅在运维入口回环访问
+docker compose exec backend python - <<'PY'
+import json
+import urllib.error
+import urllib.request
+
+url = "http://127.0.0.1:8000/api/v1/bootstrap/readiness"
+try:
+    payload = json.load(urllib.request.urlopen(url))
+except urllib.error.HTTPError as error:
+    payload = json.load(error)
+print(payload)
+PY
+# 期望：ready=true 且 checks.database=ok、checks.migration=current、checks.bootstrap=ready
+
+# 运维观测（异常窗口、备份、磁盘与告警），仅在运维入口回环访问
+docker compose exec backend python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8000/api/v1/ops/observability').read().decode())"
 
 # 检查首页
 curl -sI http://127.0.0.1:4900/ | head -1
 # 期望：HTTP/1.1 200 OK
 
+# 正式 HTTPS（叠加 5.1 文件后）：协议、跳转与安全头
+curl -sI http://<正式域名>/ | head -1                  # 期望 301 到 https
+curl -fsSI https://<正式域名>/ | grep -i strict-transport-security
+curl -fsS https://<正式域名>/api/v1/health              # 期望 {"status":"ok"}
+
 # 确认管理员已初始化
 docker compose logs backend | grep bootstrap
 ```
 
-浏览器访问 `http://<服务器公网IP>:4900/`（或 `http://<IP>:<WEB_PORT>/`）：
+> 存活探针与业务就绪已分开：`/api/v1/health` 不访问数据库，仅用于容器 `healthcheck` 判断进程存活；`/api/v1/bootstrap/readiness` 检查数据库连通、迁移版本与管理员初始化，数据库不可用或迁移落后时返回 503，数据库恢复后自动恢复就绪。静态页可打开不再等同于业务就绪；两个探针与运维观测只允许容器内回环直接访问，外部无法用于探测内部状态。
+>
+> 每个响应都带 `X-Request-Id` 响应头（请求方传入合法编号时沿用，否则服务端生成）。请求日志（`app.request`）、模型回退日志（`app.agent.llm`）与数据库异常日志记录同一编号；页面在权限失败或 5xx 时显示的提示也附带请求编号。班委报障时请其提供页面上的请求编号，用它在日志中定位对应请求。
+
+浏览器访问 `http://<服务器公网IP>:4900/`（或 `http://<IP>:<WEB_PORT>/`）；正式环境访问 `https://<正式域名>/`（按第 5.1 节叠加 HTTPS 文件，80 端口自动跳转）：
 
 1. 自动跳转 `/login`
 2. 用 bootstrap 打印的管理员账号登录，进入「库存总览」
@@ -423,21 +618,87 @@ docker compose up -d
 
 ### 11.3 备份与恢复
 
+> 对应补充 PRD FR-S7-02 / P0-09。备份与恢复脚本位于 `scripts/db-backup.sh` 与 `scripts/db-restore-rehearsal.sh`，不引入新的运行时依赖（仅使用 `mysqldump` / `mysql` / `sha256sum` 等容器与系统自带工具）。演练只用一次性隔离容器，不触碰正式库。
+
+#### 11.3.1 备份策略（周期 / 保留期 / 独立副本 / 失败反馈）
+
+| 项目 | 约定 |
+| --- | --- |
+| 备份周期 | 每日至少一次，建议业务低峰（如 02:00）；迁移、升级、批量导入前必须临时备份一次 |
+| 保留期 | 默认 14 天（`--retention-days` / `RETENTION_DAYS` 可调），迁移前备份单独长期留存 |
+| 独立副本 | 备份写入宿主机目录，并复制到 `backups/copies/`；须再同步到异机或对象存储，不与数据库同盘同机 |
+| 失败反馈 | 任一步失败以非零码退出，并向 `backups/backup-failed.log` 追加失败时间；接入定时任务时以退出码触发告警。后端通过只读挂载读取该目录，`GET /api/v1/ops/observability` 的 `backup` 与 `alerts` 会报告失败或备份过期 |
+
+手工备份：
+
 ```bash
 cd /opt/manage_system
-set -a; . ./.env; set +a     # 载入 MYSQL_ROOT_PASSWORD
-
-# 备份
-docker compose exec -T db mysqldump -uroot -p"$MYSQL_ROOT_PASSWORD" \
-  --single-transaction --routines manage_system > "backup_$(date +%F_%H%M).sql"
-
-# 恢复（先停应用写入，避免并发写）
-docker compose stop backend
-docker compose exec -T db mysql -uroot -p"$MYSQL_ROOT_PASSWORD" manage_system < backup_2026-11-27_1200.sql
-docker compose start backend
+mkdir -p backups
+scripts/db-backup.sh --backup-dir ./backups --retention-days 14
 ```
 
-建议把备份输出目录（或 `mysql_data` 卷目录）纳入云盘快照/定时任务。
+定时备份（cron，示例每日 02:00；失败时写 syslog 便于告警）：
+
+```bash
+0 2 * * * cd /opt/manage_system && ./scripts/db-backup.sh --backup-dir ./backups --retention-days 14 >> ./backups/backup.log 2>&1 || logger -t labstock-backup "备份失败"
+```
+
+#### 11.3.2 备份清单（镜像与迁移版本）
+
+每次备份同时生成同名 `.manifest`，记录 `backup_file`、`created_at`、`database`、`image_tag`、`migration_version`、`size_bytes`、`sha256`。升级/回滚时以清单记录的镜像标签与迁移版本作为对照基线：
+
+```bash
+cat backups/manage_system_<时间戳>.manifest
+docker compose exec backend alembic current   # 与清单 migration_version 核对
+```
+
+#### 11.3.3 隔离库恢复演练（不触碰正式库）
+
+演练脚本在一次性 `mysql:8.0` 容器中恢复备份，核对账号（users）、台账（consumables）、领用流水（requisitions）、入库记录（operation_logs 中 action=restock）与操作日志（operation_logs），记录恢复耗时与可接受丢失量，输出报告到 `backups/rehearsals/`：
+
+```bash
+cd /opt/manage_system
+scripts/db-restore-rehearsal.sh \
+  --backup-file backups/manage_system_<时间戳>.sql \
+  --report-dir backups/rehearsals \
+  --max-data-loss-minutes 60
+```
+
+报告包含备份文件、镜像标签、备份与恢复后迁移版本、数据库兼容判定、恢复耗时、可接受丢失量与各表行数。仅当报告显示存在启用账号且各表可读，才算「能从独立备份恢复出可登录、可核对的系统」。
+
+#### 11.3.4 升级前检查与回滚兼容
+
+```bash
+cd /opt/manage_system
+# 1) 升级前先取得可读备份并核对清单
+scripts/db-backup.sh --backup-dir ./backups
+cat backups/manage_system_<时间戳>.manifest
+
+# 2) 在隔离库演练恢复，确认迁移版本与待回滚镜像兼容
+scripts/db-restore-rehearsal.sh --backup-file backups/manage_system_<时间戳>.sql
+
+# 3) 记录当前镜像与迁移版本后，再执行第 10 节升级步骤
+docker compose config | grep "image: ghcr.io"
+docker compose exec backend alembic current
+```
+
+- 回滚镜像前确认旧版本代码与当前表结构兼容；不可逆迁移先按 11.3.3 演练并准备恢复备份。
+- 恢复正式库前先停应用写入（`docker compose stop backend`），恢复完成后再 `docker compose start backend`，避免并发写；正式库恢复只能由校方授权人/运维执行并留存记录。
+
+#### 11.3.5 验收记录模板
+
+| 字段 | 记录值 |
+| --- | --- |
+| 备份文件位置 | `backups/manage_system_<时间戳>.sql` |
+| 独立副本位置 | `backups/copies/` 与异机/对象存储路径 |
+| 镜像标签 | 来自 `.manifest` 的 `image_tag` |
+| 数据库迁移版本 | 来自 `.manifest` 的 `migration_version` |
+| 恢复耗时 | 演练报告中的「恢复耗时」（秒） |
+| 可接受丢失量 | 演练报告中的「可接受丢失量」（分钟，对照阈值） |
+| 核对结果 | 账号 / 台账 / 入库 / 操作日志行数 |
+| 结论 | 是否可登录、可核对 |
+
+建议把备份输出目录（或 `mysql_data` 卷目录）纳入云盘快照/定时任务，并对 `backup-failed.log` 设置告警。
 
 ## 12. 常见问题排查
 
@@ -447,6 +708,8 @@ docker compose start backend
 | `docker compose up` 报 `port is already allocated` | 4900 被宿主机 nginx/apache 占用：`sudo ss -lntp \| grep :4900`；或把 `.env` 的 `WEB_PORT` 改为 4901 并放行安全组 |
 | `db` 反复重启 / `Access denied for user 'root'` | 初始化时的密码已固化在数据卷；改过 `.env` 密码需要 `docker compose down -v`（**会删数据**）或进入容器 `ALTER USER` |
 | `backend` 一直 `unhealthy` | `docker compose logs backend`；常见原因：密码含特殊字符导致 `DATABASE_URL` 非法、db 尚未就绪、迁移失败 |
+| 页面提示带「请求编号」 | 用编号检索后端日志定位同一请求：`docker compose logs backend \| grep '<请求编号>'`；同时覆盖访问日志、数据库异常与模型回退 |
+| 就绪检测返回 503 | 查看响应 `checks`：`database=unavailable` 说明数据库不可用，先恢复 `db`；`migration=outdated/missing` 说明未完成迁移，执行 `docker compose exec backend alembic upgrade head`；`bootstrap=needs_initialization/needs_recovery` 按第 7 节处理 |
 | 日志中看不到 `[bootstrap]` 初始密码 | 多为管理员已存在（`管理员账号已存在，跳过`）；如确实缺失，执行 `docker compose exec backend python scripts/bootstrap_admin.py` 查看输出 |
 | 忘记管理员密码 | 使用 [README「管理员初始化」](../README.md#管理员初始化) 的容器内脚本直接更新哈希 |
 | 页面正常但刷新子路由 404 | 确认 `frontend/nginx.conf` 中 `try_files ... /index.html` 存在（本仓库已内置），并重建 web 镜像 |
@@ -534,16 +797,74 @@ IMAGE_TAG="$(date +%Y%m%d%H%M)" bash scripts/ci/stage3-image-publish.sh
 
 `stage3` 缺少 `IMAGE_TAG` 时会输出用法并以非零码退出，避免误推镜像。脚本推送后仍需在服务器执行 `docker compose pull && docker compose up -d`。
 
+### 13.5 隔离演示环境与三角色数据
+
+演示数据只写入独立 project 与独立卷，正式 `docker-compose.yml` 仍按空库启动：
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.demo.yml up -d
+docker compose -f docker-compose.yml -f docker-compose.demo.yml exec backend \
+  python scripts/seed_demo.py --yes
+```
+
+- 演示 project 为 `labstock-demo`，数据库 `manage_system_demo`，卷 `labstock-demo_demo_mysql_data`，默认访问 `http://<服务器IP>:4901/`
+- 演示 compose 用 `!override` 替换正式端口，需要 Docker Compose 2.24+（当前部署脚本按最新插件准备）
+- 演示账号：`teacher01` / `admin01` / `student01`，统一密码 `Demo@12345`
+- 演示数据复现：`DEMO-GLOVE` 缺货、`DEMO-WIRE` 低库存、`DEMO-PLA` 近 7 天消耗较前 7 天上升，另有正常与停用样例
+- 装载命令幂等；重复执行不会重复扣减。重建演示数据用 `docker compose -f docker-compose.yml -f docker-compose.demo.yml down -v`，只删除演示卷
+- `seed_demo.py` 在 `APP_ENV=prod` 时拒绝执行；不要把演示库指向正式数据库
+- 正式环境不装载演示数据，继续以空库启动并按日常流程建档
+
+### 13.6 同提交 CI 与镜像门禁
+
+`docker-publish.yml` 在发布前等待同一提交的 `ci.yml` 成功，并在两份镜像推送后复核 digest：
+
+1. `gate` job 轮询 `gh run list --workflow ci.yml --commit <SHA>`，只有该提交最新 CI 结论为 `success` 才进入构建
+2. `publish` job 推送 `labstock-api` 与 `labstock-web`，标签包含 `sha-<short>`
+3. `release` job 读取两份镜像 digest，调用 `scripts/ci/release_gate.py`；只有 CI 成功、两个镜像齐全且标签与提交一致时 `deployable` 才为 `true`
+4. `release-manifest.json` 作为 artifact 归档，记录提交、CI run、两份镜像 digest 与时间
+
+手工复核：
+
+```bash
+gh run list --repo IceFireIcer/manage_system --workflow ci.yml \
+  --commit <完整 SHA> --limit 20 \
+  --json databaseId,headSha,status,conclusion,event,url,createdAt > ci-runs.json
+python3 scripts/ci/release_gate.py \
+  --commit <完整 SHA> --tag sha-<short> \
+  --ci-summary ci-runs.json --images images.json \
+  --output release-manifest.json
+```
+
+退出码：`0` 可部署，`1` 不可部署，`2` 参数或文件错误，`3` CI 尚未完成。发布记录模板见 [acceptance/release-record.md](acceptance/release-record.md)。
+
+### 13.7 真实 MySQL 并发与浏览器验收
+
+```bash
+bash scripts/acceptance/run-mysql-concurrency.sh
+```
+
+- 脚本在隔离容器中启动 MySQL 8.0，库名 `manage_system_concurrency`，不会连接正式库；结束后删除容器
+- 未安装 docker、镜像不可用或容器未就绪时输出 `SKIPPED` 并以 0 退出；测试失败时非零退出
+- 已有 MySQL 时可跳过容器：`LABSTOCK_MYSQL_TEST_URL=mysql+pymysql://.../<库名含 test 或 concurrency> python -m pytest -q backend/tests/test_mysql_concurrency.py`
+- 用例覆盖反序多耗材领用、库存不足回滚、入库与红冲并行、同请求编号并发、回执丢失重试与锁冲突重试
+- 记录的字段与三角色浏览器检查项见 [acceptance/README.md](acceptance/README.md)
+
 ## 14. 上线安全清单
 
 - [ ] `.env` 权限 600，未提交到仓库（`git status` 确认无 `.env`）
 - [ ] `docker compose version` 可用（Compose 插件已安装），`docker compose config --quiet` 校验通过且 backend/web 无 `build` 段
-- [ ] `MYSQL_ROOT_PASSWORD` 与 `JWT_SECRET_KEY` 均为随机强值，未使用内置默认值
+- [ ] `MYSQL_ROOT_PASSWORD` 与 `JWT_SECRET_KEY` 均为随机强值，未使用内置默认值；`APP_ENV=prod` 下占位或缺失时后端明确拒绝启动（见 5.1）
+- [ ] 正式入口已按 5.1 叠加 `docker-compose.https.yml`：HTTPS 登录成功、HTTP 自动跳转、HSTS 与安全头存在、登录 Cookie 带 `Secure`
+- [ ] 已按 5.2 完成一次可核对的密钥轮换：旧会话全部 401，重新登录正常，业务数据无损
 - [ ] 已从日志获取管理员初始密码并**立即修改**，新密码妥善保存
 - [ ] 未将 `ADMIN_INIT_PASSWORD` 明文长期保留在 `.env` 或交付材料中
 - [ ] 安全组仅放行 22 / 4900（或自定义端口），不暴露 3306 / 8000
-- [ ] 配置数据库定期备份与磁盘快照
+- [ ] 已按 11.3.1 配置每日备份与保留期，备份写入独立副本并完成一次隔离库恢复演练（11.3.3）
 - [ ] GHCR 包可见性已确认：公开拉取，或服务器已用带 `read:packages` 的 PAT 登录
 - [ ] GitHub Actions（`ci.yml`、`docker-publish.yml`）在 `main` 上通过，GHCR 存在可用 `sha-<short>` 或 `v*` 标签
-- [ ] 建议接入 HTTPS：在前置 nginx/Caddy 或云负载均衡上终止 TLS（当前 Compose 默认 HTTP）
+- [ ] 同一提交的 CI 成功，两个镜像 digest 已记录，`release-manifest.json` 中 `deployable=true`
+- [ ] 演示数据只存在于隔离演示库，正式库无演示耗材与演示账号
+- [ ] 真实 MySQL 并发记录与三角色浏览器验收记录已归档（见 `docs/acceptance/`）
+
 - [ ] 定期 `docker compose logs` 巡检与 `docker image prune` 清理

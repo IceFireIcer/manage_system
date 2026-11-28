@@ -2,6 +2,7 @@ import axios from 'axios'
 import { ElMessage } from 'element-plus'
 import router from '../router'
 import { useUserStore } from '../stores/user'
+import { recordRequestId, requestIdOf } from '../utils/requestTrace'
 
 const api = axios.create({
   baseURL: '/api/v1',
@@ -10,11 +11,23 @@ const api = axios.create({
 })
 
 let lastForbiddenAt = 0
+let lastServerErrorAt = 0
+
+api.interceptors.request.use((config) => {
+  if (config.skipAuthRedirect) return config
+  const userStore = useUserStore()
+  if (userStore.identityLocked) {
+    return Promise.reject(new axios.CanceledError('session-locked'))
+  }
+  return config
+})
 
 api.interceptors.response.use(
   (response) => response,
   (error) => {
     const status = error.response?.status
+    const requestId = recordRequestId(requestIdOf(error))
+    const requestIdSuffix = requestId ? `（请求编号 ${requestId}）` : ''
 
     if (status === 401 && !error.config?.skipAuthRedirect) {
       const userStore = useUserStore()
@@ -31,10 +44,22 @@ api.interceptors.response.use(
         router.replace('/login')
       }
     } else if (status === 403) {
+      const detail = error.response?.data?.detail
+      if (detail === '请先修改初始密码') {
+        const userStore = useUserStore()
+        userStore.mustChangePassword = true
+        return Promise.reject(error)
+      }
       const now = Date.now()
       if (now - lastForbiddenAt > 800) {
         lastForbiddenAt = now
-        ElMessage.error('你没有权限执行此操作')
+        ElMessage.error(`你没有权限执行此操作${requestIdSuffix}`)
+      }
+    } else if (status >= 500 && !error.config?.skipAuthRedirect) {
+      const now = Date.now()
+      if (now - lastServerErrorAt > 800) {
+        lastServerErrorAt = now
+        ElMessage.error(`服务暂时不可用，请稍后重试${requestIdSuffix}`)
       }
     }
 

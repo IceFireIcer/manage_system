@@ -12,7 +12,7 @@ from app.schemas_consumption import (
     ConsumptionAuditOut,
     ConsumptionItemOut,
     ConsumptionSummaryOut,
-    ConsumptionTotalsOut,
+    ConsumptionUnitTotalOut,
 )
 
 router = APIRouter(prefix="/api/v1/consumption", tags=["consumption"])
@@ -35,29 +35,67 @@ def get_consumption_summary(
     end = consumption_core.window_end()
 
     items: list[ConsumptionItemOut] = []
-    for consumable_id, quantity in consumption_core.net_by_consumable(db, start, end):
-        consumable = db.get(Consumable, consumable_id)
+    unit_rows: dict[str, dict[str, int]] = {}
+    for flow in consumption_core.flow_by_consumable(db, start, end):
+        consumable = db.get(Consumable, flow.consumable_id)
         if consumable is None:
             continue
+        net_quantity = flow.net
         items.append(
             ConsumptionItemOut(
                 consumable_id=consumable.id,
                 name=consumable.name,
                 spec=consumable.spec,
                 unit=consumable.unit,
-                quantity=quantity,
-                daily_rate=consumption_core.daily_rate(quantity, window),
+                issued_quantity=flow.issued,
+                reversed_quantity=flow.reversed_quantity,
+                cross_period_reversed_quantity=flow.cross_period_reversed,
+                net_quantity=net_quantity,
+                quantity=net_quantity,
+                daily_rate=consumption_core.daily_rate(net_quantity, window),
             )
         )
+        unit_row = unit_rows.setdefault(
+            consumable.unit,
+            {
+                "issued_quantity": 0,
+                "reversed_quantity": 0,
+                "cross_period_reversed_quantity": 0,
+                "net_quantity": 0,
+                "consumables": 0,
+            },
+        )
+        unit_row["issued_quantity"] += flow.issued
+        unit_row["reversed_quantity"] += flow.reversed_quantity
+        unit_row["cross_period_reversed_quantity"] += flow.cross_period_reversed
+        unit_row["net_quantity"] += net_quantity
+        unit_row["consumables"] += 1
 
-    total_quantity = sum(item.quantity for item in items)
+    unit_totals = [
+        ConsumptionUnitTotalOut(
+            unit=unit,
+            issued_quantity=values["issued_quantity"],
+            reversed_quantity=values["reversed_quantity"],
+            cross_period_reversed_quantity=values[
+                "cross_period_reversed_quantity"
+            ],
+            net_quantity=values["net_quantity"],
+            daily_rate=consumption_core.daily_rate(
+                values["net_quantity"], window
+            ),
+            consumables=values["consumables"],
+        )
+        for unit, values in sorted(
+            unit_rows.items(),
+            key=lambda entry: (-entry[1]["net_quantity"], entry[0]),
+        )
+    ]
+
     return ConsumptionSummaryOut(
         window=window,
         items=items,
-        totals=ConsumptionTotalsOut(
-            quantity=total_quantity,
-            daily_rate=consumption_core.daily_rate(total_quantity, window),
-        ),
+        unit_totals=unit_totals,
+        provisioning_scope=consumption_core.PROVISIONING_SCOPE,
     )
 
 

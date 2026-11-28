@@ -342,6 +342,11 @@ def test_list_only_own_records_for_student(client: TestClient, db_session) -> No
     _login(client, "student01", "Student@123")
     assert _submit_one(client, consumable["id"], quantity=1).status_code == 201
     _login(client, "student02", "Student@123")
+    changed = client.post(
+        "/api/v1/auth/change-password",
+        json={"old_password": "Student@123", "new_password": "Student@4567"},
+    )
+    assert changed.status_code == 200, changed.text
     assert _submit_one(client, consumable["id"], quantity=2).status_code == 201
 
     _login(client, "student01", "Student@123")

@@ -1,0 +1,31 @@
+name: labstock-demo
+
+services:
+  db:
+    environment:
+      MYSQL_DATABASE: manage_system_demo
+      MYSQL_ROOT_PASSWORD: ${DEMO_MYSQL_ROOT_PASSWORD:-demo-root-password}
+      MYSQL_APP_PASSWORD: ${DEMO_MYSQL_APP_PASSWORD:-demo-app-password}
+      MYSQL_MIGRATE_PASSWORD: ${DEMO_MYSQL_MIGRATE_PASSWORD:-demo-migrate-password}
+      MYSQL_BACKUP_PASSWORD: ${DEMO_MYSQL_BACKUP_PASSWORD:-demo-backup-password}
+    volumes:
+      - demo_mysql_data:/var/lib/mysql
+
+  backend:
+    environment:
+      APP_ENV: demo
+      DEBUG: ${DEMO_DEBUG:-false}
+      DATABASE_URL: mysql+pymysql://appuser:${DEMO_MYSQL_APP_PASSWORD:-demo-app-password}@db:3306/manage_system_demo?charset=utf8mb4
+      MIGRATION_DATABASE_URL: mysql+pymysql://labstock_migrator:${DEMO_MYSQL_MIGRATE_PASSWORD:-demo-migrate-password}@db:3306/manage_system_demo?charset=utf8mb4
+      JWT_SECRET_KEY: ${DEMO_JWT_SECRET_KEY:-demo-only-not-for-production}
+      COOKIE_SECURE: ""
+      ADMIN_INIT_ACCOUNT: demo-admin
+      ADMIN_INIT_PASSWORD: ""
+      ADMIN_INIT_NAME: 演示管理员
+
+  web:
+    ports: !override
+      - "${DEMO_WEB_PORT:-4901}:80"
+
+volumes:
+  demo_mysql_data:

@@ -6,14 +6,18 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .env
+.env.bak.*
+certs/
 venv/
 .venv/
 .venv-ci/
 dist/
 .dev-run/
+backups/
 *.sqlite
 *.db
 .coverage
+temp/
 
 htmlcov/
 .idea/

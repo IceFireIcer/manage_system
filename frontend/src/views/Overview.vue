@@ -1,22 +1,36 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
 import api from '../api'
 import PageHeader from '../components/PageHeader.vue'
 import EmptyState from '../components/EmptyState.vue'
 import InventoryAuditDrawer from '../components/InventoryAuditDrawer.vue'
+import InventoryCountDialog from '../components/InventoryCountDialog.vue'
+import RestockDialog from '../components/RestockDialog.vue'
 import OverviewGettingStarted from '../components/OverviewGettingStarted.vue'
+import { useAlertsStore } from '../stores/alerts'
 import { useUserStore } from '../stores/user'
+import { businessToday } from '../utils/businessDate'
 
 const POLL_INTERVAL_MS = 30000
 const SEARCH_DEBOUNCE_MS = 300
 
+const route = useRoute()
 const router = useRouter()
 const userStore = useUserStore()
+const alertsStore = useAlertsStore()
 
 const isStudent = computed(() => userStore.user?.role === 'student')
 const isAdmin = computed(() => userStore.user?.role === 'admin')
 const canAudit = computed(() => ['teacher', 'admin'].includes(userStore.user?.role))
+const canManageAlerts = computed(() => isAdmin.value)
+
+const ALERT_STATUS_META = {
+  open: { label: '待处理', tagClass: 'status-tag--warning' },
+  acknowledged: { label: '已确认', tagClass: 'status-tag--info' },
+  completed: { label: '已完成', tagClass: 'status-tag--success' },
+}
 
 const summary = ref({ total_kinds: 0, low_stock_count: 0, today_requisitions: 0 })
 const items = ref([])
@@ -46,6 +60,15 @@ const audit = reactive({
   consumableName: '',
 })
 
+const receive = reactive({
+  visible: false,
+  row: null,
+})
+
+const inventoryCount = reactive({
+  visible: false,
+})
+
 const viewportWidth = ref(window.innerWidth)
 const isMobile = computed(() => viewportWidth.value < 768)
 
@@ -56,29 +79,17 @@ const statusOptions = [
   { value: 'all', label: '全部' },
   { value: 'out', label: '缺货' },
   { value: 'low', label: '低于安全库存线' },
+  { value: 'uncovered', label: '未设预警线' },
 ]
-
-function rankOf(row) {
-  if (row.is_out) return 0
-  if (row.low_stock) return 1
-  return 2
-}
-
-const sortedItems = computed(() =>
-  [...items.value].sort((left, right) => {
-    const diff = rankOf(left) - rankOf(right)
-    if (diff !== 0) return diff
-    return String(left.name).localeCompare(String(right.name), 'zh-CN')
-  }),
-)
 
 const hasFilters = computed(() => Boolean(appliedSearch.value.trim()) || statusFilter.value !== 'all')
 
 const filteredItems = computed(() => {
   const keyword = appliedSearch.value.trim().toLowerCase()
-  return sortedItems.value.filter((row) => {
+  return items.value.filter((row) => {
     if (statusFilter.value === 'out' && !row.is_out) return false
     if (statusFilter.value === 'low' && !row.low_stock) return false
+    if (statusFilter.value === 'uncovered' && row.safety_stock > 0) return false
     if (!keyword) return true
     return [row.name, row.spec, row.location].some((field) =>
       String(field ?? '')
@@ -86,6 +97,12 @@ const filteredItems = computed(() => {
         .includes(keyword),
     )
   })
+})
+
+const safetyCoverage = computed(() => {
+  const total = items.value.length
+  const covered = items.value.filter((row) => row.safety_stock > 0).length
+  return { total, covered, missing: total - covered }
 })
 
 const hasItems = computed(() => items.value.length > 0)
@@ -164,12 +181,17 @@ const summaryReady = computed(
   () => !initialLoading.value && (!loadError.value || Boolean(lastUpdated.value)),
 )
 
+let overviewSeq = 0
+let active = true
+
 async function fetchOverview({ silent = false } = {}) {
+  const seq = ++overviewSeq
   if (!silent) {
     refreshing.value = true
   }
   try {
     const { data } = await api.get('/inventory/overview')
+    if (seq !== overviewSeq || !active) return
     summary.value = {
       total_kinds: data.summary?.total_kinds ?? 0,
       low_stock_count: data.summary?.low_stock_count ?? 0,
@@ -180,14 +202,17 @@ async function fetchOverview({ silent = false } = {}) {
     loadError.value = false
     pollFailed.value = false
   } catch {
+    if (seq !== overviewSeq || !active) return
     if (lastUpdated.value) {
       pollFailed.value = true
     } else {
       loadError.value = true
     }
   } finally {
-    initialLoading.value = false
-    refreshing.value = false
+    if (seq === overviewSeq) {
+      initialLoading.value = false
+      refreshing.value = false
+    }
   }
 }
 
@@ -251,6 +276,60 @@ function goArchive() {
   router.push('/consumables')
 }
 
+function goSuggestion(row) {
+  router.push({ path: '/restock', query: { consumable_id: String(row.id) } })
+}
+
+function goAlertRequisition(alert) {
+  router.push({
+    path: '/requisition',
+    query: { consumable_id: String(alert.consumable_id) },
+  })
+}
+
+function goAlertSuggestion(alert) {
+  router.push({ path: '/restock', query: { consumable_id: String(alert.consumable_id) } })
+}
+
+function alertStatusMeta(alert) {
+  return ALERT_STATUS_META[alert.status] ?? ALERT_STATUS_META.open
+}
+
+function formatAlertTime(value) {
+  if (!value) return '—'
+  return String(value).replace('T', ' ').slice(5, 16)
+}
+
+async function actOnAlert(alert, action) {
+  try {
+    await alertsStore.act(alert.consumable_id, action)
+    const messages = {
+      acknowledge: '已确认待办',
+      complete: '待办已完成',
+      retrigger: '已重新触发待办',
+    }
+    ElMessage.success(messages[action] || '操作完成')
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || '操作失败，请重试')
+  }
+}
+
+function scrollToAlerts() {
+  document
+    .getElementById('stock-alerts')
+    ?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
+
+function goArchiveItem(row) {
+  router.push({ path: '/consumables', query: { consumable_id: String(row.id) } })
+}
+
+function showUncovered() {
+  searchInput.value = ''
+  appliedSearch.value = ''
+  statusFilter.value = 'uncovered'
+}
+
 function goUsers(query) {
   router.push({ path: '/users', query: query ?? {} })
 }
@@ -260,14 +339,8 @@ function goRequisition(row) {
   router.push({ path: '/requisition', query })
 }
 
-function localDateString() {
-  const now = new Date()
-  const pad = (value) => String(value).padStart(2, '0')
-  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`
-}
-
 function goTodayRecords() {
-  const today = localDateString()
+  const today = businessToday()
   router.push({
     path: '/records',
     query: { start_date: today, end_date: today, type: 'normal', status: 'active' },
@@ -278,6 +351,31 @@ function openAudit(row) {
   audit.consumableId = row.id
   audit.consumableName = row.name
   audit.visible = true
+}
+
+function handleAuditSource(event) {
+  if (!event) return
+  audit.visible = false
+  if (event.requisition_id) {
+    router.push({
+      path: '/records',
+      query: { requisition_id: String(event.requisition_id) },
+    })
+    return
+  }
+  if (event.order_no) {
+    router.push({ path: '/restock', query: { order_no: event.order_no } })
+  }
+}
+
+function openReceive(row) {
+  receive.row = row
+  receive.visible = true
+}
+
+function handleReceived() {
+  fetchOverview()
+  alertsStore.fetch()
 }
 
 function formatClock(value) {
@@ -303,8 +401,9 @@ function statusLabel(row) {
 }
 
 function safetyLabel(row) {
-  if (!row.safety_stock) return '未设安全库存线'
-  return ''
+  if (row.safety_stock) return ''
+  if (row.is_out) return '未设安全库存线，缺货不进入补货建议'
+  return '未设安全库存线'
 }
 
 function handleResize() {
@@ -321,11 +420,18 @@ function retry() {
 onMounted(() => {
   fetchOverview()
   fetchSetup()
+  if (canAudit.value) {
+    alertsStore.fetch()
+  }
   pollTimer = setInterval(() => fetchOverview({ silent: true }), POLL_INTERVAL_MS)
   window.addEventListener('resize', handleResize)
+  if (route.query.focus === 'alerts') {
+    nextTick(() => setTimeout(scrollToAlerts, 200))
+  }
 })
 
 onBeforeUnmount(() => {
+  active = false
   if (pollTimer) {
     clearInterval(pollTimer)
     pollTimer = null
@@ -347,6 +453,7 @@ onBeforeUnmount(() => {
           <el-icon :size="16"><Refresh /></el-icon>
           <span class="overview__button-text">刷新</span>
         </el-button>
+        <el-button v-if="isAdmin" @click="inventoryCount.visible = true">库存盘点</el-button>
         <el-button type="primary" @click="goRequisition()">登记领用</el-button>
       </template>
     </PageHeader>
@@ -397,6 +504,18 @@ onBeforeUnmount(() => {
       <button
         type="button"
         class="overview__metric overview__metric--clickable"
+        aria-label="查看未设安全库存线的耗材"
+        @click="showUncovered"
+      >
+        <span class="overview__metric-value">
+          {{ summaryReady ? `${safetyCoverage.missing}/${safetyCoverage.total}` : '—' }}
+        </span>
+        <span class="overview__metric-label">预警配置未覆盖 / 总类数</span>
+      </button>
+
+      <button
+        type="button"
+        class="overview__metric overview__metric--clickable"
         aria-label="查看今天的领用记录"
         @click="goTodayRecords"
       >
@@ -406,6 +525,104 @@ onBeforeUnmount(() => {
         <span class="overview__metric-label">今日领用笔数</span>
       </button>
     </div>
+
+    <section
+      v-if="canAudit"
+      id="stock-alerts"
+      class="panel overview__alerts"
+      aria-label="站内待办"
+    >
+      <div class="overview__alerts-head">
+        <div>
+          <h2 class="overview__alerts-title">站内待办</h2>
+          <p class="overview__alerts-desc">
+            低库存提醒按耗材去重，持续缺货只累计巡检次数；部分到货保留待办，风险解除后自动完成。
+          </p>
+        </div>
+        <div class="overview__alerts-tools">
+          <span class="status-tag status-tag--warning">
+            待处理 {{ alertsStore.activeCount }}
+          </span>
+          <label class="overview__alerts-switch">
+            <el-switch
+              :model-value="alertsStore.showCompleted"
+              size="small"
+              @change="alertsStore.setShowCompleted"
+            />
+            显示已完成
+          </label>
+        </div>
+      </div>
+
+      <EmptyState
+        v-if="!alertsStore.visibleItems.length"
+        title="当前没有待处理提醒"
+        description="库存低于安全库存线时会自动生成站内待办。"
+      />
+
+      <div v-else class="overview__alert-list">
+        <article
+          v-for="alert in alertsStore.visibleItems"
+          :key="alert.consumable_id"
+          class="overview__alert"
+        >
+          <div class="overview__alert-head">
+            <span
+              class="status-tag"
+              :class="alert.risk_level === 'out' ? 'status-tag--out' : 'status-tag--low'"
+            >
+              {{ alert.risk_level === 'out' ? '缺货' : '低库存' }}
+            </span>
+            <strong class="overview__alert-name">{{ alert.consumable_name }}</strong>
+            <span class="status-tag" :class="alertStatusMeta(alert).tagClass">
+              {{ alertStatusMeta(alert).label }}
+            </span>
+          </div>
+          <p class="overview__alert-line">
+            当前 {{ formatQuantity(alert.current_stock, alert.unit) }} / 安全线
+            {{ formatQuantity(alert.safety_stock, alert.unit) }}，缺口
+            {{ formatQuantity(alert.gap, alert.unit) }}
+            <span v-if="alert.partial_arrival">· 部分到货保留待办</span>
+            <span v-if="alert.last_order_no">· 入库单 {{ alert.last_order_no }}</span>
+          </p>
+          <p class="overview__alert-meta">
+            第 {{ alert.occurrence }} 次触发 · 已巡检 {{ alert.detection_count }} 次 · 最近
+            {{ formatAlertTime(alert.last_detected_at) }}
+            <span v-if="alert.acknowledged_by_name">· {{ alert.acknowledged_by_name }} 已确认</span>
+          </p>
+          <div class="overview__alert-actions">
+            <el-button link type="primary" @click="goAlertRequisition(alert)">登记领用</el-button>
+            <el-button link type="primary" @click="goAlertSuggestion(alert)">补货建议</el-button>
+            <template v-if="canManageAlerts">
+              <el-button
+                v-if="alert.status === 'open'"
+                link
+                type="primary"
+                @click="actOnAlert(alert, 'acknowledge')"
+              >
+                确认
+              </el-button>
+              <el-button
+                v-if="alert.status !== 'completed'"
+                link
+                type="primary"
+                @click="actOnAlert(alert, 'complete')"
+              >
+                完成
+              </el-button>
+              <el-button
+                v-if="alert.status === 'completed'"
+                link
+                type="primary"
+                @click="actOnAlert(alert, 'retrigger')"
+              >
+                重新触发
+              </el-button>
+            </template>
+          </div>
+        </article>
+      </div>
+    </section>
 
     <section class="panel overview__inventory">
       <div class="toolbar overview__filters">
@@ -517,7 +734,7 @@ onBeforeUnmount(() => {
             </template>
           </el-table-column>
 
-          <el-table-column label="操作" width="240" align="right">
+          <el-table-column label="操作" width="300" align="right">
             <template #default="{ row }">
               <div class="overview__row-actions">
                 <el-button
@@ -529,6 +746,15 @@ onBeforeUnmount(() => {
                   登记领用
                 </el-button>
                 <span v-if="row.is_out" class="overview__hint overview__hint--out">当前缺货</span>
+                <el-button v-if="isAdmin" link type="primary" @click="openReceive(row)">
+                  收货
+                </el-button>
+                <el-button v-if="row.is_out && canAudit" link type="primary" @click="goSuggestion(row)">
+                  补货建议
+                </el-button>
+                <el-button v-if="row.is_out && isAdmin" link type="primary" @click="goArchiveItem(row)">
+                  档案
+                </el-button>
                 <el-button v-if="canAudit" link type="primary" @click="openAudit(row)">
                   查库存变动
                 </el-button>
@@ -567,6 +793,13 @@ onBeforeUnmount(() => {
               登记领用
             </el-button>
             <span v-if="row.is_out" class="overview__hint overview__hint--out">当前缺货</span>
+            <el-button v-if="isAdmin" size="small" @click="openReceive(row)">收货</el-button>
+            <el-button v-if="row.is_out && canAudit" size="small" @click="goSuggestion(row)">
+              补货建议
+            </el-button>
+            <el-button v-if="row.is_out && isAdmin" size="small" @click="goArchiveItem(row)">
+              档案
+            </el-button>
             <el-button v-if="canAudit" size="small" @click="openAudit(row)">查库存变动</el-button>
           </div>
         </li>
@@ -577,6 +810,19 @@ onBeforeUnmount(() => {
       v-model="audit.visible"
       :consumable-id="audit.consumableId"
       :consumable-name="audit.consumableName"
+      @view-source="handleAuditSource"
+    />
+
+    <RestockDialog
+      v-model="receive.visible"
+      :consumable="receive.row"
+      @completed="handleReceived"
+    />
+
+    <InventoryCountDialog
+      v-model="inventoryCount.visible"
+      :consumables="items"
+      @completed="fetchOverview"
     />
   </div>
 </template>
@@ -588,7 +834,7 @@ onBeforeUnmount(() => {
 
 .overview__metrics {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 16px;
   margin-bottom: 24px;
 }
@@ -630,6 +876,94 @@ onBeforeUnmount(() => {
   font-size: 13px;
   line-height: 20px;
   color: var(--text-muted);
+}
+
+.overview__alerts {
+  margin-bottom: 24px;
+  padding: 20px 24px;
+}
+
+.overview__alerts-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.overview__alerts-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.overview__alerts-desc {
+  margin: 4px 0 0;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--text-muted);
+}
+
+.overview__alerts-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.overview__alerts-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.overview__alert-list {
+  display: grid;
+  gap: 12px;
+}
+
+.overview__alert {
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  background: var(--surface-muted);
+}
+
+.overview__alert-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.overview__alert-name {
+  font-size: 14px;
+  color: var(--text);
+}
+
+.overview__alert-line {
+  margin: 8px 0 0;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--text-secondary);
+}
+
+.overview__alert-meta {
+  margin: 4px 0 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--text-muted);
+}
+
+.overview__alert-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
 }
 
 .overview__inventory {
@@ -802,6 +1136,10 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 1279px) {
+  .overview__metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .overview__search {
     width: 240px;
   }

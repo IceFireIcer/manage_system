@@ -1,12 +1,16 @@
 <script setup>
 import { computed, h, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '../api'
 import PageHeader from '../components/PageHeader.vue'
 import EmptyState from '../components/EmptyState.vue'
+import RestockDialog from '../components/RestockDialog.vue'
+import LedgerImportDialog from '../components/LedgerImportDialog.vue'
 
 const router = useRouter()
+const route = useRoute()
+const focusId = ref(0)
 
 const UNIT_OPTIONS = ['卷', '张', '支', '个', '米', '根']
 
@@ -30,11 +34,20 @@ const viewportWidth = ref(window.innerWidth)
 const dialogVisible = ref(false)
 const saving = ref(false)
 const editingId = ref(null)
+const editingVersion = ref(null)
 const formRef = ref()
 const formError = ref('')
 const nameError = ref('')
 
+const receive = reactive({
+  visible: false,
+  row: null,
+})
+
+const ledgerImportVisible = ref(false)
+
 const emptyForm = {
+  code: '',
   name: '',
   spec: '',
   unit: '',
@@ -63,7 +76,7 @@ const appliedKeyword = computed(() => keyword.value.trim().toLowerCase())
 const visibleItems = computed(() => {
   if (!appliedKeyword.value) return items.value
   return items.value.filter((item) =>
-    [item.name, item.spec, item.location].some((field) =>
+    [item.code, item.name, item.spec, item.location].some((field) =>
       String(field ?? '')
         .toLowerCase()
         .includes(appliedKeyword.value),
@@ -188,7 +201,7 @@ function clearFilters() {
 function matchesFilters(row) {
   if (statusFilter.value !== 'enabled') return false
   if (!appliedKeyword.value) return true
-  return [row.name, row.spec, row.location].some((field) =>
+  return [row.code, row.name, row.spec, row.location].some((field) =>
     String(field ?? '')
       .toLowerCase()
       .includes(appliedKeyword.value),
@@ -197,6 +210,7 @@ function matchesFilters(row) {
 
 function openCreate() {
   editingId.value = null
+  editingVersion.value = null
   Object.assign(form, emptyForm)
   formError.value = ''
   nameError.value = ''
@@ -205,7 +219,9 @@ function openCreate() {
 
 function openEdit(row) {
   editingId.value = row.id
+  editingVersion.value = row.version ?? null
   Object.assign(form, {
+    code: row.code ?? '',
     name: row.name,
     spec: row.spec,
     unit: row.unit,
@@ -226,6 +242,9 @@ function errorMessage(error) {
   if (Array.isArray(detail)) {
     const messages = detail.map((item) => item?.msg).filter(Boolean)
     return messages.length ? messages.join('；') : '保存失败，请稍后重试'
+  }
+  if (detail && typeof detail === 'object') {
+    return detail.message || '保存失败，请稍后重试'
   }
   if (detail) return String(detail)
   return '保存失败，请稍后重试'
@@ -263,7 +282,10 @@ async function handleSave() {
   try {
     let created = null
     if (isEdit) {
-      await api.put(`/consumables/${editingId.value}`, payload)
+      await api.put(`/consumables/${editingId.value}`, {
+        ...payload,
+        expected_version: editingVersion.value,
+      })
     } else {
       const { data } = await api.post('/consumables', {
         ...payload,
@@ -281,46 +303,148 @@ async function handleSave() {
       nameError.value = reason
       formRef.value?.validateField('name').catch(() => undefined)
     }
+    if (error?.response?.status === 409) {
+      dialogVisible.value = false
+      staleNotice.value = reason
+      await fetchList('档案已被他人修改，请重新核对')
+      return
+    }
     formError.value = reason
   } finally {
     saving.value = false
   }
 }
 
-function confirmMessage(row, nextStatus) {
+const CONFIRM_WARN = 'confirm-body__warn'
+
+async function loadDeactivationPreview(row) {
+  try {
+    const { data } = await api.get(`/consumables/${row.id}/deactivation-preview`)
+    return data
+  } catch {
+    return null
+  }
+}
+
+function deactivationMessage(row, preview) {
+  const current = preview?.consumable ?? row
   const blocks = [h('p', { class: 'confirm-body__title' }, `${row.name} / ${row.spec}`)]
-  if (nextStatus === 'disabled') {
-    blocks.push(h('p', null, `当前库存：${row.current_stock} ${row.unit}`))
-    if (row.current_stock > 0) {
+  blocks.push(h('p', null, `当前余量：${current.current_stock} ${row.unit}`))
+  const receipts = preview?.pending_receipts ?? []
+  blocks.push(
+    h(
+      'p',
+      null,
+      receipts.length
+        ? `待收货：${receipts
+            .map((item) => `${item.order_no}（${item.quantity} ${row.unit}）`)
+            .join('、')}`
+        : '待收货：无',
+    ),
+  )
+  const actions = preview?.pending_actions ?? []
+  blocks.push(
+    h(
+      'p',
+      null,
+      actions.length
+        ? `待处理事项：${actions
+            .map((item) => `${item.label} ${item.count} 项`)
+            .join('、')}`
+        : '待处理事项：无',
+    ),
+  )
+  if (current.current_stock > 0) {
+    blocks.push(
+      h(
+        'p',
+        { class: CONFIRM_WARN },
+        `仍有 ${current.current_stock} ${row.unit} 库存，停用后将不能再领用或入库，请先核对账目。`,
+      ),
+    )
+  }
+  blocks.push(
+    h('p', null, '停用后该耗材将从领用列表、库存总览及巡检中移出，历史流水与账目仍可按权限查询。'),
+  )
+  return h('div', { class: 'confirm-body' }, blocks)
+}
+
+function enabledMessage(row, preview) {
+  const blocks = [h('p', { class: 'confirm-body__title' }, `${row.name} / ${row.spec}`)]
+  blocks.push(h('p', null, `当前余量：${row.current_stock} ${row.unit}`))
+  if (preview?.disabled_stock != null) {
+    blocks.push(h('p', null, `停用时余量：${preview.disabled_stock} ${row.unit}`))
+    if (preview.disabled_stock !== row.current_stock) {
       blocks.push(
-        h('p', { class: 'confirm-body__warn' }, `仍有 ${row.current_stock} 单位库存，建议先盘点。`),
+        h('p', { class: CONFIRM_WARN }, '停用期间余额已变化，请核对流水后再启用。'),
       )
     }
-    blocks.push(h('p', null, '停用后该耗材将从领用列表、库存总览及巡检中移出，历史流水保留。'))
-  } else {
-    blocks.push(h('p', null, '启用后该耗材将重新出现在库存总览与领用列表中。'))
-    blocks.push(h('p', null, '库存和安全库存线沿用现有数据。'))
   }
+  const disabledReason = preview?.consumable?.disabled_reason
+  if (disabledReason || preview?.disabled_by_name) {
+    const parts = []
+    if (preview.disabled_by_name) parts.push(`停用人：${preview.disabled_by_name}`)
+    if (disabledReason) parts.push(`停用原因：${disabledReason}`)
+    blocks.push(h('p', null, parts.join('；')))
+  }
+  blocks.push(
+    h('p', null, '启用后该耗材将重新出现在库存总览与领用列表中，库存与安全库存线沿用现有数据。'),
+  )
   return h('div', { class: 'confirm-body' }, blocks)
 }
 
 async function handleToggle(row, nextStatus) {
   const disabling = nextStatus === 'disabled'
-  try {
-    await ElMessageBox.confirm(confirmMessage(row, nextStatus), disabling ? '停用耗材' : '启用耗材', {
-      type: 'warning',
-      confirmButtonText: disabling ? '确认停用' : '确认启用',
-      cancelButtonText: '取消',
-    })
-  } catch {
-    return
+  const preview = await loadDeactivationPreview(row)
+  let reason = null
+  if (disabling) {
+    let value = ''
+    try {
+      const result = await ElMessageBox.prompt(deactivationMessage(row, preview), '停用耗材', {
+        type: 'warning',
+        confirmButtonText: '确认停用',
+        cancelButtonText: '取消',
+        inputType: 'textarea',
+        inputPlaceholder: '请填写停用原因（必填）',
+        inputValidator: (text) => (String(text ?? '').trim() ? true : '请填写停用原因'),
+      })
+      value = result.value
+    } catch {
+      return
+    }
+    reason = String(value).trim()
+  } else {
+    try {
+      await ElMessageBox.confirm(enabledMessage(row, preview), '启用耗材', {
+        type: 'warning',
+        confirmButtonText: '确认启用',
+        cancelButtonText: '取消',
+      })
+    } catch {
+      return
+    }
   }
   try {
-    await api.patch(`/consumables/${row.id}/status`, { status: nextStatus })
-    ElMessage.success(disabling ? '耗材已停用' : '耗材已启用')
+    const { data } = await api.patch(`/consumables/${row.id}/status`, {
+      status: nextStatus,
+      reason,
+      expected_version: row.version ?? null,
+    })
+    if (disabling) {
+      ElMessage.success('耗材已停用')
+    } else if (data?.audit?.balance_changed) {
+      ElMessage.warning(
+        `停用期间余额由 ${data.audit.previous_stock} 变为 ${data.audit.current_stock}，请核对`,
+      )
+    } else {
+      ElMessage.success('耗材已启用')
+    }
     await fetchList(disabling ? '已停用，暂时无法刷新列表' : '已启用，暂时无法刷新列表')
   } catch (error) {
     staleNotice.value = `操作未完成：${errorMessage(error)}`
+    if (error?.response?.status === 409) {
+      await fetchList('档案已被他人修改，请重新核对')
+    }
   }
 }
 
@@ -333,11 +457,32 @@ function goRecords(row) {
   router.push({ path: '/records', query: { consumable_id: String(row.id) } })
 }
 
+function rowClassName({ row }) {
+  return row.id === focusId.value ? 'consumables__row--focus' : ''
+}
+
+function openReceive(row) {
+  receive.row = row
+  receive.visible = true
+}
+
+function handleReceived() {
+  fetchList('已入库，暂时无法刷新列表')
+}
+
+function handleLedgerImported() {
+  statusFilter.value = 'enabled'
+  clearSearch()
+  fetchList('已导入台账，暂时无法刷新列表')
+}
+
 function handleResize() {
   viewportWidth.value = window.innerWidth
 }
 
 onMounted(() => {
+  const focus = Number(route.query.consumable_id)
+  focusId.value = Number.isInteger(focus) && focus > 0 ? focus : 0
   window.addEventListener('resize', handleResize)
   fetchList()
 })
@@ -349,6 +494,7 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
   <div class="consumables">
     <PageHeader title="耗材档案" :breadcrumb="['日常管理', '耗材档案']">
       <template #actions>
+        <el-button @click="ledgerImportVisible = true">导入台账</el-button>
         <el-button type="primary" @click="openCreate">新增耗材</el-button>
       </template>
     </PageHeader>
@@ -406,11 +552,16 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
     <template v-else>
       <p v-if="loading" class="consumables__refreshing" role="status">正在刷新…</p>
       <div class="consumables__table panel">
-        <el-table :data="visibleItems" class="table-dense" row-key="id" :aria-busy="loading">
+        <el-table :data="visibleItems" class="table-dense" row-key="id" :row-class-name="rowClassName" :aria-busy="loading">
           <el-table-column label="名称／规格" min-width="180">
             <template #default="{ row }">
               <div class="cell-main">{{ row.name }}</div>
               <div class="cell-sub">{{ row.spec }}</div>
+            </template>
+          </el-table-column>
+          <el-table-column prop="code" label="编码" width="128">
+            <template #default="{ row }">
+              <span class="cell-code">{{ row.code || '—' }}</span>
             </template>
           </el-table-column>
           <el-table-column prop="unit" label="单位" width="80" />
@@ -430,7 +581,7 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
               <div v-else-if="row.low_stock" class="cell-sub">低于安全库存线</div>
             </template>
           </el-table-column>
-          <el-table-column label="状态" width="90">
+          <el-table-column label="状态" width="150">
             <template #default="{ row }">
               <span
                 class="status-tag"
@@ -438,9 +589,12 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
               >
                 {{ row.status === 'enabled' ? '启用' : '停用' }}
               </span>
+              <div v-if="row.status === 'disabled' && row.disabled_reason" class="cell-sub">
+                {{ row.disabled_reason }}
+              </div>
             </template>
           </el-table-column>
-          <el-table-column label="操作" min-width="196" fixed="right">
+          <el-table-column label="操作" min-width="260" fixed="right">
             <template #default="{ row }">
               <template v-if="row.status === 'enabled'">
                 <el-button
@@ -451,6 +605,15 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
                   @click="openEdit(row)"
                 >
                   编辑
+                </el-button>
+                <el-button
+                  link
+                  type="primary"
+                  size="small"
+                  :aria-label="`收货 ${row.name}`"
+                  @click="openReceive(row)"
+                >
+                  收货
                 </el-button>
                 <el-button
                   link
@@ -555,6 +718,10 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
         scroll-to-error
         class="consumables__form"
       >
+        <el-form-item v-if="editingId" label="耗材编码">
+          <span class="consumables__readonly">{{ form.code || '—' }}</span>
+          <p class="consumables__form-hint">编码为稳定标识，建档后不可修改</p>
+        </el-form-item>
         <el-form-item label="名称" prop="name">
           <el-input v-model="form.name" maxlength="128" placeholder="如：焊丝" />
         </el-form-item>
@@ -598,6 +765,17 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
         </div>
       </template>
     </el-dialog>
+
+    <RestockDialog
+      v-model="receive.visible"
+      :consumable="receive.row"
+      @completed="handleReceived"
+    />
+
+    <LedgerImportDialog
+      v-model="ledgerImportVisible"
+      @completed="handleLedgerImported"
+    />
   </div>
 </template>
 
@@ -700,6 +878,12 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
   font-weight: 500;
 }
 
+.cell-code {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Consolas, monospace);
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
 .cell-sub {
   font-size: 12px;
   line-height: 18px;
@@ -765,5 +949,9 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
 
 .confirm-body__warn {
   color: var(--warning);
+}
+
+.consumables__row--focus td.el-table__cell {
+  background: var(--primary-soft);
 }
 </style>

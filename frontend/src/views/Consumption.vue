@@ -9,6 +9,7 @@ import api from '../api'
 import PageHeader from '../components/PageHeader.vue'
 import EmptyState from '../components/EmptyState.vue'
 import InventoryAuditDrawer from '../components/InventoryAuditDrawer.vue'
+import { businessDate } from '../utils/businessDate'
 
 echarts.use([BarChart, GridComponent, TooltipComponent, CanvasRenderer])
 
@@ -22,6 +23,8 @@ const router = useRouter()
 const windowDays = ref(7)
 const appliedWindow = ref(7)
 const items = ref([])
+const unitTotals = ref([])
+const provisioningScope = ref('')
 const loading = ref(false)
 const error = ref('')
 const staleError = ref(false)
@@ -57,11 +60,26 @@ const unitGroups = computed(() => {
   return [...groups.entries()]
     .map(([unit, rows]) => ({
       unit,
-      rows: [...rows].sort((left, right) => right.quantity - left.quantity),
-      total: rows.reduce((sum, row) => sum + row.quantity, 0),
+      rows: [...rows].sort(
+        (left, right) =>
+          (right.net_quantity ?? right.quantity) - (left.net_quantity ?? left.quantity) ||
+          (right.cross_period_reversed_quantity ?? 0) -
+            (left.cross_period_reversed_quantity ?? 0) ||
+          left.name.localeCompare(right.name),
+      ),
+      total: rows.reduce(
+        (sum, row) => sum + (row.net_quantity ?? row.quantity ?? 0),
+        0,
+      ),
     }))
-    .sort((left, right) => right.total - left.total)
+    .sort((left, right) => right.total - left.total || left.unit.localeCompare(right.unit))
 })
+
+const visibleUnitTotals = computed(() =>
+  unitFilter.value === 'all'
+    ? unitTotals.value
+    : unitTotals.value.filter((row) => row.unit === unitFilter.value),
+)
 
 const tableItems = computed(() => {
   const groups =
@@ -86,17 +104,11 @@ const rangeText = computed(() => {
 
 const failedWindowText = computed(() => `近 ${windowDays.value} 天`)
 
-function toDateInput(date) {
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
-}
-
 function rangeOf(windowSize) {
-  const end = new Date()
-  const start = new Date(end.getFullYear(), end.getMonth(), end.getDate() - (windowSize - 1))
-  return { start: toDateInput(start), end: toDateInput(end) }
+  return {
+    start: businessDate(-(windowSize - 1)),
+    end: businessDate(0),
+  }
 }
 
 function cssVar(name) {
@@ -124,7 +136,7 @@ function renderChart() {
         axisPointer: { type: 'shadow' },
         formatter: (params) => {
           const point = Array.isArray(params) ? params[0] : params
-          return `${point.name}<br/>净消耗 ${point.value}${chartUnit.value}`
+          return `${point.name}<br/>净额 ${point.value}${chartUnit.value}`
         },
       },
       xAxis: {
@@ -141,21 +153,21 @@ function renderChart() {
         type: 'value',
         min: 0,
         minInterval: 1,
-        name: chartUnit.value ? `净消耗（${chartUnit.value}）` : '净消耗',
+        name: chartUnit.value ? `净额（${chartUnit.value}）` : '净额',
         nameTextStyle: { color: cssVar('--text-muted') },
         axisLabel: { color: cssVar('--text-muted') },
         splitLine: { lineStyle: { color: cssVar('--line') } },
       },
       series: [
         {
-          name: '净消耗',
+          name: '净额',
           type: 'bar',
           barMaxWidth: 40,
           itemStyle: {
             color: cssVar('--primary'),
             borderRadius: [4, 4, 0, 0],
           },
-          data: chartItems.value.map((item) => item.quantity),
+          data: chartItems.value.map((item) => item.net_quantity),
         },
       ],
     },
@@ -177,6 +189,8 @@ async function fetchSummary() {
     })
     if (seq !== requestSeq || !active) return
     items.value = Array.isArray(data.items) ? data.items : []
+    unitTotals.value = Array.isArray(data.unit_totals) ? data.unit_totals : []
+    provisioningScope.value = data.provisioning_scope || ''
     appliedWindow.value = requested
     appliedStart.value = range.start
     appliedEnd.value = range.end
@@ -318,7 +332,7 @@ onBeforeUnmount(() => {
     <div v-else class="consumption__body" :aria-busy="loading">
       <div class="consumption__toolbar">
         <p class="consumption__definition">
-          净消耗 = 领用量 − 红冲量（小于 0 时取 0）；日均速率 = 净消耗 ÷ 所选天数。
+          发出量＝窗口内正常领用；红冲量＝窗口内有效红冲；净额＝发出量 − 红冲量（小于 0 时取 0）；跨期纠错＝原领用早于窗口的红冲，单独列出；日均速率＝净额 ÷ 所选天数。
         </p>
         <el-select v-model="unitFilter" class="consumption__unit" placeholder="全部单位">
           <el-option label="全部单位" value="all" />
@@ -331,12 +345,53 @@ onBeforeUnmount(() => {
         </el-select>
       </div>
 
+      <p v-if="provisioningScope" class="consumption__scope">
+        <strong>备料口径：</strong>{{ provisioningScope }}
+      </p>
+
+      <section v-if="visibleUnitTotals.length" class="panel consumption__unit-block">
+        <div class="consumption__block-head">
+          <h2 class="consumption__block-title">分单位合计</h2>
+          <span class="consumption__block-meta">按单位分别合计，不提供跨单位总量</span>
+        </div>
+        <div class="consumption__unit-grid">
+          <div v-for="row in visibleUnitTotals" :key="row.unit" class="consumption__unit-card">
+            <div class="consumption__unit-title">
+              <span class="consumption__unit-name">{{ row.unit }}</span>
+              <span class="consumption__block-meta">共 {{ row.consumables }} 种耗材</span>
+            </div>
+            <dl class="consumption__unit-metrics">
+              <div>
+                <dt>发出量</dt>
+                <dd>{{ row.issued_quantity }}{{ row.unit }}</dd>
+              </div>
+              <div>
+                <dt>红冲量</dt>
+                <dd>{{ row.reversed_quantity }}{{ row.unit }}</dd>
+              </div>
+              <div>
+                <dt>净额</dt>
+                <dd>{{ row.net_quantity }}{{ row.unit }}</dd>
+              </div>
+              <div>
+                <dt>其中跨期纠错</dt>
+                <dd>{{ row.cross_period_reversed_quantity }}{{ row.unit }}</dd>
+              </div>
+              <div>
+                <dt>日均速率</dt>
+                <dd>{{ formatRate(row.daily_rate) }}{{ row.unit }}/天</dd>
+              </div>
+            </dl>
+          </div>
+        </div>
+      </section>
+
       <div class="consumption__layout">
         <section class="panel consumption__table-block">
           <div class="consumption__block-head">
             <h2 class="consumption__block-title">消耗汇总</h2>
             <span class="consumption__block-meta">
-              净消耗合计 {{ appliedWindow }} 天窗口 · 共 {{ tableItems.length }} 种耗材
+              净额 {{ appliedWindow }} 天窗口 · 共 {{ tableItems.length }} 种耗材
             </span>
           </div>
           <el-table
@@ -344,11 +399,22 @@ onBeforeUnmount(() => {
             class="table-dense consumption__table"
             :row-class-name="rowClassName"
           >
-            <el-table-column prop="name" label="耗材" min-width="150" />
-            <el-table-column prop="spec" label="规格" min-width="130" />
-            <el-table-column prop="unit" label="单位" width="90" align="center" />
-            <el-table-column label="净消耗" width="110" align="right">
-              <template #default="{ row }">{{ row.quantity }}</template>
+            <el-table-column prop="name" label="耗材" min-width="140" />
+            <el-table-column prop="spec" label="规格" min-width="120" />
+            <el-table-column prop="unit" label="单位" width="80" align="center" />
+            <el-table-column label="发出量" width="100" align="right">
+              <template #default="{ row }">{{ row.issued_quantity }}</template>
+            </el-table-column>
+            <el-table-column label="红冲量" width="100" align="right">
+              <template #default="{ row }">{{ row.reversed_quantity }}</template>
+            </el-table-column>
+            <el-table-column label="净额" width="100" align="right">
+              <template #default="{ row }">{{ row.net_quantity }}</template>
+            </el-table-column>
+            <el-table-column label="跨期纠错" width="110" align="right">
+              <template #default="{ row }">
+                {{ row.cross_period_reversed_quantity || '—' }}
+              </template>
             </el-table-column>
             <el-table-column label="日均速率" width="120" align="right">
               <template #default="{ row }">
@@ -366,7 +432,7 @@ onBeforeUnmount(() => {
 
         <section class="panel consumption__chart-block">
           <div class="consumption__block-head">
-            <h2 class="consumption__block-title">净消耗对比</h2>
+            <h2 class="consumption__block-title">净额对比</h2>
             <span v-if="chartUnit" class="consumption__block-meta">
               单位：{{ chartUnit }}
             </span>
@@ -444,6 +510,64 @@ onBeforeUnmount(() => {
   font-size: 14px;
   line-height: 22px;
   color: var(--text-muted);
+}
+
+.consumption__scope {
+  margin: 0;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--text-muted);
+}
+
+.consumption__unit-block {
+  padding: 20px;
+}
+
+.consumption__unit-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 16px;
+}
+
+.consumption__unit-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.consumption__unit-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.consumption__unit-name {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.consumption__unit-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 12px;
+  margin: 0;
+}
+
+.consumption__unit-metrics dt {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.consumption__unit-metrics dd {
+  margin: 2px 0 0;
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
 }
 
 .consumption__unit {

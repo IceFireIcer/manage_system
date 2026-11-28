@@ -1,4 +1,5 @@
 import logging
+import re
 import time
 from dataclasses import dataclass
 from typing import Protocol
@@ -7,12 +8,26 @@ from openai import OpenAI
 
 from app.agent.rules import Evaluation
 from app.config import Settings
+from app.request_context import log_tag
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL = "deepseek-chat"
 DEFAULT_BASE_URL = "https://api.deepseek.com/v1"
 LLM_TIMEOUT_SECONDS = 3.0
+
+RATIONALE_SOURCE_LLM = "llm"
+RATIONALE_SOURCE_RULES = "rules"
+
+_RATIONALE_ANCHORS = (
+    ("current_stock", ("当前库存",), None),
+    ("safety_stock", ("安全库存线",), None),
+    ("gap", ("库存缺口",), None),
+    ("q7", ("近 7 天净消耗", "近7天净消耗", "净消耗"), None),
+    ("rate", ("日均速率",), 2),
+    ("days_of_supply", ("可支撑天数", "支撑天数"), 1),
+    ("recommended_quantity", ("建议补货量", "建议补货"), None),
+)
 
 TIER_KEYWORDS = {
     "urgent": "存在断供风险，建议立即补货",
@@ -35,6 +50,37 @@ class RationaleContext:
     evaluation: Evaluation
 
 
+@dataclass(frozen=True)
+class RationaleResult:
+    text: str
+    source: str
+    degraded: bool
+
+
+def _anchor_value(text: str, keywords: tuple[str, ...]) -> float | None:
+    for keyword in keywords:
+        match = re.search(
+            re.escape(keyword) + r"[^\d]{0,4}?(-?\d+(?:\.\d+)?)", text
+        )
+        if match is not None:
+            return float(match.group(1))
+    return None
+
+
+def validate_rationale(text: str, evaluation: Evaluation) -> bool:
+    for field, keywords, places in _RATIONALE_ANCHORS:
+        expected = getattr(evaluation, field)
+        actual = _anchor_value(text, keywords)
+        if actual is None or expected is None:
+            continue
+        if places is None:
+            if int(round(actual)) != int(expected):
+                return False
+        elif round(actual, places) != round(float(expected), places):
+            return False
+    return True
+
+
 class RationaleGenerator(Protocol):
     def generate(self, context: RationaleContext) -> str: ...
 
@@ -42,20 +88,20 @@ class RationaleGenerator(Protocol):
 def format_template(context: RationaleContext) -> str:
     evaluation = context.evaluation
     unit = context.unit
-    if evaluation.q7 == 0:
-        consumption = "近 7 天无领用流水"
+    if evaluation.consumption_state == "none":
+        consumption = evaluation.consumption_note
     else:
         consumption = (
-            f"近 7 天净消耗 {evaluation.q7}{unit}"
+            f"{evaluation.consumption_note}"
             f"（日均 {evaluation.rate:.2f}{unit}）"
         )
+    reasons = "；".join(evaluation.reasons) or "库存状态触发"
 
     if evaluation.current_stock >= evaluation.safety_stock:
         return (
             f"{context.name}当前库存 {evaluation.current_stock}{unit}，不低于安全库存线 "
-            f"{evaluation.safety_stock}{unit}；{consumption}，较前 7 天 "
-            f"{evaluation.prev_q7}{unit} 明显上升，按一周用量建议补货 "
-            f"{evaluation.recommended_quantity}{unit}。"
+            f"{evaluation.safety_stock}{unit}；{consumption}，命中「{reasons}」，"
+            f"按一周用量建议补货 {evaluation.recommended_quantity}{unit}。"
         )
 
     summary = (
@@ -69,7 +115,7 @@ def format_template(context: RationaleContext) -> str:
     else:
         summary += f"，仅可支撑 {evaluation.days_of_supply:.1f} 天"
     return (
-        f"{summary}，{TIER_KEYWORDS[evaluation.tier]} "
+        f"{summary}，命中「{reasons}」，{TIER_KEYWORDS[evaluation.tier]} "
         f"{evaluation.recommended_quantity}{unit}。"
     )
 
@@ -153,24 +199,35 @@ def get_generator(settings: Settings | None = None) -> RationaleGenerator:
     )
 
 
-def generate_rationale(context: RationaleContext) -> str:
+def generate_rationale_result(context: RationaleContext) -> RationaleResult:
     started = time.perf_counter()
     generator = get_generator()
+    if isinstance(generator, TemplateGenerator):
+        return RationaleResult(format_template(context), RATIONALE_SOURCE_RULES, False)
     try:
         text = (generator.generate(context) or "").strip()
     except Exception:
         logger.warning(
-            "补货判断依据生成失败，回退规则模板（耗时 %.2fs）",
+            "%s 补货判断依据生成失败，回退规则模板（耗时 %.2fs）",
+            log_tag(),
             time.perf_counter() - started,
             exc_info=True,
         )
-        return format_template(context)
+        return RationaleResult(format_template(context), RATIONALE_SOURCE_RULES, True)
     if not text:
-        logger.warning("补货判断依据为空，回退规则模板")
-        return format_template(context)
+        logger.warning("%s 补货判断依据为空，回退规则模板", log_tag())
+        return RationaleResult(format_template(context), RATIONALE_SOURCE_RULES, True)
+    if not validate_rationale(text, context.evaluation):
+        logger.warning("%s 补货判断依据与规则结果不一致，回退规则模板", log_tag())
+        return RationaleResult(format_template(context), RATIONALE_SOURCE_RULES, True)
     logger.info(
-        "补货判断依据生成成功（%s，耗时 %.2fs）",
+        "%s 补货判断依据生成成功（%s，耗时 %.2fs）",
+        log_tag(),
         type(generator).__name__,
         time.perf_counter() - started,
     )
-    return text
+    return RationaleResult(text, RATIONALE_SOURCE_LLM, False)
+
+
+def generate_rationale(context: RationaleContext) -> str:
+    return generate_rationale_result(context).text

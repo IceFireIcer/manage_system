@@ -13,7 +13,26 @@ EXPORT_URL = "/api/v1/requisitions/export"
 CONSUMABLES_URL = "/api/v1/consumables"
 USERS_URL = "/api/v1/users"
 
-CSV_HEADER = ["时间", "耗材", "数量", "领用人", "领后剩余", "类型", "状态", "撤销原因", "备注"]
+CSV_HEADER = [
+    "流水号",
+    "单号",
+    "业务时间",
+    "入账时间",
+    "耗材",
+    "规格",
+    "单位",
+    "数量",
+    "领用人",
+    "变动后库存",
+    "类型",
+    "状态",
+    "关联红冲",
+    "撤销原因",
+    "备注",
+    "经办人",
+    "领用人账号",
+    "经办账号",
+]
 
 
 def _consumable_payload(**overrides: Any) -> dict[str, Any]:
@@ -317,8 +336,10 @@ def test_list_item_fields(admin_client: TestClient, db_session) -> None:
     assert item == {
         "id": record.id,
         "created_at": record.created_at.isoformat(),
+        "posted_at": None,
         "consumable_name": "焊丝",
         "consumable_spec": "φ1.2mm",
+        "unit": "",
         "quantity": 3,
         "user_id": student_id,
         "user_name": "张同学",
@@ -329,6 +350,17 @@ def test_list_item_fields(admin_client: TestClient, db_session) -> None:
         "reversal_reason": None,
         "remark": "实训课领用",
         "related": None,
+        "order_no": None,
+        "reentry_of": None,
+        "correction_status": None,
+        "backfill_reason": None,
+        "backfill_mode": None,
+        "linked_event_id": None,
+        "linked_count_id": None,
+        "linked_count_order_no": None,
+        "operator_id": None,
+        "operator_name": None,
+        "operator_role": None,
     }
 
 
@@ -409,21 +441,23 @@ def test_export_csv_content_and_headers(admin_client: TestClient, db_session) ->
     rows = _parse_csv(response)
     assert rows[0] == CSV_HEADER
     assert len(rows) == 3
-    assert rows[1][0] == "2026-11-27 11:00:00"
-    assert rows[1][1] == "焊丝（φ1.2mm）"
-    assert rows[1][2] == "1"
-    assert rows[1][3] == "张同学"
-    assert rows[1][4] == "8"
-    assert rows[1][5] == "红冲"
-    assert rows[1][6] == "已撤销"
-    assert rows[1][7] == "登错数量"
-    assert rows[1][8] == ""
-    assert rows[2][0] == "2026-11-27 10:00:00"
-    assert rows[2][2] == "3"
-    assert rows[2][4] == "7"
-    assert rows[2][5] == "领用"
-    assert rows[2][6] == "有效"
-    assert rows[2][8] == "实训课领用"
+    assert rows[1][2] == "2026-11-27 11:00:00"
+    assert rows[1][4] == "焊丝"
+    assert rows[1][5] == "φ1.2mm"
+    assert rows[1][6] == "卷"
+    assert rows[1][7] == "1"
+    assert rows[1][8] == "张同学"
+    assert rows[1][9] == "8"
+    assert rows[1][10] == "红冲"
+    assert rows[1][11] == "已撤销"
+    assert rows[1][13] == "登错数量"
+    assert rows[1][14] == ""
+    assert rows[2][2] == "2026-11-27 10:00:00"
+    assert rows[2][7] == "3"
+    assert rows[2][9] == "7"
+    assert rows[2][10] == "领用"
+    assert rows[2][11] == "有效"
+    assert rows[2][14] == "实训课领用"
 
 
 def test_export_respects_filters(admin_client: TestClient, db_session) -> None:
@@ -437,7 +471,7 @@ def test_export_respects_filters(admin_client: TestClient, db_session) -> None:
     rows = _parse_csv(admin_client.get(EXPORT_URL, params={"consumable_id": c1["id"]}))
 
     assert len(rows) == 3
-    assert all(row[1].startswith("焊丝") for row in rows[1:])
+    assert all(row[4].startswith("焊丝") for row in rows[1:])
 
 
 def test_export_empty(admin_client: TestClient) -> None:

@@ -10,9 +10,16 @@ services:
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-ManageSystem2026}
       MYSQL_DATABASE: manage_system
+      MYSQL_APP_USER: ${MYSQL_APP_USER:-appuser}
+      MYSQL_APP_PASSWORD: ${MYSQL_APP_PASSWORD:-change-me-app-password}
+      MYSQL_MIGRATE_USER: ${MYSQL_MIGRATE_USER:-labstock_migrator}
+      MYSQL_MIGRATE_PASSWORD: ${MYSQL_MIGRATE_PASSWORD:-change-me-migrate-password}
+      MYSQL_BACKUP_USER: ${MYSQL_BACKUP_USER:-labstock_backup}
+      MYSQL_BACKUP_PASSWORD: ${MYSQL_BACKUP_PASSWORD:-change-me-backup-password}
       TZ: Asia/Shanghai
     volumes:
       - mysql_data:/var/lib/mysql
+      - ./scripts/db-init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
       interval: 10s
@@ -27,21 +34,39 @@ services:
       db:
         condition: service_healthy
     environment:
-      APP_ENV: prod
-      DEBUG: "false"
-      DATABASE_URL: mysql+pymysql://root:${MYSQL_ROOT_PASSWORD:-ManageSystem2026}@db:3306/manage_system?charset=utf8mb4
-      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-manage-system-default-jwt-secret-change-in-prod-0123456789abcdef}
+      APP_ENV: ${APP_ENV:-prod}
+      DEBUG: ${DEBUG:-false}
+      DATABASE_URL: mysql+pymysql://${MYSQL_APP_USER:-appuser}:${MYSQL_APP_PASSWORD:-change-me-app-password}@db:3306/manage_system?charset=utf8mb4
+      MIGRATION_DATABASE_URL: mysql+pymysql://${MYSQL_MIGRATE_USER:-labstock_migrator}:${MYSQL_MIGRATE_PASSWORD:-change-me-migrate-password}@db:3306/manage_system?charset=utf8mb4
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-}
       JWT_ALGORITHM: HS256
       JWT_EXPIRE_MINUTES: "480"
+      LOGIN_THROTTLE_ACCOUNT_MAX_ATTEMPTS: ${LOGIN_THROTTLE_ACCOUNT_MAX_ATTEMPTS:-5}
+      LOGIN_THROTTLE_ACCOUNT_WINDOW_SECONDS: ${LOGIN_THROTTLE_ACCOUNT_WINDOW_SECONDS:-900}
+      LOGIN_THROTTLE_SOURCE_MAX_ATTEMPTS: ${LOGIN_THROTTLE_SOURCE_MAX_ATTEMPTS:-100}
+      LOGIN_THROTTLE_SOURCE_WINDOW_SECONDS: ${LOGIN_THROTTLE_SOURCE_WINDOW_SECONDS:-300}
+      LOGIN_THROTTLE_BLOCK_SECONDS: ${LOGIN_THROTTLE_BLOCK_SECONDS:-300}
+      AUTH_LOG_RETENTION_DAYS: ${AUTH_LOG_RETENTION_DAYS:-90}
+      AUTH_LOG_MAX_ROWS: ${AUTH_LOG_MAX_ROWS:-20000}
+      COOKIE_SECURE: ${COOKIE_SECURE:-}
+      TRUSTED_HOSTS: ${TRUSTED_HOSTS:-}
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
       ADMIN_INIT_ACCOUNT: ${ADMIN_INIT_ACCOUNT:-}
       ADMIN_INIT_PASSWORD: ${ADMIN_INIT_PASSWORD:-}
       ADMIN_INIT_NAME: ${ADMIN_INIT_NAME:-}
       LLM_API_KEY: ${LLM_API_KEY:-}
       LLM_BASE_URL: ${LLM_BASE_URL:-https://api.deepseek.com/v1}
       LLM_MODEL: ${LLM_MODEL:-deepseek-chat}
+      OPS_BACKUP_DIR: ${OPS_BACKUP_DIR:-/app/backups}
+      OPS_BACKUP_MAX_AGE_HOURS: ${OPS_BACKUP_MAX_AGE_HOURS:-36}
+      OPS_DISK_MIN_FREE_MB: ${OPS_DISK_MIN_FREE_MB:-500}
+      OPS_ERROR_WINDOW_SECONDS: ${OPS_ERROR_WINDOW_SECONDS:-300}
+      OPS_ERROR_ALERT_THRESHOLD: ${OPS_ERROR_ALERT_THRESHOLD:-5}
       TZ: Asia/Shanghai
     expose:
       - "8000"
+    volumes:
+      - ./backups:/app/backups:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request, sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=3).status == 200 else 1)"]
       interval: 30s

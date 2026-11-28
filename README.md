@@ -43,7 +43,7 @@ cd manage_system
 # 3. 配置生产密钥（生产环境必做，见「配置」一节）
 cp .env.example .env
 chmod 600 .env
-# 编辑 .env：MYSQL_ROOT_PASSWORD、JWT_SECRET_KEY 必须替换为随机值
+# 编辑 .env：MYSQL_ROOT_PASSWORD、MYSQL_APP_PASSWORD、MYSQL_MIGRATE_PASSWORD、MYSQL_BACKUP_PASSWORD、JWT_SECRET_KEY 必须替换为随机值
 
 # 4. 拉取 GHCR 镜像并启动（私有包需先 docker login ghcr.io）
 docker compose pull
@@ -70,7 +70,7 @@ docker compose logs backend | grep bootstrap
 
 后端容器每次启动都会执行 `alembic upgrade head`（幂等建表），随后运行 `backend/scripts/bootstrap_admin.py`：
 
-- 库中不存在启用的管理员时，自动创建 `role=admin` 账号并启用
+- 空库（没有任何账号）时自动创建 `role=admin` 账号并启用，首次登录强制改密
 - 默认账号 `admin`、姓名「系统管理员」，可用 `ADMIN_INIT_ACCOUNT` / `ADMIN_INIT_NAME` 覆盖
 - 密码取 `ADMIN_INIT_PASSWORD`；未设置时随机生成，并打印到后端日志：
 
@@ -81,28 +81,21 @@ docker compose logs backend | grep bootstrap
 
 - 初始化是幂等的：已存在启用的管理员时输出 `[bootstrap] 管理员账号已存在，跳过`，不会新建、也不会覆盖现有密码
 - `ADMIN_INIT_PASSWORD` 只对**首次创建**生效；账号已存在时修改该变量不会重置密码
+- 存在账号但没有可用管理员时输出 `[bootstrap] 需恢复...`，不会自动补建管理员
+- 自举状态可查：`GET /api/v1/bootstrap/status` 返回 `ready` / `needs_initialization` / `needs_recovery`；登录页对后两种显示“需初始化/需恢复”，不以可登录页面掩盖无管理员状态
 
-当前版本未提供网页端自助改密接口。如需重置管理员密码，可在后端容器内直接更新哈希（登录态即时生效，无需重启）：
+教师开通、班委交接与管理员恢复由校方授权人执行，写入操作日志（执行人由 `--actor` 或 `OPS_ACTOR` 指定，时间与结果随日志留存）：
 
 ```bash
-docker compose exec -T backend python - <<'PY'
-import sys
-sys.path.insert(0, "/app")
-from sqlalchemy import select
-from app.database import SessionLocal
-from app.models import User
-from app.security import hash_password
-
-new_password = "替换为新的强密码"
-with SessionLocal() as db:
-    user = db.scalar(select(User).where(User.account == "admin"))
-    user.password_hash = hash_password(new_password)
-    db.commit()
-print("已更新 admin 密码")
-PY
+docker compose exec backend python scripts/manage_accounts.py status
+docker compose exec backend python scripts/manage_accounts.py provision-teacher --account teacher01 --name 王老师
+docker compose exec backend python scripts/manage_accounts.py handover-admin --from admin --account admin2 --name 李班委
+docker compose exec backend python scripts/manage_accounts.py recover-admin --account admin --name 系统管理员
 ```
 
-> 管理员登录后应立即通过上述方式修改初始密码，并妥善保存。首次部署完成前请勿将 4900 端口暴露给不可信网络。
+未传 `--password` 时随机生成并只打印一次；新账号与恢复后的账号首次登录必须改密。管理员恢复会重置密码、启用账号并撤销旧会话；教师或学生账号不能通过开通或恢复流程提升为管理员。已有可用管理员时如需更换班委，使用 `handover-admin`。
+
+> 管理员登录后应立即修改初始密码，并妥善保存。首次部署完成前请勿将 4900 端口暴露给不可信网络。
 
 ## 配置
 
@@ -110,7 +103,8 @@ PY
 
 | 变量 | 必填 | 说明 |
 | --- | --- | --- |
-| `MYSQL_ROOT_PASSWORD` | 生产必填 | MySQL root 密码，会拼进 `DATABASE_URL`，建议只用字母数字；未设置时 Compose 使用内置默认值 |
+| `MYSQL_ROOT_PASSWORD` | 生产必填 | MySQL root 密码，仅用于首次初始化与应急运维；应用连接改用最小权限账号（见 `docs/deploy.md` 5.3） |
+| `MYSQL_APP_PASSWORD` / `MYSQL_MIGRATE_PASSWORD` / `MYSQL_BACKUP_PASSWORD` | 生产必填 | 应用（只读写入、无 DDL）、迁移（DDL）、备份（只读）账号密码；建议 `openssl rand -hex 16` |
 | `JWT_SECRET_KEY` | 生产必填 | JWT 签名密钥，至少 32 位随机字符；变更后旧登录态失效 |
 | `ADMIN_INIT_ACCOUNT` | 否 | 首次创建的管理员账号，默认 `admin` |
 | `ADMIN_INIT_PASSWORD` | 否 | 首次创建的管理员密码，留空则随机生成并打印到日志 |
@@ -221,9 +215,9 @@ cd frontend && npm run build
 
 ## 安全与运维要点
 
-- **密钥**：生产必须覆盖 `MYSQL_ROOT_PASSWORD` 与 `JWT_SECRET_KEY`；`.env` 权限设为 600 且不提交
+- **密钥**：生产必须覆盖 `MYSQL_ROOT_PASSWORD`、三个数据库账号密码与 `JWT_SECRET_KEY`；`.env` 权限设为 600 且不提交；数据库最小权限、换密与登录节流见 [deploy.md 5.3](docs/deploy.md#53-数据库最小权限凭据轮换与登录节流)
 - **管理员密码**：首次启动后立即修改随机初始密码；丢弃该密码后按上文容器内脚本重置
-- **网络**：仅暴露 `WEB_PORT`（默认 4900），不对外开放 3306 / 8000；HTTPS 建议在前置 nginx/Caddy 或云负载均衡终止
+- **网络**：仅暴露 `WEB_PORT`（默认 4900），不对外开放 3306 / 8000；正式环境按 [deploy.md 5.1](docs/deploy.md#51-启用-https-与安全头正式必做) 叠加 `docker-compose.https.yml` 启用 HTTPS，`APP_ENV=prod` 下缺有效密钥或使用 HTTP 会拒绝启动/访问；密钥轮换见 5.2
 - **备份**：定期 `mysqldump` 或对数据卷做快照，升级前必须先备份
 - **升级/回滚**：升级用 `docker compose pull && docker compose up -d`；回滚切换历史 `IMAGE_TAG`（`sha-<short>` 或版本标签）后 `docker compose pull` 再启动；本地开发调试如需构建可用 `docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build`（**仅本地开发，服务器部署不要构建**）。数据库迁移通常单向，回滚前确认表结构兼容
 - **日志**：`docker compose logs -f backend` 查看运行与 `[bootstrap]` 记录；定期巡检并清理旧镜像

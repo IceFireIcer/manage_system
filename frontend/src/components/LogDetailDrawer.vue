@@ -15,16 +15,36 @@ const props = defineProps({
 
 const emit = defineEmits(['update:modelValue', 'view-requisition', 'view-consumable'])
 
-const ROLE_NAMES = { teacher: '教师', admin: '班委', student: '学生' }
+const ROLE_NAMES = { teacher: '教师', admin: '班委', student: '学生', operator: '校方授权人' }
 const STATUS_NAMES = { enabled: '启用', disabled: '停用' }
-const TARGET_NAMES = { user: '用户', consumable: '耗材', requisition: '领用流水' }
+const RESULT_NAMES = { success: '成功', failure: '失败', rejected: '已拒绝' }
+const TARGET_NAMES = {
+  user: '用户',
+  consumable: '耗材',
+  requisition: '领用流水',
+  requisition_order: '领用单',
+  requisition_correction: '纠错申请',
+  operation_log: '操作日志',
+}
+
+const STATUS_ACTIONS = new Set([
+  'user_enable',
+  'user_disable',
+  'consumable_enable',
+  'consumable_disable',
+])
 
 const ACTION_NAMES = {
   login: '登录',
   logout: '退出登录',
   requisition_create: '领用登记',
   requisition_reverse: '撤销领用',
+  requisition_reentry: '关联重登',
+  requisition_correction_submit: '纠错申请',
+  requisition_correction_accept: '纠错受理',
+  requisition_correction_handle: '纠错处理',
   restock: '补货入库',
+  restock_correction: '入库纠错',
   consumable_create: '耗材建档',
   consumable_update: '耗材修改',
   consumable_disable: '耗材停用',
@@ -32,6 +52,15 @@ const ACTION_NAMES = {
   user_create: '新增用户',
   user_enable: '启用用户',
   user_disable: '停用用户',
+  admin_bootstrap: '初始化管理员',
+  teacher_provision: '开通教师',
+  admin_handover: '班委交接',
+  admin_handover_create: '开通班委',
+  admin_recover: '管理员恢复',
+  admin_bootstrap_rejected: '初始化被拒',
+  teacher_provision_rejected: '开通教师被拒',
+  admin_handover_rejected: '班委交接被拒',
+  admin_recover_rejected: '管理员恢复被拒',
 }
 
 const FIELD_LABELS = {
@@ -54,6 +83,13 @@ const FIELD_LABELS = {
   consumable_id: '耗材 ID',
   requisition_id: '领用流水号',
   reversal_id: '红冲流水号',
+  reversal_order_no: '红冲单号',
+  reentry_id: '重登流水号',
+  reentry_order_no: '重登单号',
+  reentry_of: '来源红冲流水',
+  correction_id: '纠错申请号',
+  handling_note: '处理结果',
+  event_id: '库存事件号',
   created_at: '业务时间',
   items: '明细',
 }
@@ -78,6 +114,13 @@ const FIELD_ORDER = [
   'consumable_id',
   'requisition_id',
   'reversal_id',
+  'reversal_order_no',
+  'reentry_id',
+  'reentry_order_no',
+  'reentry_of',
+  'correction_id',
+  'handling_note',
+  'event_id',
   'created_at',
   'items',
 ]
@@ -127,8 +170,11 @@ const targetLabel = computed(() => {
   const log = props.log
   if (!log) return '—'
   const typeName = TARGET_NAMES[log.target_type] ?? log.target_type ?? '—'
-  if (!log.target_id) return typeName
+  if (!log.target_id) {
+    return log.target_label ? `${typeName}（${log.target_label}）` : typeName
+  }
   const name =
+    log.target_label ||
     afterSnapshot.value?.name ||
     beforeSnapshot.value?.name ||
     afterSnapshot.value?.account ||
@@ -149,13 +195,33 @@ const rows = computed(() => {
   const before = beforeSnapshot.value
   const after = afterSnapshot.value
   if (!before && !after) {
+    if (STATUS_ACTIONS.has(props.log?.action)) {
+      const beforeStatus = props.log?.before_status
+      const afterStatus = props.log?.after_status
+      if (beforeStatus || afterStatus) {
+        return [
+          {
+            key: 'status',
+            label: '状态',
+            before: STATUS_NAMES[beforeStatus] ?? beforeStatus ?? null,
+            after: STATUS_NAMES[afterStatus] ?? afterStatus ?? null,
+            changed: beforeStatus !== afterStatus,
+          },
+        ]
+      }
+    }
     if (!rawBefore.value && !rawAfter.value) return []
+    const withStatus = STATUS_ACTIONS.has(props.log?.action)
     return [
       {
-        key: 'content',
-        label: '记录内容',
-        before: rawBefore.value || null,
-        after: rawAfter.value || null,
+        key: withStatus ? 'status' : 'content',
+        label: withStatus ? '状态' : '记录内容',
+        before: withStatus
+          ? (STATUS_NAMES[rawBefore.value] ?? rawBefore.value) || null
+          : rawBefore.value || null,
+        after: withStatus
+          ? (STATUS_NAMES[rawAfter.value] ?? rawAfter.value) || null
+          : rawAfter.value || null,
         changed: rawBefore.value !== rawAfter.value,
       },
     ]
@@ -295,6 +361,10 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
         <div class="log-detail__meta-item">
           <span class="log-detail__meta-label">操作类型</span>
           <span class="log-detail__meta-value">{{ ACTION_NAMES[log.action] ?? log.action }}</span>
+        </div>
+        <div class="log-detail__meta-item">
+          <span class="log-detail__meta-label">结果</span>
+          <span class="log-detail__meta-value">{{ RESULT_NAMES[log.result] ?? log.result ?? '—' }}</span>
         </div>
         <div class="log-detail__meta-item">
           <span class="log-detail__meta-label">对象</span>

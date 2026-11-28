@@ -21,15 +21,32 @@ const props = defineProps({
 const emit = defineEmits(['update:modelValue', 'view-source'])
 
 const SOURCE_META = {
-  requisition: { label: '领用', className: 'status-tag--neutral' },
+  opening: { label: '期初', className: 'status-tag--neutral' },
+  requisition: { label: '领用', className: 'status-tag--info' },
   reversal: { label: '红冲', className: 'status-tag--reversal' },
   restock: { label: '入库', className: 'status-tag--success' },
+  return: { label: '退库', className: 'status-tag--success' },
+  scrap: { label: '报损', className: 'status-tag--warning' },
+  inventory_adjustment: { label: '盘点调整', className: 'status-tag--warning' },
+  restock_correction: { label: '入库纠错', className: 'status-tag--warning' },
 }
+
+const EVIDENCE_META = {
+  trusted: { label: '可信', className: 'status-tag--success' },
+  insufficient: { label: '证据不足', className: 'status-tag--warning' },
+  unverifiable: { label: '无法验证', className: 'status-tag--danger' },
+}
+
+const BASIS_OPTIONS = [
+  { value: 'posting', label: '按入账时间' },
+  { value: 'business', label: '按业务时间重排' },
+]
 
 const loading = ref(false)
 const error = ref('')
 const audit = ref(null)
 const cutoff = ref(null)
+const basisKey = ref('posting')
 const viewportWidth = ref(window.innerWidth)
 
 const visible = computed({
@@ -37,107 +54,156 @@ const visible = computed({
   set: (value) => emit('update:modelValue', value),
 })
 
-const drawerSize = computed(() => (viewportWidth.value < 768 ? '100%' : '600px'))
+const drawerSize = computed(() => (viewportWidth.value < 768 ? '100%' : '720px'))
 
 const drawerTitle = computed(() => {
   const name = props.consumableName || audit.value?.name || ''
-  return name ? `库存变动 · ${name}` : '库存变动'
+  return name ? `库存审计 · ${name}` : '库存审计'
 })
 
 const unit = computed(() => audit.value?.unit ?? '')
 
-const displayEvents = computed(() => {
-  const events = audit.value?.events ?? []
-  if (!cutoff.value) return events
-  const limit = new Date(cutoff.value).getTime()
-  return events.filter((event) => new Date(event.time).getTime() <= limit)
-})
+const activeBasis = computed(() => audit.value?.[basisKey.value] ?? null)
+const otherBasisKey = computed(() => (basisKey.value === 'posting' ? 'business' : 'posting'))
+const otherBasis = computed(() => audit.value?.[otherBasisKey.value] ?? null)
+const events = computed(() => activeBasis.value?.events ?? [])
 
-const cutoffStock = computed(() => {
-  if (!cutoff.value) return null
-  if (displayEvents.value.length) {
-    return displayEvents.value[displayEvents.value.length - 1].stock_after
-  }
-  return audit.value?.opening_stock ?? null
-})
-
-const sourceEvent = computed(
-  () => displayEvents.value.find((event) => sourceIdOf(event) !== null) ?? null,
+const evidenceMeta = computed(
+  () =>
+    EVIDENCE_META[audit.value?.evidence_status] ?? {
+      label: audit.value?.evidence_label ?? '—',
+      className: 'status-tag--neutral',
+    },
 )
 
-function sourceIdOf(event) {
-  return event.source_id ?? event.origin_id ?? event.id ?? null
+function timeKey(value) {
+  if (!value) return ''
+  return String(value).replace('T', ' ').slice(0, 19)
 }
 
 function formatTime(value) {
-  if (!value) return '—'
-  const text = String(value)
-  const matched = text.match(/^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}:\d{2})/)
-  return matched ? `${matched[1]} ${matched[2]}` : text
+  const text = timeKey(value)
+  return text || '—'
 }
 
-function sourceLabel(event) {
-  return SOURCE_META[event.source]?.label ?? event.source
+function eventTime(event) {
+  return basisKey.value === 'business' ? event.business_at : event.posted_at
 }
 
-function sourceClass(event) {
-  return SOURCE_META[event.source]?.className ?? 'status-tag--neutral'
+function displayUnit(value) {
+  return value || '待核对'
+}
+
+function formatStock(value, snapshot) {
+  if (value === null || value === undefined) return '—'
+  return `${value}${displayUnit(snapshot === undefined ? unit.value : snapshot)}`
 }
 
 function formatDelta(event) {
   const prefix = event.delta > 0 ? '+' : ''
-  return `${prefix}${event.delta}${unit.value}`
+  return `${prefix}${event.delta}${displayUnit(event.unit_snapshot)}`
 }
 
-function formatStock(value) {
+function formatDiff(value) {
   if (value === null || value === undefined) return '—'
-  return `${value}${unit.value}`
+  const prefix = value > 0 ? '+' : ''
+  return `${prefix}${value}${displayUnit(unit.value)}`
+}
+
+function sourceMeta(event) {
+  return (
+    SOURCE_META[event.event_type] ?? {
+      label: event.event_type,
+      className: 'status-tag--neutral',
+    }
+  )
+}
+
+function basisStockText(basis) {
+  if (!basis) return '—'
+  const stock = formatStock(basis.stock_at_cutoff)
+  return cutoff.value ? `时点 ${stock}` : `截至当前 ${stock}`
+}
+
+function anomalyLabel(anomaly) {
+  return `第 ${anomaly.exec_seq} 步 · ${formatTime(anomaly.at)}`
+}
+
+function rangeLabel(range) {
+  if (!range) return '—'
+  const steps =
+    range.start_exec_seq === range.end_exec_seq
+      ? `第 ${range.start_exec_seq} 步`
+      : `第 ${range.start_exec_seq}–${range.end_exec_seq} 步`
+  return `${steps} · ${formatTime(range.start_at)} 至 ${formatTime(range.end_at)}`
 }
 
 function handleResize() {
   viewportWidth.value = window.innerWidth
 }
 
+let requestSerial = 0
+
 async function fetchAudit() {
+  const serial = ++requestSerial
   if (!props.consumableId) {
     audit.value = null
     error.value = ''
+    loading.value = false
     return
   }
   loading.value = true
   error.value = ''
-  cutoff.value = null
   try {
-    const { data } = await api.get('/consumption/audit', {
-      params: { consumable_id: props.consumableId },
+    const { data } = await api.get('/inventory/audit', {
+      params: {
+        consumable_id: props.consumableId,
+        posting_cutoff: cutoff.value || undefined,
+        business_cutoff: cutoff.value || undefined,
+      },
     })
+    if (serial !== requestSerial) return
     audit.value = data
   } catch (requestError) {
+    if (serial !== requestSerial) return
     audit.value = null
     error.value =
-      requestError.response?.status === 404 ? '该记录无法查看' : '库存变动读取失败'
+      requestError.response?.status === 404 ? '该记录无法查看' : '库存审计读取失败'
   } finally {
-    loading.value = false
+    if (serial === requestSerial) loading.value = false
   }
 }
 
-function handleViewSource() {
-  if (sourceEvent.value) {
-    emit('view-source', sourceEvent.value)
+function handleViewSource(event) {
+  if (event?.can_open_source) {
+    emit('view-source', event)
   }
 }
 
 watch(
   () => [props.modelValue, props.consumableId],
-  ([open]) => {
-    if (open) fetchAudit()
+  ([open, consumableId], previous) => {
+    if (!open) return
+    if (previous?.[1] !== consumableId) {
+      audit.value = null
+      basisKey.value = 'posting'
+      cutoff.value = null
+    }
+    fetchAudit()
   },
   { immediate: true },
 )
 
+watch(cutoff, () => {
+  if (props.modelValue) fetchAudit()
+})
+
 onMounted(() => window.addEventListener('resize', handleResize))
 
-onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
+onBeforeUnmount(() => {
+  requestSerial += 1
+  window.removeEventListener('resize', handleResize)
+})
 </script>
 
 <template>
@@ -157,32 +223,55 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
           </span>
         </div>
         <div class="audit-drawer__metric">
-          <span class="audit-drawer__metric-label">可确定期初库存</span>
+          <span class="audit-drawer__metric-label">可信期初</span>
           <span class="audit-drawer__metric-value">
             {{ audit ? formatStock(audit.opening_stock) : '—' }}
           </span>
         </div>
         <div class="audit-drawer__metric">
-          <span class="audit-drawer__metric-label">一致性</span>
+          <span class="audit-drawer__metric-label">流水末值</span>
+          <span class="audit-drawer__metric-value">
+            {{ audit ? formatStock(audit.ledger_end) : '—' }}
+          </span>
+        </div>
+        <div class="audit-drawer__metric">
+          <span class="audit-drawer__metric-label">差异</span>
           <span
-            v-if="audit"
-            class="status-tag"
-            :class="audit.consistent ? 'status-tag--success' : 'status-tag--warning'"
+            class="audit-drawer__metric-value"
+            :class="{ 'audit-drawer__metric-value--alert': audit && audit.diff }"
           >
-            {{ audit.consistent ? '记录一致' : '需要核对' }}
+            {{ audit ? formatDiff(audit.diff) : '—' }}
+          </span>
+        </div>
+        <div class="audit-drawer__metric">
+          <span class="audit-drawer__metric-label">证据状态</span>
+          <span v-if="audit" class="status-tag" :class="evidenceMeta.className">
+            {{ evidenceMeta.label }}
           </span>
           <span v-else class="audit-drawer__metric-value">—</span>
         </div>
       </div>
 
-      <el-alert
-        v-if="audit && !audit.consistent"
-        type="warning"
-        :closable="false"
-        show-icon
-        title="库存变动记录需要核对"
-        description="库存反推值与事件快照不一致，请结合来源类型与操作日志核对。"
-      />
+      <div v-if="audit" class="audit-drawer__evidence">
+        <ul class="audit-drawer__reasons">
+          <li v-for="reason in audit.evidence_reasons" :key="reason">{{ reason }}</li>
+        </ul>
+        <div class="audit-drawer__checks">
+          <div class="audit-drawer__check">
+            <span class="audit-drawer__check-label">首次异常</span>
+            <span v-if="audit.first_anomaly" class="audit-drawer__check-value">
+              {{ anomalyLabel(audit.first_anomaly) }}：{{ audit.first_anomaly.reason }}
+            </span>
+            <span v-else class="audit-drawer__check-value">—</span>
+          </div>
+          <div class="audit-drawer__check">
+            <span class="audit-drawer__check-label">受影响区间</span>
+            <span class="audit-drawer__check-value">
+              {{ rangeLabel(audit.affected_range) }}
+            </span>
+          </div>
+        </div>
+      </div>
 
       <div v-if="error" class="audit-drawer__error">
         <p class="audit-drawer__error-text">{{ error }}</p>
@@ -194,51 +283,111 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
       </div>
 
       <template v-else-if="audit">
-        <div class="audit-drawer__cutoff">
-          <el-date-picker
-            v-model="cutoff"
-            type="datetime"
-            placeholder="选择时点"
-            clearable
-          />
-          <span v-if="cutoff" class="audit-drawer__cutoff-stock">
-            时点库存：{{ formatStock(cutoffStock) }}
-          </span>
+        <div class="audit-drawer__basis">
+          <div class="audit-drawer__basis-row">
+            <span class="audit-drawer__basis-label">对账口径</span>
+            <el-radio-group v-model="basisKey" size="small">
+              <el-radio-button
+                v-for="option in BASIS_OPTIONS"
+                :key="option.value"
+                :value="option.value"
+              >
+                {{ option.label }}
+              </el-radio-button>
+            </el-radio-group>
+          </div>
+          <div class="audit-drawer__basis-row">
+            <el-date-picker
+              v-model="cutoff"
+              type="datetime"
+              value-format="YYYY-MM-DD HH:mm:ss"
+              placeholder="查询时点（两种口径同时计算）"
+              clearable
+            />
+          </div>
+          <div class="audit-drawer__basis-stocks">
+            <span
+              class="audit-drawer__basis-stock"
+              :class="{ 'audit-drawer__basis-stock--active': basisKey === 'posting' }"
+            >
+              按入账时间 {{ basisStockText(audit.posting) }}
+            </span>
+            <span
+              class="audit-drawer__basis-stock"
+              :class="{ 'audit-drawer__basis-stock--active': basisKey === 'business' }"
+            >
+              按业务时间重排 {{ basisStockText(audit.business) }}
+            </span>
+          </div>
+          <p class="audit-drawer__basis-note">
+            按入账时间回答系统当时账面余额；按业务时间重排仅作补录解释，不替代账面余额。
+          </p>
         </div>
 
         <el-table
-          v-if="audit.events.length"
+          v-if="events.length"
           v-loading="loading"
-          :data="displayEvents"
+          :data="events"
           class="table-dense audit-drawer__table"
         >
-          <el-table-column label="时间" min-width="160">
-            <template #default="{ row }">{{ formatTime(row.time) }}</template>
+          <el-table-column :label="basisKey === 'business' ? '业务时间' : '入账时间'" min-width="160">
+            <template #default="{ row }">{{ formatTime(eventTime(row)) }}</template>
           </el-table-column>
           <el-table-column label="来源" width="92">
             <template #default="{ row }">
-              <span class="status-tag" :class="sourceClass(row)">{{ sourceLabel(row) }}</span>
+              <span class="status-tag" :class="sourceMeta(row).className">
+                {{ sourceMeta(row).label }}
+              </span>
             </template>
           </el-table-column>
-          <el-table-column label="库存增减" width="110" align="right">
+          <el-table-column label="库存增减" width="100" align="right">
             <template #default="{ row }">{{ formatDelta(row) }}</template>
           </el-table-column>
-          <el-table-column label="变动后库存" width="120" align="right">
-            <template #default="{ row }">{{ formatStock(row.stock_after) }}</template>
+          <el-table-column label="变动前" width="88" align="right">
+            <template #default="{ row }">{{ formatStock(row.stock_before, row.unit_snapshot) }}</template>
+          </el-table-column>
+          <el-table-column label="变动后" width="88" align="right">
+            <template #default="{ row }">{{ formatStock(row.stock_after, row.unit_snapshot) }}</template>
+          </el-table-column>
+          <el-table-column label="证据" width="92">
+            <template #default="{ row }">
+              <span
+                v-if="row.evidence_status !== 'trusted'"
+                class="status-tag"
+                :class="EVIDENCE_META[row.evidence_status]?.className ?? 'status-tag--warning'"
+              >
+                {{ EVIDENCE_META[row.evidence_status]?.label ?? row.evidence_status }}
+              </span>
+              <span v-else class="audit-drawer__muted">可信</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="来源单据" min-width="170">
+            <template #default="{ row }">
+              <div class="audit-drawer__source">
+                <span class="audit-drawer__source-no">{{ row.order_no || '—' }}</span>
+                <el-button
+                  v-if="row.can_open_source"
+                  link
+                  type="primary"
+                  @click="handleViewSource(row)"
+                >
+                  查看来源
+                </el-button>
+              </div>
+            </template>
           </el-table-column>
         </el-table>
 
         <EmptyState
           v-else
-          title="暂无库存变动记录"
-          description="该耗材还没有领用、红冲或入库记录，期初库存暂时无法反推。"
+          title="该时点没有账面记录"
+          description="所选时点早于首笔入账，或该耗材还没有库存事件。"
         />
       </template>
     </div>
 
     <template #footer>
       <div class="audit-drawer__footer">
-        <el-button v-if="sourceEvent" @click="handleViewSource">查看来源</el-button>
         <el-button type="primary" @click="visible = false">关闭</el-button>
       </div>
     </template>
@@ -266,7 +415,7 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
   display: flex;
   flex-direction: column;
   gap: 4px;
-  min-width: 120px;
+  min-width: 110px;
 }
 
 .audit-drawer__metric-label {
@@ -283,18 +432,113 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
   font-variant-numeric: tabular-nums;
 }
 
-.audit-drawer__cutoff {
+.audit-drawer__metric-value--alert {
+  color: var(--danger, #d9534f);
+}
+
+.audit-drawer__evidence {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-panel);
+}
+
+.audit-drawer__reasons {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 14px;
+  line-height: 22px;
+  color: var(--text-secondary);
+}
+
+.audit-drawer__checks {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.audit-drawer__check {
+  display: flex;
+  gap: 12px;
+  font-size: 14px;
+  line-height: 22px;
+}
+
+.audit-drawer__check-label {
+  flex: none;
+  color: var(--text-muted);
+}
+
+.audit-drawer__check-value {
+  color: var(--text-secondary);
+}
+
+.audit-drawer__basis {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.audit-drawer__basis-row {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 12px;
 }
 
-.audit-drawer__cutoff-stock {
+.audit-drawer__basis-label {
   font-size: 14px;
   line-height: 22px;
+  color: var(--text-muted);
+}
+
+.audit-drawer__basis-stocks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.audit-drawer__basis-stock {
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 13px;
+  line-height: 20px;
   color: var(--text-secondary);
   font-variant-numeric: tabular-nums;
+}
+
+.audit-drawer__basis-stock--active {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.audit-drawer__basis-note {
+  margin: 0;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--text-muted);
+}
+
+.audit-drawer__source {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.audit-drawer__source-no {
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--text-secondary);
+  word-break: break-all;
+}
+
+.audit-drawer__muted {
+  font-size: 13px;
+  color: var(--text-muted);
 }
 
 .audit-drawer__error {

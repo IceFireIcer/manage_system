@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
 from typing import Any
 
+from app import consumption as consumption_core
 from app.consumption import local_day_start, reconstruct_stock
 from app.models import Requisition, User
 from fastapi.testclient import TestClient
@@ -44,6 +45,7 @@ def _insert_flow(
     flow_status: str = "active",
     created_at: datetime | None = None,
     stock_after: int = 0,
+    reversal_of: int | None = None,
 ):
 
     record = Requisition(
@@ -53,6 +55,7 @@ def _insert_flow(
         stock_after=stock_after,
         type=flow_type,
         status=flow_status,
+        reversal_of=reversal_of,
         created_at=created_at or datetime.now().replace(microsecond=0),
     )
     db_session.add(record)
@@ -89,7 +92,8 @@ def test_summary_empty_window_returns_zero_totals(admin_client: TestClient) -> N
 
     assert data["window"] == 7
     assert data["items"] == []
-    assert data["totals"] == {"quantity": 0, "daily_rate": 0}
+    assert data["unit_totals"] == []
+    assert "totals" not in data
 
 
 def test_summary_net_consumption_and_zero_clamp(
@@ -126,8 +130,15 @@ def test_summary_net_consumption_and_zero_clamp(
     assert by_name["砂纸"]["quantity"] == 0
     assert by_name["砂纸"]["daily_rate"] == 0
     assert "手套" not in by_name
-    assert data["totals"]["quantity"] == 8
-    assert data["totals"]["daily_rate"] == 1.14
+    assert [row["unit"] for row in data["unit_totals"]] == ["卷"]
+    unit_total = data["unit_totals"][0]
+    assert unit_total["issued_quantity"] == 15
+    assert unit_total["reversed_quantity"] == 8
+    assert unit_total["cross_period_reversed_quantity"] == 0
+    assert unit_total["net_quantity"] == 8
+    assert unit_total["daily_rate"] == 1.14
+    assert unit_total["consumables"] == 2
+    assert "totals" not in data
 
 
 def test_summary_reversed_normal_flow_is_offset_by_reversal(
@@ -399,3 +410,93 @@ def test_audit_uses_execution_order_for_backdated_flow(
     assert [event["delta"] for event in data["events"]] == [-3, -5, 3, 10]
     assert [event["stock_after"] for event in data["events"]] == [97, 92, 95, 105]
     assert data["events"][1]["time"].startswith(backdated_at[:10])
+
+def test_summary_cross_period_reversal_is_reported_separately(
+    admin_client: TestClient, db_session
+) -> None:
+    item = _create_consumable(admin_client)
+    origin_created = local_day_start(10) + timedelta(hours=3)
+    now = datetime.now().replace(microsecond=0) - timedelta(minutes=1)
+    origin = _insert_flow(
+        db_session, consumable_id=item["id"], quantity=10, created_at=origin_created
+    )
+    _insert_flow(
+        db_session,
+        consumable_id=item["id"],
+        quantity=10,
+        flow_type="reversal",
+        created_at=now,
+        reversal_of=origin.id,
+    )
+
+    seven = admin_client.get(SUMMARY_URL, params={"window": 7}).json()
+    row = seven["items"][0]
+    assert row["issued_quantity"] == 0
+    assert row["reversed_quantity"] == 10
+    assert row["cross_period_reversed_quantity"] == 10
+    assert row["net_quantity"] == 0
+    assert row["quantity"] == 0
+    assert seven["provisioning_scope"]
+
+    thirty = admin_client.get(SUMMARY_URL, params={"window": 30}).json()
+    row30 = thirty["items"][0]
+    assert row30["issued_quantity"] == 10
+    assert row30["reversed_quantity"] == 10
+    assert row30["cross_period_reversed_quantity"] == 0
+    assert row30["net_quantity"] == 0
+
+
+def test_summary_unit_totals_never_cross_units(
+    admin_client: TestClient, db_session
+) -> None:
+    roll = _create_consumable(admin_client, name="焊丝", unit="卷")
+    sheet = _create_consumable(admin_client, name="砂纸", unit="张")
+    pen = _create_consumable(admin_client, name="记号笔", unit="支")
+    now = datetime.now().replace(microsecond=0) - timedelta(minutes=1)
+    _insert_flow(db_session, consumable_id=roll["id"], quantity=6, created_at=now)
+    _insert_flow(db_session, consumable_id=sheet["id"], quantity=4, created_at=now)
+    _insert_flow(db_session, consumable_id=pen["id"], quantity=2, created_at=now)
+
+    data = admin_client.get(SUMMARY_URL, params={"window": 7}).json()
+
+    totals = {row["unit"]: row for row in data["unit_totals"]}
+    assert set(totals) == {"卷", "张", "支"}
+    assert totals["卷"]["net_quantity"] == 6
+    assert totals["张"]["net_quantity"] == 4
+    assert totals["支"]["net_quantity"] == 2
+    assert totals["卷"]["consumables"] == 1
+    assert "totals" not in data
+
+
+def test_provisioning_net_attributes_cross_period_reversal_to_origin(
+    admin_client: TestClient, db_session
+) -> None:
+    item = _create_consumable(admin_client)
+    origin_created = local_day_start(10) + timedelta(hours=3)
+    now = datetime.now().replace(microsecond=0) - timedelta(minutes=1)
+    origin = _insert_flow(
+        db_session, consumable_id=item["id"], quantity=10, created_at=origin_created
+    )
+    _insert_flow(db_session, consumable_id=item["id"], quantity=4, created_at=now)
+    _insert_flow(
+        db_session,
+        consumable_id=item["id"],
+        quantity=10,
+        flow_type="reversal",
+        created_at=now,
+        reversal_of=origin.id,
+    )
+
+    flow = consumption_core.window_flow(
+        db_session,
+        item["id"],
+        local_day_start(6),
+        consumption_core.window_end(),
+    )
+
+    assert flow.issued == 4
+    assert flow.reversed_quantity == 10
+    assert flow.cross_period_reversed == 10
+    assert flow.net == 0
+    assert flow.attributed_reversed == 0
+    assert flow.attributed_net == 4
