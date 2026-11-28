@@ -5,14 +5,14 @@ from sqlalchemy.orm import Session
 
 from app import business_time, stock_alerts
 from app.database import get_db
-from app.deps import require_role
+from app.deps import require_permission
 from app.models import Consumable, User
 from app.schemas_alerts import StockAlertAction, StockAlertListOut, StockAlertOut
 
 router = APIRouter(prefix="/api/v1/inventory/alerts", tags=["inventory-alerts"])
 
-StaffUser = Annotated[User, Depends(require_role("teacher", "admin"))]
-AdminUser = Annotated[User, Depends(require_role("admin"))]
+StaffUser = Annotated[User, Depends(require_permission("inventory.manage"))]
+AdminUser = Annotated[User, Depends(require_permission("inventory.manage"))]
 
 
 def _response(
@@ -34,7 +34,7 @@ def list_stock_alerts(
     staff: StaffUser,
     include_completed: Annotated[bool, Query()] = False,
 ) -> StockAlertListOut:
-    return _response(db, staff.class_id, include_completed)
+    return _response(db, staff.active_class_id, include_completed)
 
 
 @router.post("/sync")
@@ -42,9 +42,9 @@ def sync_stock_alerts(
     db: Annotated[Session, Depends(get_db)],
     admin: AdminUser,
 ) -> StockAlertListOut:
-    stock_alerts.sync_class(db, admin.class_id, source="manual")
+    stock_alerts.sync_class(db, admin.active_class_id, source="manual")
     db.commit()
-    return _response(db, admin.class_id, False)
+    return _response(db, admin.active_class_id, False)
 
 
 @router.patch("/{consumable_id}")
@@ -54,7 +54,7 @@ def act_on_stock_alert(
     db: Annotated[Session, Depends(get_db)],
     admin: AdminUser,
 ) -> StockAlertOut:
-    alert = stock_alerts.get_alert(db, admin.class_id, consumable_id)
+    alert = stock_alerts.get_alert(db, admin.active_class_id, consumable_id)
     if alert is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="待办不存在"
@@ -75,7 +75,7 @@ def get_stock_alert(
     db: Annotated[Session, Depends(get_db)],
     staff: StaffUser,
 ) -> StockAlertOut:
-    alert = stock_alerts.get_alert(db, staff.class_id, consumable_id)
+    alert = stock_alerts.get_alert(db, staff.active_class_id, consumable_id)
     if alert is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="待办不存在"

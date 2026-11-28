@@ -9,6 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app import business_time, inventory_ledger, stock_alerts
+from app.class_scope import active_class_id
 from app.models import Consumable, ConsumableImportBatch, InventoryEvent, OperationLog, User
 from app.schemas_consumables import (
     CODE_MAX_LENGTH,
@@ -438,7 +439,7 @@ def _existing_batch(db: Session, request_id: str) -> ConsumableImportBatch | Non
 def execute_import(
     db: Session, *, operator: User, payload: LedgerImportRequest
 ) -> tuple[LedgerImportReceiptOut, bool]:
-    preview = build_preview(db, class_id=operator.class_id, payload=payload)
+    preview = build_preview(db, class_id=active_class_id(operator), payload=payload)
     request_id = payload.request_id or uuid.uuid4().hex
     signature = _signature(preview)
     existing = _existing_batch(db, request_id)
@@ -470,7 +471,7 @@ def execute_import(
         operator_id=operator.id,
         operator_name=operator.name,
         operator_role=operator.role,
-        class_id=operator.class_id,
+        class_id=active_class_id(operator),
         total_rows=preview.summary.total_rows,
         created_kinds=0,
         skipped_existing=preview.summary.existing_rows,
@@ -495,7 +496,7 @@ def execute_import(
                 location=row.location or "",
                 safety_stock=row.safety_stock,
                 current_stock=opening_stock,
-                class_id=operator.class_id,
+                class_id=active_class_id(operator),
                 status=STATUS_ENABLED,
                 created_at=now,
                 updated_at=now,

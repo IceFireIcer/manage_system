@@ -38,7 +38,8 @@ export const useUserStore = defineStore('user', {
     mustChangePassword: false,
     sessionEpoch: null,
     identityLocked: false,
-roles: [],
+    permissions: [],
+    roles: [],
     activeRole: null,
     availableClasses: [],
     activeClass: null,
@@ -49,6 +50,12 @@ roles: [],
     isLoggedIn: (state) => state.user !== null,
     roleName: (state) =>
       ROLE_NAMES[state.activeRole] ?? ROLE_NAMES[state.user?.role] ?? '未知',
+    hasPermission: (state) => (key) =>
+      (state.activeRole ?? state.user?.role) === 'super_admin' ||
+      state.permissions.includes(key),
+    hasAnyPermission: (state) => (keys) =>
+      (state.activeRole ?? state.user?.role) === 'super_admin' ||
+      keys.some((key) => state.permissions.includes(key)),
     hasMultipleRoles: (state) => state.roles.length > 1,
     canSwitchRole: (state) => state.roles.length > 1,
     canSwitchClass: (state) =>
@@ -87,6 +94,7 @@ roles: [],
       if (!this.user) return
       this.user = null
       this.roles = []
+      this.permissions = []
       this.activeRole = null
       this.activeClass = null
       this.fetched = true
@@ -110,6 +118,7 @@ roles: [],
       if (!data) return
       this.user = data.user ?? null
       this.roles = Array.isArray(data.roles) ? data.roles : []
+      this.permissions = Array.isArray(data.permissions) ? data.permissions : []
       this.activeRole = data.active_role ?? this.user?.role ?? null
       this.activeClass = data.active_class ?? null
       if (this.user && this.activeRole) {
@@ -157,6 +166,7 @@ roles: [],
           if (status === 401 || status === 403) {
             this.user = null
             this.roles = []
+            this.permissions = []
             this.activeRole = null
             this.activeClass = null
             this.fetched = true
@@ -249,6 +259,7 @@ async switchRole(role) {
     clearUser() {
       this.user = null
       this.roles = []
+      this.permissions = []
       this.activeRole = null
       this.activeClass = null
       this.fetched = true

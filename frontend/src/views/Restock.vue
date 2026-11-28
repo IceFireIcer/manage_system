@@ -52,7 +52,7 @@ const FEEDBACK_REASON_META = Object.fromEntries(
 const router = useRouter()
 const route = useRoute()
 const userStore = useUserStore()
-const isAdmin = computed(() => ['super_admin', 'admin'].includes(userStore.user?.role))
+const isAdmin = computed(() => userStore.hasPermission('restock.manage'))
 const canFeedback = computed(
   () => userStore.user?.role === 'teacher' || ['super_admin', 'admin'].includes(userStore.user?.role),
 )

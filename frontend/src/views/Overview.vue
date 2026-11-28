@@ -21,10 +21,11 @@ const router = useRouter()
 const userStore = useUserStore()
 const alertsStore = useAlertsStore()
 
-const isStudent = computed(() => userStore.user?.role === 'student')
-const isAdmin = computed(() => ['super_admin', 'admin'].includes(userStore.user?.role))
-const canAudit = computed(() => ['super_admin', 'teacher', 'admin'].includes(userStore.user?.role))
-const canManageAlerts = computed(() => isAdmin.value)
+const activeRole = computed(() => userStore.activeRole ?? userStore.user?.role)
+const isStudent = computed(() => activeRole.value === 'student')
+const isAdmin = computed(() => userStore.hasPermission('inventory.manage'))
+const canAudit = computed(() => userStore.hasPermission('inventory.manage'))
+const canManageAlerts = computed(() => userStore.hasPermission('inventory.manage'))
 
 const ALERT_STATUS_META = {
   open: { label: '待处理', tagClass: 'status-tag--warning' },

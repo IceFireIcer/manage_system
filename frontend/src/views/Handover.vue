@@ -5,8 +5,11 @@ import { useRouter } from 'vue-router'
 import api from '../api'
 import PageHeader from '../components/PageHeader.vue'
 import EmptyState from '../components/EmptyState.vue'
+import { useUserStore } from '../stores/user'
 
 const router = useRouter()
+const userStore = useUserStore()
+const canManage = computed(() => userStore.hasPermission('handover.manage'))
 
 const KIND_LABELS = {
   stock: '库存异常',
@@ -199,7 +202,7 @@ onBeforeUnmount(() => {
   <section class="handover">
     <PageHeader title="班委交接">
       <template #actions>
-        <el-button type="primary" @click="openCreate">生成交接清单</el-button>
+        <el-button v-if="canManage" type="primary" @click="openCreate">生成交接清单</el-button>
       </template>
     </PageHeader>
 
@@ -393,7 +396,7 @@ onBeforeUnmount(() => {
                   {{ item.confirmed_by_name }} {{ formatTime(item.confirmed_at) }}
                 </span>
                 <el-button
-                  v-else
+                  v-else-if="canManage"
                   size="small"
                   type="primary"
                   plain
@@ -418,6 +421,7 @@ onBeforeUnmount(() => {
       <template #footer>
         <el-button @click="detailVisible = false">关闭</el-button>
         <el-button
+          v-if="canManage"
           type="primary"
           :disabled="detail?.status === 'confirmed'"
           :loading="confirmingAll"

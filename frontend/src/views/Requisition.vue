@@ -41,8 +41,9 @@ const userStore = useUserStore()
 const route = useRoute()
 const router = useRouter()
 
-const isStudent = computed(() => userStore.user?.role === 'student')
-const isAdmin = computed(() => ['super_admin', 'admin'].includes(userStore.user?.role))
+const activeRole = computed(() => userStore.activeRole ?? userStore.user?.role)
+const isStudent = computed(() => activeRole.value === 'student')
+const isAdmin = computed(() => userStore.hasPermission('consumable.manage'))
 
 const locked = computed(() => {
   if (userStore.identityLocked) return true

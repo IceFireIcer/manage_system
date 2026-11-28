@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from app import business_time, inventory_audit, inventory_count, inventory_ledger, restock
 from app.agent import service
 from app.database import get_db
-from app.deps import CurrentUser, require_role
+from app.deps import effective_role, require_permission
 from app.models import (
     Consumable,
     InventoryCount,
@@ -70,8 +70,10 @@ from app.schemas_restock import (
 
 router = APIRouter(prefix="/api/v1/inventory", tags=["inventory"])
 
-StaffUser = Annotated[User, Depends(require_role("teacher", "admin"))]
-AdminUser = Annotated[User, Depends(require_role("admin"))]
+InventoryViewer = Annotated[User, Depends(require_permission("inventory.view"))]
+InventoryManager = Annotated[User, Depends(require_permission("inventory.manage"))]
+RestockViewer = Annotated[User, Depends(require_permission("restock.view"))]
+RestockManager = Annotated[User, Depends(require_permission("restock.manage"))]
 
 
 def _resolve_order_numbers(db: Session, events) -> tuple[dict, dict, dict]:
@@ -732,15 +734,15 @@ def _trace_consumable(db: Session, event, class_id: int) -> Consumable:
 def get_inventory_event_trace(
     event_id: int,
     db: Annotated[Session, Depends(get_db)],
-    staff: StaffUser,
+    staff: InventoryManager,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
 ) -> InventoryEventTraceOut:
     event = db.get(InventoryEvent, event_id)
-    if event is None or event.class_id != staff.class_id:
+    if event is None or event.class_id != staff.active_class_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="库存事件不存在"
         )
-    consumable = _trace_consumable(db, event, staff.class_id)
+    consumable = _trace_consumable(db, event, staff.active_class_id)
 
     requisition_numbers, order_numbers, restock_numbers = _resolve_order_numbers(
         db, [event]
@@ -755,21 +757,21 @@ def get_inventory_event_trace(
         _resolve_count_numbers(db, [event]),
     )
 
-    records = _requisition_chain(db, staff.class_id, event)
+    records = _requisition_chain(db, staff.active_class_id, event)
     order = None
     if (
         event.source_type == inventory_ledger.SOURCE_REQUISITION_ORDER
         and event.source_id is not None
     ):
         order = db.get(RequisitionOrder, event.source_id)
-        if order is not None and order.class_id != staff.class_id:
+        if order is not None and order.class_id != staff.active_class_id:
             order = None
 
     docs: list[TraceDocumentOut] = []
-    docs.extend(_requisition_docs(db, staff.class_id, event, records, order))
-    docs.extend(_requisition_extra_docs(db, staff.class_id, records))
-    docs.extend(_restock_docs(db, staff.class_id, event))
-    docs.extend(_count_docs(db, staff.class_id, event))
+    docs.extend(_requisition_docs(db, staff.active_class_id, event, records, order))
+    docs.extend(_requisition_extra_docs(db, staff.active_class_id, records))
+    docs.extend(_restock_docs(db, staff.active_class_id, event))
+    docs.extend(_count_docs(db, staff.active_class_id, event))
     docs.sort(
         key=lambda doc: (doc.at, TRACE_KIND_RANK.get(doc.kind, 99), doc.ref_id)
     )
@@ -818,12 +820,12 @@ def get_inventory_event_trace(
 @router.get("/overview", response_model_exclude_none=True)
 def get_inventory_overview(
     db: Annotated[Session, Depends(get_db)],
-    current_user: CurrentUser,
+    current_user: InventoryViewer,
 ) -> InventoryOverviewOut:
     consumables = db.scalars(
         select(Consumable).where(
             Consumable.status == STATUS_ENABLED,
-            Consumable.class_id == current_user.class_id,
+            Consumable.class_id == current_user.active_class_id,
         )
     ).all()
 
@@ -863,13 +865,13 @@ def get_inventory_overview(
                 Requisition.status == "active",
                 Requisition.created_at >= today_start,
                 Requisition.created_at < tomorrow_start,
-                Requisition.class_id == current_user.class_id,
+                Requisition.class_id == current_user.active_class_id,
             )
         )
         or 0
     )
 
-    if current_user.role == "student":
+    if effective_role(current_user) == "student":
         return InventoryOverviewOut(items=items)
 
     return InventoryOverviewOut(
@@ -978,7 +980,7 @@ def _feedback_log(
 @router.get("/suggestions")
 def list_suggestions(
     db: Annotated[Session, Depends(get_db)],
-    _staff: StaffUser,
+    _staff: RestockViewer,
 ) -> SuggestionListOut:
     return _attach_latest_feedback(db, service.inspect(db))
 
@@ -986,7 +988,7 @@ def list_suggestions(
 @router.post("/suggestions/refresh")
 def refresh_suggestions(
     db: Annotated[Session, Depends(get_db)],
-    _staff: StaffUser,
+    _staff: RestockManager,
 ) -> SuggestionListOut:
     service.clear_cache()
     return _attach_latest_feedback(db, service.inspect(db))
@@ -995,7 +997,7 @@ def refresh_suggestions(
 @router.get("/suggestions/feedback")
 def list_suggestion_feedback(
     db: Annotated[Session, Depends(get_db)],
-    staff: StaffUser,
+    staff: RestockViewer,
     consumable_id: Annotated[int | None, Query(gt=0)] = None,
     date_from: Annotated[date | None, Query(alias="from")] = None,
     date_to: Annotated[date | None, Query(alias="to")] = None,
@@ -1007,7 +1009,7 @@ def list_suggestion_feedback(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=business_time.REVERSE_RANGE_DETAIL,
         )
-    conditions = [SuggestionFeedback.class_id == staff.class_id]
+    conditions = [SuggestionFeedback.class_id == staff.active_class_id]
     if consumable_id is not None:
         conditions.append(SuggestionFeedback.consumable_id == consumable_id)
     if date_from is not None:
@@ -1047,10 +1049,10 @@ def create_suggestion_feedback(
     consumable_id: int,
     payload: SuggestionFeedbackCreate,
     db: Annotated[Session, Depends(get_db)],
-    staff: StaffUser,
+    staff: RestockManager,
 ) -> SuggestionFeedbackOut:
     consumable = db.get(Consumable, consumable_id)
-    if consumable is None or consumable.class_id != staff.class_id:
+    if consumable is None or consumable.class_id != staff.active_class_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="耗材不存在"
         )
@@ -1114,11 +1116,11 @@ def create_suggestion_feedback(
 @router.get("/ledger")
 def get_inventory_ledger(
     db: Annotated[Session, Depends(get_db)],
-    staff: StaffUser,
+    staff: InventoryManager,
     consumable_id: Annotated[int, Query(gt=0)],
 ) -> InventoryLedgerOut:
     consumable = db.get(Consumable, consumable_id)
-    if consumable is None or consumable.class_id != staff.class_id:
+    if consumable is None or consumable.class_id != staff.active_class_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="耗材不存在"
         )
@@ -1220,13 +1222,13 @@ order_no=_event_order_no(
 @router.get("/audit")
 def get_inventory_audit(
     db: Annotated[Session, Depends(get_db)],
-    staff: StaffUser,
+    staff: InventoryManager,
     consumable_id: Annotated[int, Query(gt=0)],
     posting_cutoff: Annotated[datetime | None, Query()] = None,
     business_cutoff: Annotated[datetime | None, Query()] = None,
 ) -> InventoryAuditOut:
     consumable = db.get(Consumable, consumable_id)
-    if consumable is None or consumable.class_id != staff.class_id:
+    if consumable is None or consumable.class_id != staff.active_class_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="耗材不存在"
         )
@@ -1356,7 +1358,7 @@ def get_inventory_audit(
 def restock_consumable(
     payload: RestockCreate,
     db: Annotated[Session, Depends(get_db)],
-    admin: AdminUser,
+    admin: RestockManager,
 ) -> RestockOut:
     order = restock.create_restock_order(
         db,
@@ -1398,7 +1400,7 @@ def restock_consumable(
 def create_restock_order(
     payload: RestockOrderCreate,
     db: Annotated[Session, Depends(get_db)],
-    admin: AdminUser,
+    admin: RestockManager,
 ) -> JSONResponse:
     request_id = payload.request_id or uuid.uuid4().hex
     existing = restock.get_order_by_request(db, request_id)
@@ -1435,10 +1437,10 @@ def create_restock_order(
 def get_restock_request_status(
     request_id: str,
     db: Annotated[Session, Depends(get_db)],
-    staff: StaffUser,
+    staff: RestockViewer,
 ) -> RestockRequestStatusOut:
     order = restock.get_order_by_request(db, request_id)
-    if order is None or order.class_id != staff.class_id:
+    if order is None or order.class_id != staff.active_class_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="请求不存在"
         )
@@ -1449,10 +1451,10 @@ def get_restock_request_status(
 def get_restock_receipt(
     order_no: str,
     db: Annotated[Session, Depends(get_db)],
-    staff: StaffUser,
+    staff: RestockViewer,
 ) -> RestockReceiptOut:
     order = restock.get_order_by_no(db, order_no)
-    if order is None or order.class_id != staff.class_id:
+    if order is None or order.class_id != staff.active_class_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="入库单不存在"
         )
@@ -1469,10 +1471,10 @@ def correct_restock_order(
     order_no: str,
     payload: RestockCorrectionCreate,
     db: Annotated[Session, Depends(get_db)],
-    admin: AdminUser,
+    admin: RestockManager,
 ) -> RestockCorrectionOut:
     order = restock.get_order_by_no(db, order_no)
-    if order is None or order.class_id != admin.class_id:
+    if order is None or order.class_id != admin.active_class_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="入库单不存在"
         )
@@ -1493,10 +1495,10 @@ def update_suggestion_disposition(
     consumable_id: int,
     payload: SuggestionDispositionUpdate,
     db: Annotated[Session, Depends(get_db)],
-    admin: AdminUser,
+    admin: RestockManager,
 ) -> SuggestionDispositionOut:
     consumable = db.get(Consumable, consumable_id)
-    if consumable is None or consumable.class_id != admin.class_id:
+    if consumable is None or consumable.class_id != admin.active_class_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="耗材不存在"
         )
@@ -1515,7 +1517,7 @@ def update_suggestion_disposition(
 def create_inventory_count(
     payload: InventoryCountCreate,
     db: Annotated[Session, Depends(get_db)],
-    admin: AdminUser,
+    admin: InventoryManager,
 ) -> JSONResponse:
     count, created = inventory_count.create_count(
         db, payload=payload, operator=admin
@@ -1531,10 +1533,10 @@ def create_inventory_count(
 def get_inventory_count(
     order_no: str,
     db: Annotated[Session, Depends(get_db)],
-    staff: StaffUser,
+    staff: InventoryManager,
 ) -> InventoryCountOut:
     count = inventory_count.get_count_by_no(db, order_no)
-    if count is None or count.class_id != staff.class_id:
+    if count is None or count.class_id != staff.active_class_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="盘点单不存在"
         )
@@ -1546,10 +1548,10 @@ def update_inventory_count_lines(
     order_no: str,
     payload: InventoryCountLinesUpdate,
     db: Annotated[Session, Depends(get_db)],
-    admin: AdminUser,
+    admin: InventoryManager,
 ) -> InventoryCountOut:
     count = inventory_count.get_count_by_no(db, order_no)
-    if count is None or count.class_id != admin.class_id:
+    if count is None or count.class_id != admin.active_class_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="盘点单不存在"
         )
@@ -1563,10 +1565,10 @@ def update_inventory_count_lines(
 def post_inventory_count(
     order_no: str,
     db: Annotated[Session, Depends(get_db)],
-    admin: AdminUser,
+    admin: InventoryManager,
 ) -> JSONResponse:
     count = inventory_count.get_count_by_no(db, order_no)
-    if count is None or count.class_id != admin.class_id:
+    if count is None or count.class_id != admin.active_class_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="盘点单不存在"
         )

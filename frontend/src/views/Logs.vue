@@ -119,7 +119,7 @@ const SUMMARY_FIELDS = {
 
 const router = useRouter()
 const userStore = useUserStore()
-const isAdmin = computed(() => ['super_admin', 'admin'].includes(userStore.user?.role))
+const isAdmin = computed(() => ['admin', 'super_admin'].includes(userStore.activeRole ?? userStore.user?.role))
 const actionOptions = computed(() =>
   isAdmin.value ? ACTIONS : ACTIONS.filter((item) => !SENSITIVE_ACTIONS.has(item.value)),
 )

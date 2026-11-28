@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from app import business_time
 from app.auth_logs import trim_audit_logs
 from app.database import get_db
-from app.deps import require_role
+from app.deps import effective_role, require_permission
 from app.models import OperationLog, User
 from app.operation_log import (
     SENSITIVE_ACTIONS,
@@ -71,7 +71,7 @@ ADMIN_EXPORT_COLUMNS = (
     "remark",
 )
 
-StaffUser = Annotated[User, Depends(require_role("teacher", "admin"))]
+StaffUser = Annotated[User, Depends(require_permission("log.view"))]
 
 
 def _build_filters(
@@ -86,7 +86,7 @@ def _build_filters(
     end_date: date | None,
 ) -> list:
     filters = []
-    if current_user.role != "admin":
+    if effective_role(current_user) not in ("admin", "super_admin"):
         if action is not None and is_sensitive_query(action):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -245,7 +245,7 @@ def list_operation_logs(
         .offset((page - 1) * page_size)
         .limit(page_size)
     ).all()
-    is_admin = current_user.role == "admin"
+    is_admin = effective_role(current_user) in ("admin", "super_admin")
     items = [_serialize(log, joined_name, is_admin) for log, joined_name in rows]
     return OperationLogPageOut(
         items=items, total=total, page=page, page_size=page_size
@@ -290,7 +290,7 @@ def export_operation_logs(
         .order_by(OperationLog.created_at.desc(), OperationLog.id.desc())
         .limit(MAX_EXPORT_ROWS)
     ).all()
-    is_admin = current_user.role == "admin"
+    is_admin = effective_role(current_user) == "admin"
     columns = _export_columns(is_admin)
     content = _csv_text(columns, list(rows))
     record_operation(

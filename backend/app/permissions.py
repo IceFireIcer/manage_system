@@ -97,7 +97,7 @@ CATALOG: Final[tuple[PermissionSpec, ...]] = (
     ),
     PermissionSpec(
         "consumable.view", "耗材目录", "consumable", SCOPE_CLASS,
-        _TEACHER_ADMIN, _TEACHER_ADMIN, (ROLE_ADMIN,),
+        _ALL_ROLES, _ALL_ROLES, (ROLE_STUDENT, ROLE_ADMIN),
     ),
     PermissionSpec(
         "consumable.manage", "耗材维护", "consumable", SCOPE_CLASS,
@@ -181,7 +181,7 @@ CATALOG: Final[tuple[PermissionSpec, ...]] = (
     ),
     PermissionSpec(
         "account.manage", "账号管理", "account", SCOPE_CLASS,
-        (ROLE_TEACHER,), (ROLE_TEACHER,),
+        _TEACHER_ADMIN, _TEACHER_ADMIN, (ROLE_ADMIN,),
     ),
     PermissionSpec(
         "permission.view", "权限查看", "permission", SCOPE_CLASS,

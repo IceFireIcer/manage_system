@@ -87,9 +87,7 @@ const userTriggerRef = ref(null)
 const mainRef = ref(null)
 
 const isMobile = computed(() => viewportWidth.value < 768)
-const canSeeAlerts = computed(() =>
-  ['super_admin', 'teacher', 'admin'].includes(effectiveRole.value),
-)
+const canSeeAlerts = computed(() => userStore.hasPermission('inventory.manage'))
 
 const currentTitle = computed(() => {
   const nav = route.meta?.nav
@@ -121,8 +119,10 @@ const navGroups = computed(() => {
     const nav = record.meta?.nav
     if (!nav) continue
     if (nav.group === 'dashboard') continue
+    const required = record.meta.permissions
+    if (required && !userStore.hasAnyPermission(required)) continue
     const allowedRoles = record.meta.roles
-    if (allowedRoles && role !== 'super_admin' && !allowedRoles.includes(role)) continue
+    if (!required && allowedRoles && role !== 'super_admin' && !allowedRoles.includes(role)) continue
     const groupMeta = GROUP_META[nav.group]
     if (!groupMeta) continue
 
@@ -342,8 +342,13 @@ async function handleRoleSwitch(nextRole) {
     return
   }
   ElMessage.success(`已切换为${ROLE_LABEL[nextRole] ?? nextRole}视角`)
+  const required = route.meta?.permissions
+  if (required && !userStore.hasAnyPermission(required)) {
+    router.push('/dashboard')
+    return
+  }
   const allowedRoles = route.meta?.roles
-  if (allowedRoles && nextRole !== 'super_admin' && !allowedRoles.includes(nextRole)) {
+  if (!required && allowedRoles && nextRole !== 'super_admin' && !allowedRoles.includes(nextRole)) {
     router.push('/dashboard')
     return
   }

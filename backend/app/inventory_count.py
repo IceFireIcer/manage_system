@@ -8,6 +8,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app import business_time, inventory_ledger, stock_alerts
+from app.class_scope import active_class_id
 from app.models import (
     Consumable,
     InventoryCount,
@@ -38,7 +39,7 @@ def _resolve_member(
     member = db.get(User, user_id)
     if (
         member is None
-        or member.class_id != operator.class_id
+        or member.class_id != active_class_id(operator)
         or member.role not in STAFF_ROLES
         or member.status != "enabled"
     ):
@@ -83,7 +84,7 @@ def _resolve_repeat(
     db: Session, existing: InventoryCount, payload: InventoryCountCreate, operator: User
 ) -> InventoryCount:
     if (
-        existing.class_id != operator.class_id
+        existing.class_id != active_class_id(operator)
         or existing.request_id != payload.request_id
         or existing.reviewer_id != (payload.reviewer_id or operator.id)
         or existing.remark != payload.remark
@@ -147,7 +148,7 @@ def create_count(
         operator_id=operator.id,
         operator_name=operator.name,
         operator_role=operator.role,
-        class_id=operator.class_id,
+        class_id=active_class_id(operator),
         remark=payload.remark,
         created_at=timestamp,
         updated_at=timestamp,
@@ -166,7 +167,7 @@ def create_count(
 
     for row_number, item in enumerate(payload.lines, start=1):
         consumable = db.get(Consumable, item.consumable_id, with_for_update=True)
-        if consumable is None or consumable.class_id != operator.class_id:
+        if consumable is None or consumable.class_id != active_class_id(operator):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"耗材不存在（id={item.consumable_id}）",

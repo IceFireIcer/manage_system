@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app import business_time, restock
 from app.database import get_db
-from app.deps import require_role
+from app.deps import require_permission
 from app.models import (
     Consumable,
     HandoverChecklist,
@@ -56,7 +56,8 @@ COURSE_RISK_LEAD_DAYS = 1
 COURSE_RISK_LEVELS = ("insufficient", "critical")
 EXPIRY_LABEL = "未启用"
 
-StaffUser = Annotated[User, Depends(require_role("teacher", "admin"))]
+HandoverViewer = Annotated[User, Depends(require_permission("handover.view"))]
+HandoverManager = Annotated[User, Depends(require_permission("handover.manage"))]
 
 
 def _iso(value) -> str | None:
@@ -308,13 +309,13 @@ def _resolve_incoming(
         member = db.scalars(
             select(User).where(
                 User.account == payload.incoming_account,
-                User.class_id == staff.class_id,
+                User.class_id == staff.active_class_id,
                 User.status == "enabled",
             )
         ).first()
     else:
         return None, payload.incoming_name, None
-    if member is None or member.class_id != staff.class_id or member.status != "enabled":
+    if member is None or member.class_id != staff.active_class_id or member.status != "enabled":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="接班账号不存在或不属于本班",
@@ -385,7 +386,7 @@ def _detail(db: Session, checklist: HandoverChecklist) -> HandoverChecklistOut:
 
 def _get_checklist(db: Session, checklist_id: int, user: User) -> HandoverChecklist:
     checklist = db.get(HandoverChecklist, checklist_id)
-    if checklist is None or checklist.class_id != user.class_id:
+    if checklist is None or checklist.class_id != user.active_class_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="交接清单不存在"
         )
@@ -396,20 +397,20 @@ def _get_checklist(db: Session, checklist_id: int, user: User) -> HandoverCheckl
 def create_checklist(
     payload: HandoverChecklistCreate,
     db: Annotated[Session, Depends(get_db)],
-    staff: StaffUser,
+    staff: HandoverManager,
 ) -> HandoverChecklistOut:
     incoming_id, incoming_name, incoming_account = _resolve_incoming(db, payload, staff)
     version = (
         db.scalar(
             select(func.max(HandoverChecklist.version)).where(
-                HandoverChecklist.class_id == staff.class_id
+                HandoverChecklist.class_id == staff.active_class_id
             )
         )
         or 0
     ) + 1
     now = business_time.now().replace(microsecond=0)
     checklist = HandoverChecklist(
-        class_id=staff.class_id,
+        class_id=staff.active_class_id,
         version=version,
         status=STATUS_PENDING,
         outgoing_id=staff.id,
@@ -423,7 +424,7 @@ def create_checklist(
     )
     db.add(checklist)
     db.flush()
-    for seq, draft in enumerate(_collect_drafts(db, staff.class_id), start=1):
+    for seq, draft in enumerate(_collect_drafts(db, staff.active_class_id), start=1):
         db.add(
             HandoverItem(
                 checklist_id=checklist.id,
@@ -445,11 +446,11 @@ def create_checklist(
 @router.get("/checklists")
 def list_checklists(
     db: Annotated[Session, Depends(get_db)],
-    staff: StaffUser,
+    staff: HandoverViewer,
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
 ) -> HandoverChecklistPageOut:
-    filters = [HandoverChecklist.class_id == staff.class_id]
+    filters = [HandoverChecklist.class_id == staff.active_class_id]
     total = (
         db.scalar(select(func.count()).select_from(HandoverChecklist).where(*filters))
         or 0
@@ -491,7 +492,7 @@ def list_checklists(
 def get_checklist(
     checklist_id: int,
     db: Annotated[Session, Depends(get_db)],
-    staff: StaffUser,
+    staff: HandoverViewer,
 ) -> HandoverChecklistOut:
     return _detail(db, _get_checklist(db, checklist_id, staff))
 
@@ -501,7 +502,7 @@ def confirm_item(
     checklist_id: int,
     item_id: int,
     db: Annotated[Session, Depends(get_db)],
-    staff: StaffUser,
+    staff: HandoverManager,
 ) -> HandoverItemOut:
     checklist = _get_checklist(db, checklist_id, staff)
     if checklist.status == STATUS_CONFIRMED:
@@ -532,7 +533,7 @@ def confirm_item(
 def confirm_checklist(
     checklist_id: int,
     db: Annotated[Session, Depends(get_db)],
-    staff: StaffUser,
+    staff: HandoverManager,
 ) -> HandoverChecklistOut:
     checklist = _get_checklist(db, checklist_id, staff)
     if checklist.status == STATUS_CONFIRMED:
@@ -567,16 +568,16 @@ def confirm_checklist(
 @router.get("/health")
 def get_handover_health(
     db: Annotated[Session, Depends(get_db)],
-    staff: StaffUser,
+    staff: HandoverViewer,
 ) -> HandoverHealthOut:
-    stock_diff_count, stock_diff_available = _stock_diff_health(db, staff.class_id)
+    stock_diff_count, stock_diff_available = _stock_diff_health(db, staff.active_class_id)
     return HandoverHealthOut(
         generated_at=business_time.now().replace(microsecond=0),
-        class_id=staff.class_id,
+        class_id=staff.active_class_id,
         stock_diff_count=stock_diff_count,
         stock_diff_available=stock_diff_available,
-        open_incident_count=_open_incident_health(db, staff.class_id),
-        course_risk_count=_course_risk_health(db, staff.class_id),
+        open_incident_count=_open_incident_health(db, staff.active_class_id),
+        course_risk_count=_course_risk_health(db, staff.active_class_id),
         expiry=HandoverHealthExpiryOut(
             supported=False,
             label=EXPIRY_LABEL,

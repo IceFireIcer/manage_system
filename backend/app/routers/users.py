@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from app import roster_import
 from app.database import get_db
-from app.deps import require_role
+from app.deps import effective_role, require_permission
 from app.models import User
 from app.operation_log import record_operation, user_label
 from app.roles import ensure_grants
@@ -162,11 +162,13 @@ def _user_snapshot(user: User) -> str:
 @router.get("")
 def list_users(
     db: Annotated[Session, Depends(get_db)],
-    _current_user: Annotated[User, Depends(require_role("admin"))],
+    _current_user: Annotated[User, Depends(require_permission("account.view"))],
     role: str | None = None,
     user_status: Annotated[str | None, Query(alias="status")] = None,
 ) -> list[UserListItem]:
     statement = select(User).order_by(User.id)
+    if effective_role(_current_user) != "super_admin":
+        statement = statement.where(User.class_id == _current_user.active_class_id)
     if role is not None:
         statement = statement.where(User.role == role)
     if user_status is not None:
@@ -177,10 +179,12 @@ def list_users(
 @router.get("/options")
 def list_user_options(
     db: Annotated[Session, Depends(get_db)],
-    _current_user: Annotated[User, Depends(require_role("teacher", "admin"))],
+    _current_user: Annotated[User, Depends(require_permission("account.view"))],
     detail: bool = False,
 ):
     statement = select(User).where(User.status == "enabled").order_by(User.id)
+    if effective_role(_current_user) != "super_admin":
+        statement = statement.where(User.class_id == _current_user.active_class_id)
     users = db.scalars(statement).all()
     if detail:
         return [UserDetailOption.model_validate(user) for user in users]
@@ -190,9 +194,11 @@ def list_user_options(
 @router.get("/history-options")
 def list_history_user_options(
     db: Annotated[Session, Depends(get_db)],
-    _current_user: Annotated[User, Depends(require_role("teacher", "admin"))],
+    _current_user: Annotated[User, Depends(require_permission("account.view"))],
 ) -> list[HistoryUserOption]:
     statement = select(User).order_by(User.id)
+    if effective_role(_current_user) != "super_admin":
+        statement = statement.where(User.class_id == _current_user.active_class_id)
     return db.scalars(statement).all()
 
 
@@ -200,7 +206,7 @@ def list_history_user_options(
 def create_user(
     payload: UserCreate,
     db: Annotated[Session, Depends(get_db)],
-    current_user: Annotated[User, Depends(require_role("admin"))],
+    current_user: Annotated[User, Depends(require_permission("account.manage"))],
 ) -> UserListItem:
     if payload.role != "student":
         raise HTTPException(
@@ -219,6 +225,7 @@ def create_user(
         password_hash=hash_password(payload.password),
         name=payload.name,
         role="student",
+        class_id=current_user.active_class_id,
         status="enabled",
         must_change_password=True,
     )
@@ -236,10 +243,13 @@ def update_user(
     user_id: int,
     payload: UserUpdate,
     db: Annotated[Session, Depends(get_db)],
-    current_user: Annotated[User, Depends(require_role("admin"))],
+    current_user: Annotated[User, Depends(require_permission("account.manage"))],
 ) -> UserListItem:
     user = db.get(User, user_id)
-    if user is None:
+    if user is None or (
+        effective_role(current_user) != "super_admin"
+        and user.class_id != current_user.active_class_id
+    ):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="用户不存在",
@@ -302,10 +312,13 @@ def update_user(
 def reset_student_password(
     user_id: int,
     db: Annotated[Session, Depends(get_db)],
-    current_user: Annotated[User, Depends(require_role("admin"))],
+    current_user: Annotated[User, Depends(require_permission("account.manage"))],
 ) -> PasswordResetOut:
     user = db.get(User, user_id)
-    if user is None:
+    if user is None or (
+        effective_role(current_user) != "super_admin"
+        and user.class_id != current_user.active_class_id
+    ):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="用户不存在",
@@ -350,7 +363,7 @@ def update_user_status(
     user_id: int,
     payload: StatusUpdate,
     db: Annotated[Session, Depends(get_db)],
-    current_user: Annotated[User, Depends(require_role("admin"))],
+    current_user: Annotated[User, Depends(require_permission("account.manage"))],
 ) -> UserListItem:
     if payload.status not in ALLOWED_STATUSES:
         raise HTTPException(
@@ -358,7 +371,10 @@ def update_user_status(
             detail="状态仅允许 enabled 或 disabled",
         )
     user = db.get(User, user_id)
-    if user is None:
+    if user is None or (
+        effective_role(current_user) != "super_admin"
+        and user.class_id != current_user.active_class_id
+    ):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="用户不存在",
@@ -386,7 +402,7 @@ def update_user_status(
 
 @router.get("/import/template")
 def download_roster_template(
-    _current_user: Annotated[User, Depends(require_role("admin"))],
+    _current_user: Annotated[User, Depends(require_permission("account.manage"))],
 ) -> Response:
     return Response(
         content=ROSTER_TEMPLATE,
@@ -401,10 +417,10 @@ def download_roster_template(
 def preview_roster_import(
     payload: RosterImportRequest,
     db: Annotated[Session, Depends(get_db)],
-    admin: Annotated[User, Depends(require_role("admin"))],
+    admin: Annotated[User, Depends(require_permission("account.manage"))],
 ) -> RosterImportPreviewOut:
     return roster_import.build_preview(
-        db, class_id=admin.class_id, payload=payload
+        db, class_id=admin.active_class_id, payload=payload
     )
 
 
@@ -412,7 +428,7 @@ def preview_roster_import(
 def import_roster(
     payload: RosterImportRequest,
     db: Annotated[Session, Depends(get_db)],
-    admin: Annotated[User, Depends(require_role("admin"))],
+    admin: Annotated[User, Depends(require_permission("account.manage"))],
 ) -> JSONResponse:
     receipt, created = roster_import.execute_import(
         db, operator=admin, payload=payload
@@ -427,8 +443,8 @@ def import_roster(
 def get_roster_import_batch(
     batch_id: int,
     db: Annotated[Session, Depends(get_db)],
-    admin: Annotated[User, Depends(require_role("admin"))],
+    admin: Annotated[User, Depends(require_permission("account.manage"))],
 ) -> RosterImportReceiptOut:
     return roster_import.get_receipt(
-        db, batch_id=batch_id, class_id=admin.class_id
+        db, batch_id=batch_id, class_id=admin.active_class_id
     )

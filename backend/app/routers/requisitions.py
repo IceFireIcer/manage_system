@@ -19,7 +19,7 @@ from app.agent import service
 from app.auth_logs import trim_audit_logs
 from app.database import get_db
 from app.db import concurrency
-from app.deps import CurrentUser, require_role
+from app.deps import effective_role, require_permission
 from app.models import (
     Consumable,
     Course,
@@ -137,7 +137,11 @@ CLASS_SIGNAL_WINDOWS = (7, 30)
 CLASS_SIGNAL_MIN_REQUESTERS = 5
 CLASS_SIGNAL_MIN_FLOWS = 3
 
-ManagerUser = Annotated[User, Depends(require_role("teacher", "admin"))]
+RecordViewer = Annotated[User, Depends(require_permission("record.view"))]
+RecordExporter = Annotated[User, Depends(require_permission("record.export"))]
+RequisitionCreator = Annotated[User, Depends(require_permission("requisition.create"))]
+RequisitionApprover = Annotated[User, Depends(require_permission("requisition.approve"))]
+ReportViewer = Annotated[User, Depends(require_permission("report.view"))]
 
 
 class RowError(Exception):
@@ -308,24 +312,24 @@ def _resolve_owner(
 ) -> User:
     if payload.user_id is None or payload.user_id == current_user.id:
         return current_user
-    if current_user.role == "student":
+    if effective_role(current_user) == "student":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="学生只能登记本人领用，不能代他人登记",
         )
     owner = db.get(User, payload.user_id)
-    if owner is None:
+    if owner is None or owner.class_id != current_user.active_class_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="领用人不存在",
+            detail="领用人不存在或不属于当前班级",
         )
     return owner
 
 
 def _can_view_order(order: RequisitionOrder, current_user: User) -> bool:
-    if current_user.role == "student":
+    if effective_role(current_user) == "student":
         return order.owner_id == current_user.id
-    return order.class_id == current_user.class_id
+    return order.class_id == current_user.active_class_id
 
 
 def _build_query(
@@ -343,10 +347,10 @@ def _build_query(
         .join(Consumable, Requisition.consumable_id == Consumable.id)
         .join(User, Requisition.user_id == User.id)
     )
-    if current_user.role == "student":
+    if effective_role(current_user) == "student":
         query = query.where(Requisition.user_id == current_user.id)
     else:
-        query = query.where(Requisition.class_id == current_user.class_id)
+        query = query.where(Requisition.class_id == current_user.active_class_id)
         if user_id is not None:
             query = query.where(Requisition.user_id == user_id)
     if consumable_id is not None:
@@ -684,9 +688,9 @@ def _correction_out(
 
 
 def _can_view_requisition(requisition: Requisition, current_user: User) -> bool:
-    if current_user.role == "student":
+    if effective_role(current_user) == "student":
         return requisition.user_id == current_user.id
-    return requisition.class_id == current_user.class_id
+    return requisition.class_id == current_user.active_class_id
 
 
 def _consume_params(
@@ -866,7 +870,7 @@ def _footprint_supports(
 @router.get("")
 def list_requisitions(
     db: Annotated[Session, Depends(get_db)],
-    current_user: CurrentUser,
+    current_user: RecordViewer,
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
     filters: Annotated[dict, Depends(_consume_params)] = None,
@@ -914,7 +918,7 @@ def _export_scope(db: Session, query) -> tuple[int, datetime | None, datetime | 
 @router.get("/export/preview")
 def preview_requisitions_csv(
     db: Annotated[Session, Depends(get_db)],
-    staff: Annotated[User, Depends(require_role("teacher", "admin"))],
+    staff: RecordExporter,
     filters: Annotated[dict, Depends(_consume_params)] = None,
 ) -> RequisitionExportPreviewOut:
     query = _build_query(db=db, current_user=staff, **filters)
@@ -928,14 +932,14 @@ def preview_requisitions_csv(
         last_at=last_at,
         limit=CSV_EXPORT_LIMIT,
         segments=segments,
-        fields=list(_export_columns(staff.role == "admin")),
+        fields=list(_export_columns(effective_role(staff) in ("admin", "super_admin"))),
     )
 
 
 @router.get("/export")
 def export_requisitions_csv(
     db: Annotated[Session, Depends(get_db)],
-    staff: Annotated[User, Depends(require_role("teacher", "admin"))],
+    staff: RecordExporter,
     filters: Annotated[dict, Depends(_consume_params)] = None,
     include_header: Annotated[bool, Query()] = True,
     before_created_at: Annotated[datetime | None, Query()] = None,
@@ -971,7 +975,7 @@ def export_requisitions_csv(
     rows = rows[:CSV_EXPORT_LIMIT]
 
     records = [record for record, _consumable, _user in rows]
-    is_admin = staff.role == "admin"
+    is_admin = effective_role(staff) in ("admin", "super_admin")
     columns = _export_columns(is_admin)
     related = _export_related(db, records)
     accounts = _export_operator_accounts(db, records) if is_admin else {}
@@ -1039,14 +1043,14 @@ def export_requisitions_csv(
 @router.get("/consumable-options")
 def list_consumable_options(
     db: Annotated[Session, Depends(get_db)],
-    current_user: CurrentUser,
+    current_user: RequisitionCreator,
 ) -> list[RequisitionConsumableOptionOut]:
     query = (
         select(Consumable)
         .join(Requisition, Requisition.consumable_id == Consumable.id)
-        .where(Requisition.class_id == current_user.class_id)
+        .where(Requisition.class_id == current_user.active_class_id)
     )
-    if current_user.role == "student":
+    if effective_role(current_user) == "student":
         query = query.where(Requisition.user_id == current_user.id)
     rows = db.scalars(query.distinct().order_by(Consumable.id)).all()
     return [
@@ -1064,7 +1068,7 @@ def list_consumable_options(
 @router.get("/my-footprint")
 def get_my_footprint(
     db: Annotated[Session, Depends(get_db)],
-    current_user: CurrentUser,
+    current_user: RecordViewer,
     window: Annotated[int, Query()] = DEFAULT_FOOTPRINT_WINDOW,
 ) -> FootprintOut:
     if window not in FOOTPRINT_WINDOWS:
@@ -1087,7 +1091,7 @@ def get_my_footprint(
         else {}
     )
     supports = _footprint_supports(
-        db, consumable_ids, current_user.class_id, consumables
+        db, consumable_ids, current_user.active_class_id, consumables
     )
 
     items: list[FootprintItemOut] = []
@@ -1212,7 +1216,7 @@ def _class_signal_change_ratio(current: int, previous: int) -> float | None:
 @router.get("/class-signals")
 def get_class_signals(
     db: Annotated[Session, Depends(get_db)],
-    current_user: CurrentUser,
+    current_user: ReportViewer,
     window: Annotated[int, Query()] = consumption_core.DEFAULT_WINDOW,
 ) -> ClassSignalsOut:
     if window not in CLASS_SIGNAL_WINDOWS:
@@ -1227,7 +1231,7 @@ def get_class_signals(
     start = consumption_core.window_start(window)
     end = consumption_core.window_end()
     requester_count, flow_count = _class_signal_sample(
-        db, current_user.class_id, start, end
+        db, current_user.active_class_id, start, end
     )
     if (
         requester_count < CLASS_SIGNAL_MIN_REQUESTERS
@@ -1236,17 +1240,17 @@ def get_class_signals(
         return ClassSignalsOut(
             window=window,
             generated_at=business_time.now(),
-            class_id=current_user.class_id,
+            class_id=current_user.active_class_id,
             insufficient=True,
             threshold=threshold,
         )
 
     current = _class_signal_net_quantities(
-        db, current_user.class_id, start, end, end_inclusive=True
+        db, current_user.active_class_id, start, end, end_inclusive=True
     )
     previous = _class_signal_net_quantities(
         db,
-        current_user.class_id,
+        current_user.active_class_id,
         consumption_core.local_day_start(2 * window - 1),
         start,
         end_inclusive=False,
@@ -1312,7 +1316,7 @@ def get_class_signals(
     return ClassSignalsOut(
         window=window,
         generated_at=business_time.now(),
-        class_id=current_user.class_id,
+        class_id=current_user.active_class_id,
         insufficient=False,
         threshold=threshold,
         sample=ClassSignalSampleOut(
@@ -1333,7 +1337,7 @@ def get_class_signals(
 def get_request_status(
     request_id: str,
     db: Annotated[Session, Depends(get_db)],
-    current_user: CurrentUser,
+    current_user: RequisitionCreator,
 ) -> RequisitionRequestStatusOut:
     order = db.scalars(
         select(RequisitionOrder).where(RequisitionOrder.request_id == request_id)
@@ -1357,7 +1361,7 @@ def get_request_status(
 def get_order_receipt(
     order_no: str,
     db: Annotated[Session, Depends(get_db)],
-    current_user: CurrentUser,
+    current_user: RequisitionCreator,
 ) -> RequisitionReceiptOut:
     order = db.scalars(
         select(RequisitionOrder).where(RequisitionOrder.order_no == order_no)
@@ -1743,7 +1747,7 @@ def _create_requisition_impl(
 def create_requisition(
     payload: RequisitionCreate,
     db: Annotated[Session, Depends(get_db)],
-    current_user: CurrentUser,
+    current_user: RequisitionCreator,
 ) -> RequisitionCreateOut:
     return _create_requisition_impl(
         db,
@@ -1758,7 +1762,7 @@ def create_requisition(
 def create_controlled_backfill(
     payload: ControlledBackfillCreate,
     db: Annotated[Session, Depends(get_db)],
-    manager: ManagerUser,
+    manager: RequisitionApprover,
 ) -> RequisitionCreateOut:
     create_payload = RequisitionCreate(
         items=payload.items,
@@ -2002,20 +2006,20 @@ def create_correction(
     requisition_id: int,
     payload: CorrectionCreate,
     db: Annotated[Session, Depends(get_db)],
-    current_user: CurrentUser,
+    current_user: RequisitionCreator,
 ) -> JSONResponse:
     requisition = db.get(Requisition, requisition_id)
     if requisition is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="流水不存在"
         )
-    if current_user.role == "student":
+    if effective_role(current_user) == "student":
         if requisition.user_id != current_user.id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="学生只能申请本人记录的纠错",
             )
-    elif requisition.class_id != current_user.class_id:
+    elif requisition.class_id != current_user.active_class_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="无权限申请该流水的纠错"
         )
@@ -2104,7 +2108,7 @@ def create_correction(
 def list_corrections(
     requisition_id: int,
     db: Annotated[Session, Depends(get_db)],
-    current_user: CurrentUser,
+    current_user: RecordViewer,
 ) -> list[CorrectionOut]:
     requisition = db.get(Requisition, requisition_id)
     if requisition is None or not _can_view_requisition(requisition, current_user):
@@ -2127,14 +2131,14 @@ def handle_correction(
     correction_id: int,
     payload: CorrectionHandle,
     db: Annotated[Session, Depends(get_db)],
-    manager: ManagerUser,
+    manager: RequisitionApprover,
 ) -> CorrectionOut:
     requisition = db.get(Requisition, requisition_id)
     if requisition is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="流水不存在"
         )
-    if requisition.class_id != manager.class_id:
+    if requisition.class_id != manager.active_class_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="无权限处理该流水"
         )
@@ -2142,7 +2146,7 @@ def handle_correction(
     if (
         correction is None
         or correction.requisition_id != requisition.id
-        or correction.class_id != manager.class_id
+        or correction.class_id != manager.active_class_id
     ):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="纠错申请不存在"
@@ -2188,14 +2192,14 @@ def reverse_requisition(
     requisition_id: int,
     payload: ReversalCreate,
     db: Annotated[Session, Depends(get_db)],
-    manager: ManagerUser,
+    manager: RequisitionApprover,
 ) -> RequisitionDetailOut:
     requisition = db.get(Requisition, requisition_id)
     if requisition is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="流水不存在"
         )
-    if requisition.class_id != manager.class_id:
+    if requisition.class_id != manager.active_class_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="无权限处理该流水"
         )
@@ -2223,7 +2227,7 @@ def reverse_requisition(
         if (
             correction is None
             or correction.requisition_id != requisition.id
-            or correction.class_id != manager.class_id
+            or correction.class_id != manager.active_class_id
         ):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="纠错申请不存在"
@@ -2530,22 +2534,22 @@ def _load_action_target(
             status_code=status.HTTP_404_NOT_FOUND, detail="流水不存在"
         )
     if staff_only:
-        if current_user.role == "student":
+        if effective_role(current_user) == "student":
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="学生不能登记报损，请由教师或班委处理",
             )
-        if requisition.class_id != current_user.class_id:
+        if requisition.class_id != current_user.active_class_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN, detail="无权限处理该流水"
             )
-    elif current_user.role == "student":
+    elif effective_role(current_user) == "student":
         if requisition.user_id != current_user.id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="学生只能登记本人领用的退库",
             )
-    elif requisition.class_id != current_user.class_id:
+    elif requisition.class_id != current_user.active_class_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="无权限处理该流水"
         )
@@ -2562,7 +2566,7 @@ def create_return(
     requisition_id: int,
     payload: ReturnCreate,
     db: Annotated[Session, Depends(get_db)],
-    current_user: CurrentUser,
+    current_user: RequisitionCreator,
 ) -> JSONResponse:
     requisition = _load_action_target(
         db, requisition_id, current_user, staff_only=False
@@ -2690,7 +2694,7 @@ def create_scrap(
     requisition_id: int,
     payload: ScrapCreate,
     db: Annotated[Session, Depends(get_db)],
-    current_user: CurrentUser,
+    current_user: RequisitionApprover,
 ) -> JSONResponse:
     requisition = _load_action_target(
         db, requisition_id, current_user, staff_only=True
@@ -2809,7 +2813,7 @@ def create_scrap(
 def get_requisition(
     requisition_id: int,
     db: Annotated[Session, Depends(get_db)],
-    current_user: CurrentUser,
+    current_user: RecordViewer,
 ) -> RequisitionDetailOut:
     requisition = db.get(Requisition, requisition_id)
     if requisition is None:

@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 
 from app import business_time, inventory_count
 from app.database import get_db
-from app.deps import CurrentUser, require_role
+from app.deps import effective_role, require_permission
 from app.models import Consumable, IncidentReport, InventoryCount, User
 from app.schemas_incidents import (
     ALLOWED_PHOTO_TYPES,
@@ -50,7 +50,9 @@ MAX_PAGE_SIZE = 100
 PHOTO_READ_LIMIT = MAX_PHOTO_BYTES + 1
 RATE_LIMIT_WINDOW = timedelta(minutes=RATE_LIMIT_WINDOW_MINUTES)
 
-StaffUser = Annotated[User, Depends(require_role("teacher", "admin"))]
+IncidentViewer = Annotated[User, Depends(require_permission("incident.view"))]
+IncidentReporter = Annotated[User, Depends(require_permission("incident.create"))]
+IncidentManager = Annotated[User, Depends(require_permission("incident.manage"))]
 
 
 def _photo_url(report: IncidentReport) -> str | None:
@@ -101,11 +103,11 @@ def _get_visible_or_404(
     db: Session, incident_id: int, current_user: User
 ) -> IncidentReport:
     report = db.get(IncidentReport, incident_id)
-    if report is None or report.class_id != current_user.class_id:
+    if report is None or report.class_id != current_user.active_class_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="异常单不存在"
         )
-    if current_user.role == "student" and report.reporter_id != current_user.id:
+    if effective_role(current_user) == "student" and report.reporter_id != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="异常单不存在"
         )
@@ -189,14 +191,14 @@ def _enforce_rate_limit(db: Session, user: User) -> None:
 @router.post("", status_code=status.HTTP_201_CREATED)
 def submit_incident(
     db: Annotated[Session, Depends(get_db)],
-    current_user: CurrentUser,
+    current_user: IncidentReporter,
     consumable_id: Annotated[int, Form()],
     description: Annotated[str, Form()],
     location: Annotated[str | None, Form()] = None,
     photo: Annotated[UploadFile | None, File()] = None,
 ) -> IncidentOut:
     consumable = db.get(Consumable, consumable_id)
-    if consumable is None or consumable.class_id != current_user.class_id:
+    if consumable is None or consumable.class_id != current_user.active_class_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="耗材不存在"
         )
@@ -232,7 +234,7 @@ def submit_incident(
         photo_path = _store_photo(data, content_type)
 
     report = IncidentReport(
-        class_id=current_user.class_id,
+        class_id=current_user.active_class_id,
         consumable_id=consumable.id,
         reporter_id=current_user.id,
         reporter_name=current_user.name,
@@ -257,7 +259,7 @@ def submit_incident(
 @router.get("")
 def list_incidents(
     db: Annotated[Session, Depends(get_db)],
-    current_user: CurrentUser,
+    current_user: IncidentViewer,
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
     status_filter: Annotated[str | None, Query(alias="status")] = None,
@@ -269,9 +271,9 @@ def list_incidents(
         )
 
     query = select(IncidentReport).where(
-        IncidentReport.class_id == current_user.class_id
+        IncidentReport.class_id == current_user.active_class_id
     )
-    if current_user.role == "student":
+    if effective_role(current_user) == "student":
         query = query.where(IncidentReport.reporter_id == current_user.id)
     if status_filter is not None:
         query = query.where(IncidentReport.status == status_filter)
@@ -294,7 +296,7 @@ def list_incidents(
 def get_incident(
     incident_id: int,
     db: Annotated[Session, Depends(get_db)],
-    current_user: CurrentUser,
+    current_user: IncidentViewer,
 ) -> IncidentOut:
     report = _get_visible_or_404(db, incident_id, current_user)
     return _serialize(db, report)
@@ -305,7 +307,7 @@ def handle_incident(
     incident_id: int,
     payload: IncidentHandle,
     db: Annotated[Session, Depends(get_db)],
-    staff: StaffUser,
+    staff: IncidentManager,
 ) -> IncidentOut:
     report = _get_visible_or_404(db, incident_id, staff)
     if report.status != STATUS_OPEN:
@@ -344,7 +346,7 @@ def _conversion_request_id(report: IncidentReport) -> str:
 def convert_incident_to_count(
     incident_id: int,
     db: Annotated[Session, Depends(get_db)],
-    staff: StaffUser,
+    staff: IncidentManager,
 ) -> JSONResponse:
     report = _get_visible_or_404(db, incident_id, staff)
     count = (
@@ -377,7 +379,7 @@ def convert_incident_to_count(
     existing = db.scalars(
         select(InventoryCount).where(
             InventoryCount.request_id == payload.request_id,
-            InventoryCount.class_id == staff.class_id,
+            InventoryCount.class_id == staff.active_class_id,
         )
     ).first()
     if existing is not None:
@@ -408,7 +410,7 @@ def convert_incident_to_count(
 def get_incident_photo(
     incident_id: int,
     db: Annotated[Session, Depends(get_db)],
-    current_user: CurrentUser,
+    current_user: IncidentViewer,
 ) -> FileResponse:
     report = _get_visible_or_404(db, incident_id, current_user)
     if not report.photo_path:
