@@ -246,6 +246,44 @@ def test_recheck_required_when_current_stock_mismatches_snapshot(
     assert _adjustment_events(db_session, posted["id"]) == []
 
 
+def test_stale_count_object_cannot_post_twice(
+    admin_client: TestClient, db_session
+) -> None:
+    from app import inventory_count as inventory_count_service
+    from app.models import Consumable, InventoryCount
+
+    consumable = _create_consumable(admin_client, current_stock=10)
+    _, body = _create_count(
+        admin_client, [{"consumable_id": consumable["id"], "counted_qty": 12}]
+    )
+    order_no = body["order_no"]
+    count_id = body["id"]
+
+    stale = db_session.scalars(
+        select(InventoryCount).where(InventoryCount.id == count_id)
+    ).one()
+    assert stale.status == "open"
+    db_session.commit()
+
+    first = _post(admin_client, order_no)
+    assert first.status_code == 201, first.text
+
+    operator = db_session.get(User, _user_id(db_session, "admin01"))
+    refreshed, created = inventory_count_service.post_count(
+        db_session, count=stale, operator=operator
+    )
+
+    assert created is False
+    assert refreshed.status == "posted"
+    assert refreshed.posted_at == datetime.fromisoformat(
+        first.json()["posted_at"]
+    )
+    assert len(_adjustment_events(db_session, count_id)) == 1
+
+    db_session.expire_all()
+    assert db_session.get(Consumable, consumable["id"]).current_stock == 12
+
+
 def test_repeat_post_is_idempotent(admin_client: TestClient, db_session) -> None:
     consumable = _create_consumable(admin_client, current_stock=10)
     _, body = _create_count(
