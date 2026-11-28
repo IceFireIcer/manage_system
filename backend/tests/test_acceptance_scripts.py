@@ -5,11 +5,12 @@ import subprocess
 from pathlib import Path
 
 import pytest
+import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONCURRENCY_SCRIPT = REPO_ROOT / "scripts" / "acceptance" / "run-mysql-concurrency.sh"
 DEMO_COMPOSE = REPO_ROOT / "docker-compose.demo.yml"
-PUBLISH_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "docker-publish.yml"
+CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 BASH = shutil.which("bash")
 
 pytestmark = pytest.mark.skipif(BASH is None, reason="需要 bash 才能校验验收脚本")
@@ -76,13 +77,20 @@ def test_demo_compose_is_isolated_from_production() -> None:
     assert "demo_mysql_data" not in production
 
 
-def test_publish_workflow_gates_on_same_commit_tests_and_both_images() -> None:
-    content = PUBLISH_WORKFLOW.read_text(encoding="utf-8")
+def test_ci_workflow_runs_in_order_and_gates_on_same_commit() -> None:
+    content = CI_WORKFLOW.read_text(encoding="utf-8")
+    jobs = yaml.safe_load(content)["jobs"]
 
+    assert jobs["gate"]["needs"] == ["backend", "frontend"]
+    assert jobs["publish"]["needs"] == "gate"
+    assert jobs["release"]["needs"] == "publish"
+    assert not (REPO_ROOT / ".github" / "workflows" / "docker-publish.yml").exists()
     assert "actions: read" in content
-    assert "needs: gate" in content
+    assert "ci-runs.json" in content
     assert "release_gate.py" in content
     assert "release-manifest.json" in content
     assert "labstock-api" in content
     assert "labstock-web" in content
     assert "sha-${GITHUB_SHA::7}" in content
+    assert "pull_request" in content
+    assert "startsWith(github.ref, 'refs/tags/v')" in content
