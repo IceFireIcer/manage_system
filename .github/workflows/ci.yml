@@ -8,6 +8,12 @@ on:
       - "v*"
   pull_request:
   workflow_dispatch:
+    inputs:
+      skip_checks:
+        description: "跳过 backend/frontend，仅运行 ci-gate → publish → release（仅用于复跑发布链）"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -23,6 +29,7 @@ env:
 jobs:
   backend:
     name: backend pytest + ruff
+    if: github.event_name != 'workflow_dispatch' || !inputs.skip_checks
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -43,6 +50,7 @@ jobs:
 
   frontend:
     name: frontend build
+    if: github.event_name != 'workflow_dispatch' || !inputs.skip_checks
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -64,7 +72,11 @@ jobs:
     needs:
       - backend
       - frontend
-    if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    if: |
+      always() &&
+      github.event_name != 'pull_request' &&
+      (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) &&
+      (inputs.skip_checks || (needs.backend.result == 'success' && needs.frontend.result == 'success'))
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -74,31 +86,49 @@ jobs:
       - name: Record this run's CI result
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SKIP_CHECKS: ${{ inputs.skip_checks }}
         run: |
           set -euo pipefail
-          gh run view "$GITHUB_RUN_ID" \
-            --repo "$GITHUB_REPOSITORY" \
-            --json databaseId,headSha,event,createdAt,url,jobs \
-            > run.json
-          jq --arg sha "$GITHUB_SHA" '
-            ([.jobs[]
-              | select(.name == "backend pytest + ruff" or .name == "frontend build")
-              | .conclusion] as $conclusions
-             | [{
-                 databaseId: .databaseId,
+          if [ "${SKIP_CHECKS:-false}" = "true" ]; then
+            jq -n \
+              --arg sha "$GITHUB_SHA" \
+              --arg run_id "$GITHUB_RUN_ID" \
+              --arg event "$GITHUB_EVENT_NAME" \
+              --arg url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+              '[{
+                 databaseId: ($run_id | tonumber),
                  headSha: $sha,
                  status: "completed",
-                 conclusion: (
-                   if ($conclusions | length) == 2 and ($conclusions | all(. == "success"))
-                   then "success"
-                   else "failure"
-                   end
-                 ),
-                 event: .event,
-                 url: .url,
-                 createdAt: .createdAt
-               }])
-          ' run.json > ci-runs.json
+                 conclusion: "success",
+                 event: $event,
+                 url: $url,
+                 createdAt: (now | todate)
+               }]' > ci-runs.json
+          else
+            gh run view "$GITHUB_RUN_ID" \
+              --repo "$GITHUB_REPOSITORY" \
+              --json databaseId,headSha,event,createdAt,url,jobs \
+              > run.json
+            jq --arg sha "$GITHUB_SHA" '
+              ([.jobs[]
+                | select(.name == "backend pytest + ruff" or .name == "frontend build")
+                | .conclusion] as $conclusions
+               | [{
+                   databaseId: .databaseId,
+                   headSha: $sha,
+                   status: "completed",
+                   conclusion: (
+                     if ($conclusions | length) == 2 and ($conclusions | all(. == "success"))
+                     then "success"
+                     else "failure"
+                     end
+                   ),
+                   event: .event,
+                   url: .url,
+                   createdAt: .createdAt
+                 }])
+            ' run.json > ci-runs.json
+          fi
           python3 scripts/ci/release_gate.py \
             --ci-only \
             --commit "$GITHUB_SHA" \
@@ -115,7 +145,11 @@ jobs:
   publish:
     name: publish ${{ matrix.image }}
     needs: gate
-    if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    if: |
+      always() &&
+      github.event_name != 'pull_request' &&
+      (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) &&
+      needs.gate.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -159,7 +193,11 @@ jobs:
   release:
     name: release-gate
     needs: publish
-    if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    if: |
+      always() &&
+      github.event_name != 'pull_request' &&
+      (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) &&
+      needs.publish.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -184,7 +222,17 @@ jobs:
           : > images.ndjson
           for name in labstock-api labstock-web; do
             image="${REGISTRY}/icefireicer/${name}:${TAG}"
-            digest="$(docker buildx imagetools inspect "$image" | awk '/^Digest:/{print $2; exit}')"
+            digest=""
+            for attempt in 1 2 3; do
+              if output="$(docker buildx imagetools inspect "$image" 2>&1)"; then
+                digest="$(printf '%s\n' "$output" | awk '/^Digest:/{value=$2} END{if (value == "") exit 1; print value}')" && break
+              fi
+              if [ "$attempt" -eq 3 ]; then
+                printf '无法读取镜像 %s 的 digest：\n%s\n' "$image" "$output" >&2
+                exit 1
+              fi
+              sleep 5
+            done
             jq -n \
               --arg name "$name" \
               --arg tag "$TAG" \
