@@ -25,6 +25,7 @@ import {
 import { useUserStore } from '../stores/user'
 import { useAlertsStore } from '../stores/alerts'
 import HelpDrawer from '../components/HelpDrawer.vue'
+import AssistantWidget from '../components/AssistantWidget.vue'
 
 const GROUP_META = {
   inventory: { label: '库存总览', icon: Box, order: 1 },
@@ -767,6 +768,7 @@ onBeforeUnmount(() => {
     </el-dialog>
 
     <HelpDrawer v-model="helpOpen" />
+    <AssistantWidget />
   </div>
 </template>
 

@@ -18,6 +18,7 @@ from app.request_context import (
 from app.routers import (
     accounts,
     alerts,
+    assistant,
     auth,
     bootstrap,
     classes,
@@ -152,6 +153,7 @@ def create_app() -> FastAPI:
     app.include_router(accounts.router)
     app.include_router(users.router)
     app.include_router(profile.router)
+    app.include_router(assistant.router)
     app.include_router(consumables.router)
     app.include_router(courses.router)
     app.include_router(handover.router)

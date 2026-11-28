@@ -7,7 +7,7 @@ from typing import Protocol
 from openai import OpenAI
 
 from app.agent.rules import Evaluation
-from app.config import Settings
+from app.config import Settings, get_settings
 from app.request_context import log_tag
 
 logger = logging.getLogger(__name__)
@@ -528,3 +528,91 @@ def generate_rationale(
     generator: RationaleGenerator | None = None,
 ) -> str:
     return generate_rationale_result(context, generator).text
+
+
+ASSISTANT_DEFAULT_SYSTEM_PROMPT = (
+    "你是班级实训耗材管理系统的只读问答助手。"
+    "你只能依据给出的系统上下文与数据回答问题，不得编造未提供的数据，"
+    "不得输出密码、API Key、学生姓名/学号/手机号/邮箱等个人敏感信息。"
+    "回答使用简体中文，可使用 Markdown 列表与加粗。"
+    "你无法修改库存或任何业务数据，只能给出只读分析与建议。"
+)
+
+
+@dataclass(frozen=True)
+class ChatConfig:
+    api_key: str
+    model: str
+    base_url: str
+    timeout: float
+    temperature: float
+    system_prompt: str | None
+    supports_tools: bool = False
+
+
+def resolve_chat_config(
+    db, feature: str, settings: Settings | None = None
+) -> ChatConfig | None:
+    """解析可用的聊天配置：优先 DB 功能绑定，回退环境变量，均无则返回 None。"""
+    from app import llm_crypto
+
+    provider = None
+    prompt = None
+    try:
+        provider, prompt = _provider_from_db(db, feature)
+    except Exception:
+        logger.warning("%s 读取助手 LLM 绑定失败，回退环境变量", log_tag(), exc_info=True)
+        provider = None
+        prompt = None
+    if provider is not None:
+        api_key = llm_crypto.decrypt_secret(provider.encrypted_api_key)
+        if api_key:
+            system_prompt = (
+                prompt.system_prompt
+                if prompt is not None and prompt.enabled
+                else None
+            )
+            return ChatConfig(
+                api_key=api_key,
+                model=provider.model or DEFAULT_MODEL,
+                base_url=provider.base_url or DEFAULT_BASE_URL,
+                timeout=provider.timeout or LLM_TIMEOUT_SECONDS,
+                temperature=provider.temperature,
+                system_prompt=system_prompt,
+                supports_tools=bool(provider.supports_tools),
+            )
+    config = settings if settings is not None else get_settings()
+    api_key = (config.llm_api_key or "").strip()
+    if api_key and not api_key.startswith("sk-your"):
+        return ChatConfig(
+            api_key=api_key,
+            model=config.llm_model or DEFAULT_MODEL,
+            base_url=config.llm_base_url or DEFAULT_BASE_URL,
+            timeout=LLM_TIMEOUT_SECONDS,
+            temperature=0.3,
+            system_prompt=None,
+            supports_tools=False,
+        )
+    return None
+
+
+def run_chat(
+    config: ChatConfig,
+    messages: list[dict],
+    *,
+    timeout: float | None = None,
+) -> str:
+    """向聊天模型发送消息，返回文本回复；异常交由调用方处理。"""
+    client = OpenAI(
+        api_key=config.api_key,
+        base_url=config.base_url,
+        timeout=timeout or config.timeout,
+        max_retries=0,
+    )
+    response = client.chat.completions.create(
+        model=config.model,
+        messages=messages,
+        temperature=config.temperature,
+        timeout=timeout or config.timeout,
+    )
+    return (response.choices[0].message.content or "").strip()
