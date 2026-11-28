@@ -14,11 +14,14 @@ from app.models import (
     HandoverItem,
     IncidentReport,
     InventoryCount,
+    InventoryCountLine,
     RequisitionOrder,
     RestockOrder,
     StockAlert,
     User,
 )
+from app.routers.courses import _build_risks as _build_course_risks
+from app.routers.courses import _upcoming_entries as _upcoming_course_entries
 from app.schemas_consumables import STATUS_ENABLED
 from app.schemas_handover import (
     KIND_COUNT,
@@ -33,6 +36,8 @@ from app.schemas_handover import (
     HandoverChecklistOut,
     HandoverChecklistPageOut,
     HandoverChecklistSummaryOut,
+    HandoverHealthExpiryOut,
+    HandoverHealthOut,
     HandoverItemOut,
 )
 from app.stock_alerts import ACTIVE_STATUSES as ALERT_ACTIVE_STATUSES
@@ -44,6 +49,12 @@ MAX_PAGE_SIZE = 100
 PROCESSING_STATUS = "processing"
 INCIDENT_OPEN_STATUS = "open"
 COUNT_OPEN_STATUS = "open"
+COUNT_POSTED_STATUS = "posted"
+OPEN_INCIDENT_STATUSES = (INCIDENT_OPEN_STATUS, STATUS_CONFIRMED)
+COURSE_RISK_DAYS = 14
+COURSE_RISK_LEAD_DAYS = 1
+COURSE_RISK_LEVELS = ("insufficient", "critical")
+EXPIRY_LABEL = "未启用"
 
 StaffUser = Annotated[User, Depends(require_role("teacher", "admin"))]
 
@@ -240,6 +251,52 @@ def _collect_drafts(db: Session, class_id: int) -> list[dict]:
     drafts.extend(_incident_drafts(db, class_id))
     drafts.extend(_count_drafts(db, class_id))
     return drafts
+
+
+def _stock_diff_health(db: Session, class_id: int) -> tuple[int, bool]:
+    latest = db.scalars(
+        select(InventoryCount)
+        .where(
+            InventoryCount.class_id == class_id,
+            InventoryCount.status == COUNT_POSTED_STATUS,
+        )
+        .order_by(InventoryCount.posted_at.desc(), InventoryCount.id.desc())
+    ).first()
+    if latest is None:
+        return 0, False
+    diff_count = (
+        db.scalar(
+            select(func.count())
+            .select_from(InventoryCountLine)
+            .where(
+                InventoryCountLine.count_id == latest.id,
+                InventoryCountLine.diff.is_not(None),
+                InventoryCountLine.diff != 0,
+            )
+        )
+        or 0
+    )
+    return diff_count, True
+
+
+def _open_incident_health(db: Session, class_id: int) -> int:
+    return (
+        db.scalar(
+            select(func.count())
+            .select_from(IncidentReport)
+            .where(
+                IncidentReport.class_id == class_id,
+                IncidentReport.status.in_(OPEN_INCIDENT_STATUSES),
+            )
+        )
+        or 0
+    )
+
+
+def _course_risk_health(db: Session, class_id: int) -> int:
+    entries = _upcoming_course_entries(db, class_id, COURSE_RISK_DAYS)
+    risks = _build_course_risks(db, entries, COURSE_RISK_LEAD_DAYS)
+    return sum(1 for risk in risks if risk.level in COURSE_RISK_LEVELS)
 
 
 def _resolve_incoming(
@@ -505,3 +562,24 @@ def confirm_checklist(
     db.commit()
     db.refresh(checklist)
     return _detail(db, checklist)
+
+
+@router.get("/health")
+def get_handover_health(
+    db: Annotated[Session, Depends(get_db)],
+    staff: StaffUser,
+) -> HandoverHealthOut:
+    stock_diff_count, stock_diff_available = _stock_diff_health(db, staff.class_id)
+    return HandoverHealthOut(
+        generated_at=business_time.now().replace(microsecond=0),
+        class_id=staff.class_id,
+        stock_diff_count=stock_diff_count,
+        stock_diff_available=stock_diff_available,
+        open_incident_count=_open_incident_health(db, staff.class_id),
+        course_risk_count=_course_risk_health(db, staff.class_id),
+        expiry=HandoverHealthExpiryOut(
+            supported=False,
+            label=EXPIRY_LABEL,
+            count=None,
+        ),
+    )
