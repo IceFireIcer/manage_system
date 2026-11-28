@@ -8,7 +8,7 @@ from app.class_scope import resolve_active_class_id
 from app.database import get_db
 from app.models import User
 from app.permissions import effective_permission_set
-from app.roles import granted_roles, resolve_active_role, role_passes
+from app.roles import granted_roles, resolve_active_role
 from app.security import decode_access_token
 from app.setup_service import SETUP_INCOMPLETE_DETAIL, setup_is_completed
 
@@ -99,20 +99,18 @@ def get_active_class_id(
 CurrentClassId = Annotated[int, Depends(get_active_class_id)]
 
 
-def require_role(*allowed_roles: str) -> Callable:
-    def checker(current_user: CurrentUser) -> User:
-        if not role_passes(effective_role(current_user), allowed_roles):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="无权限访问",
-            )
-        return current_user
-
-    return checker
+def require_super_admin(current_user: CurrentUser) -> User:
+    """超管专属动作：按当前会话 active_role 判定，避免切换视角后越权。"""
+    if effective_role(current_user) != SUPER_ADMIN_ROLE:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=PERMISSION_DENIED_DETAIL,
+        )
+    return current_user
 
 
 def require_permission(permission_key: str) -> Callable:
-    """按 active_role 的有效权限校验；与旧 require_role 共存。"""
+    """按 active_role 的有效权限校验；super_admin 由权限层恒全量放行。"""
 
     def checker(
         request: Request,

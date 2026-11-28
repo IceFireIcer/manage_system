@@ -149,7 +149,7 @@ const quickActions = computed(() => {
     actions.push({ label: '耗材档案', icon: Box, path: '/consumables' })
   }
   if (userStore.hasPermission('account.manage')) {
-    actions.push({ label: '用户管理', icon: Setting, path: '/users' })
+    actions.push({ label: '账号管理', icon: Setting, path: '/settings/accounts' })
   }
   return actions
 })

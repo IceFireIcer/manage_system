@@ -11,6 +11,7 @@ from app.deps import (
     CurrentUser,
     effective_role,
     require_permission,
+    require_super_admin,
 )
 from app.models import User
 from app.operation_log import record_operation, user_label
@@ -45,7 +46,7 @@ from app.schemas_permissions import (
 router = APIRouter(prefix="/api/v1/permissions", tags=["permissions"])
 
 TeacherUser = Annotated[User, Depends(require_permission("permission.view"))]
-SuperAdminUser = Annotated[User, Depends(require_role("super_admin"))]
+SuperAdminUser = Annotated[User, Depends(require_super_admin)]
 PermissionManager = Annotated[User, Depends(require_permission("permission.manage"))]
 UNKNOWN_ROLE_DETAIL = "只能查看班委或学生的班级覆盖"
 

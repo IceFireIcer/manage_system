@@ -7,7 +7,7 @@ const ROLE_NAMES = {
   class_committee: '班委',
   admin: '班委',
   student: '学生',
-  super_admin: '超级管理员',
+
 }
 
 const REDIRECT_KEY = 'login-redirect'
@@ -50,18 +50,14 @@ export const useUserStore = defineStore('user', {
     isLoggedIn: (state) => state.user !== null,
     roleName: (state) =>
       ROLE_NAMES[state.activeRole] ?? ROLE_NAMES[state.user?.role] ?? '未知',
-    hasPermission: (state) => (key) =>
-      (state.activeRole ?? state.user?.role) === 'super_admin' ||
-      state.permissions.includes(key),
+    hasPermission: (state) => (key) => state.permissions.includes(key),
     hasAnyPermission: (state) => (keys) =>
-      (state.activeRole ?? state.user?.role) === 'super_admin' ||
       keys.some((key) => state.permissions.includes(key)),
     hasMultipleRoles: (state) => state.roles.length > 1,
     canSwitchRole: (state) => state.roles.length > 1,
     canSwitchClass: (state) =>
       ['teacher', 'super_admin'].includes(state.activeRole ?? state.user?.role) &&
       state.availableClasses.length > 1,
-    hasPermission: (state) => (key) => state.permissions.includes(key),
   },
   actions: {
     ensureSessionSync() {

@@ -77,8 +77,3 @@ def resolve_active_role(user: User, roles: list[str], requested: str | None) -> 
     if user.role in roles:
         return user.role
     return roles[0] if roles else ROLE_STUDENT
-
-
-def role_passes(active_role: str, allowed_roles: tuple[str, ...]) -> bool:
-    """super_admin 通过所有旧角色检查。"""
-    return active_role == ROLE_SUPER_ADMIN or active_role in allowed_roles

@@ -36,22 +36,12 @@ const GROUP_META = {
   settings: { label: '设置', icon: Setting, order: 5 },
 }
 
-const ROLE_TAG_CLASS = {
-  super_admin: 'role-tag--admin',
-  teacher: 'role-tag--teacher',
-  class_committee: 'role-tag--admin',
-  admin: 'role-tag--admin',
-  student: 'role-tag--student',
-  super_admin: 'role-tag--admin',
-}
-
 const ROLE_LABEL = {
   super_admin: '超级管理员',
   teacher: '教师',
   class_committee: '班委',
   admin: '班委',
   student: '学生',
-  super_admin: '超级管理员',
 }
 
 const AVATAR_ROLE = {
@@ -128,18 +118,8 @@ const navGroups = computed(() => {
     const nav = record.meta?.nav
     if (!nav) continue
     if (nav.group === 'dashboard') continue
-    const required = record.meta.permissions
     const requiredPermission = record.meta.permission
-    if (required && !userStore.hasAnyPermission(required)) continue
-    if (
-      requiredPermission &&
-      role !== 'super_admin' &&
-      !permissions.includes(requiredPermission)
-    ) {
-      continue
-    }
-    const allowedRoles = record.meta.roles
-    if (!required && !requiredPermission && allowedRoles && role !== 'super_admin' && !allowedRoles.includes(role)) continue
+    if (requiredPermission && !permissions.includes(requiredPermission)) continue
     const groupMeta = GROUP_META[nav.group]
     if (!groupMeta) continue
 
@@ -359,13 +339,8 @@ async function handleRoleSwitch(nextRole) {
     return
   }
   ElMessage.success(`已切换为${ROLE_LABEL[nextRole] ?? nextRole}视角`)
-  const required = route.meta?.permissions
-  if (required && !userStore.hasAnyPermission(required)) {
-    router.push('/dashboard')
-    return
-  }
-  const allowedRoles = route.meta?.roles
-  if (!required && allowedRoles && nextRole !== 'super_admin' && !allowedRoles.includes(nextRole)) {
+  const requiredPermission = route.meta?.permission
+  if (requiredPermission && !userStore.hasPermission(requiredPermission)) {
     router.push('/dashboard')
     return
   }

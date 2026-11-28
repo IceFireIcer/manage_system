@@ -87,7 +87,6 @@ const routes = [
         component: () => import('../views/CourseRecipes.vue'),
         meta: {
           title: '课程配方',
-          roles: ['teacher', 'admin'],
           permission: 'course.view',
           nav: { group: 'teaching', icon: 'Reading', order: 1 },
         },
@@ -98,7 +97,6 @@ const routes = [
         component: () => import('../views/Handover.vue'),
         meta: {
           title: '班委交接',
-          roles: ['teacher', 'admin'],
           permission: 'handover.view',
           nav: { group: 'daily', icon: 'Switch', order: 0 },
         },
@@ -109,19 +107,8 @@ const routes = [
         component: () => import('../views/Consumables.vue'),
         meta: {
           title: '耗材档案',
-          roles: ['admin'],
           permission: 'consumable.view',
           nav: { group: 'daily', icon: 'Setting', order: 1 },
-        },
-      },
-      {
-        path: 'users',
-        name: 'users',
-        component: () => import('../views/Users.vue'),
-        meta: {
-          title: '用户管理',
-          roles: ['admin'],
-          permission: 'account.view',
         },
       },
       {
@@ -136,7 +123,6 @@ const routes = [
         component: () => import('../views/Restock.vue'),
         meta: {
           title: '补货建议',
-          roles: ['teacher', 'admin'],
           permission: 'restock.view',
           nav: { group: 'analysis', icon: 'TrendCharts', order: 1 },
         },
@@ -147,7 +133,6 @@ const routes = [
         component: () => import('../views/Consumption.vue'),
         meta: {
           title: '消耗汇总',
-          roles: ['teacher', 'admin'],
           permission: 'consumption.view',
           nav: { group: 'analysis', icon: 'TrendCharts', order: 2 },
         },
@@ -158,7 +143,6 @@ const routes = [
         component: () => import('../views/SemesterClose.vue'),
         meta: {
           title: '学期结账',
-          roles: ['teacher', 'admin'],
           permission: 'report.view',
           nav: { group: 'analysis', icon: 'Files', order: 3 },
         },
@@ -169,7 +153,6 @@ const routes = [
         component: () => import('../views/Logs.vue'),
         meta: {
           title: '操作日志',
-          roles: ['teacher', 'admin'],
           permission: 'log.view',
           nav: { group: 'daily', icon: 'Setting', order: 3 },
         },
@@ -180,7 +163,6 @@ const routes = [
         component: () => import('../views/Accounts.vue'),
         meta: {
           title: '账号与角色',
-          roles: ['super_admin', 'teacher'],
           permission: 'account.manage',
           nav: { group: 'settings', icon: 'User', order: 1 },
         },
@@ -191,7 +173,6 @@ const routes = [
         component: () => import('../views/Classes.vue'),
         meta: {
           title: '班级与学期',
-          roles: ['super_admin', 'teacher'],
           permission: 'settings.manage',
           nav: { group: 'settings', icon: 'School', order: 2 },
         },
@@ -202,7 +183,6 @@ const routes = [
         component: () => import('../views/Permissions.vue'),
         meta: {
           title: '权限与页面',
-          roles: ['super_admin', 'teacher'],
           permission: 'permission.manage',
           nav: { group: 'settings', icon: 'Lock', order: 3 },
         },
@@ -213,7 +193,6 @@ const routes = [
         component: () => import('../views/LlmSettings.vue'),
         meta: {
           title: 'LLM 配置',
-          roles: ['super_admin'],
           permission: 'llm.manage',
           nav: { group: 'settings', icon: 'MagicStick', order: 4 },
         },
@@ -224,7 +203,6 @@ const routes = [
         component: SettingsPlaceholder,
         meta: {
           title: '提示词与工具',
-          roles: ['super_admin'],
           permission: 'llm.manage',
           nav: { group: 'settings', icon: 'ChatDotRound', order: 5 },
         },
@@ -235,7 +213,6 @@ const routes = [
         component: SettingsPlaceholder,
         meta: {
           title: '系统参数',
-          roles: ['super_admin'],
           permission: 'settings.manage',
           nav: { group: 'settings', icon: 'SetUp', order: 6 },
         },
@@ -246,7 +223,6 @@ const routes = [
         component: () => import('../views/Audit.vue'),
         meta: {
           title: '审计',
-          roles: ['super_admin', 'teacher'],
           permission: 'audit.view',
           nav: { group: 'settings', icon: 'Document', order: 7 },
         },
@@ -316,19 +292,9 @@ await userStore.ensureSetupStatus()
     return { path: '/dashboard' }
   }
 
-  const activeRole = userStore.activeRole ?? userStore.user.role
   const permissions = userStore.permissions ?? []
 
-  if (
-    to.meta.permission &&
-    activeRole !== 'super_admin' &&
-    !permissions.includes(to.meta.permission)
-  ) {
-    return { path: '/403', query: { from: to.fullPath } }
-  }
-
-  const allowedRoles = to.meta.roles
-  if (allowedRoles && activeRole !== 'super_admin' && !allowedRoles.includes(activeRole)) {
+  if (to.meta.permission && !permissions.includes(to.meta.permission)) {
     return { path: '/403', query: { from: to.fullPath } }
   }
 

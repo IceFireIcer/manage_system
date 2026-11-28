@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.deps import CurrentUser, require_role
+from app.deps import CurrentUser, require_super_admin
 from app.models import User
 from app.provisioning import ProvisioningError, provision_teacher
 from app.routers.auth import change_password as auth_change_password
@@ -58,7 +58,7 @@ def change_super_admin_password(
 def create_setup_teacher(
     payload: SetupTeacherRequest,
     db: Annotated[Session, Depends(get_db)],
-    current_user: Annotated[User, Depends(require_role("super_admin"))],
+    current_user: Annotated[User, Depends(require_super_admin)],
 ) -> SetupTeacherOut:
     try:
         result = provision_teacher(
@@ -84,7 +84,7 @@ def create_setup_teacher(
 @router.post("/complete")
 def finish_setup(
     db: Annotated[Session, Depends(get_db)],
-    current_user: Annotated[User, Depends(require_role("super_admin"))],
+    current_user: Annotated[User, Depends(require_super_admin)],
 ) -> SetupStatusOut:
     try:
         complete_setup(db, operator_name=current_user.name, operator=current_user)
