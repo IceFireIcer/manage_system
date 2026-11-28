@@ -32,6 +32,7 @@ const ROLE_TAG_CLASS = {
   teacher: 'role-tag--teacher',
   admin: 'role-tag--admin',
   student: 'role-tag--student',
+  super_admin: 'role-tag--admin',
 }
 
 const ROLE_LABEL = {
@@ -39,6 +40,7 @@ const ROLE_LABEL = {
   teacher: '教师',
   admin: '班委',
   student: '学生',
+  super_admin: '超级管理员',
 }
 
 const AVATAR_ROLE = {

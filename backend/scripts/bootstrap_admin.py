@@ -9,10 +9,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.database import SessionLocal  # noqa: E402
 from app.provisioning import (  # noqa: E402
     BOOTSTRAP_MESSAGES,
+    DEFAULT_SUPER_ADMIN_PASSWORD,
     ProvisioningError,
     bootstrap_initial_admin,
     bootstrap_state,
 )
+from app.setup_service import record_initial_setup  # noqa: E402
 
 DEFAULT_ACCOUNT = "admin"
 DEFAULT_NAME = "系统管理员"
@@ -28,7 +30,7 @@ def _env(name: str, default: str) -> str:
 def bootstrap_admin() -> int:
     account = _env("ADMIN_INIT_ACCOUNT", DEFAULT_ACCOUNT)
     name = _env("ADMIN_INIT_NAME", DEFAULT_NAME)
-    password = os.getenv("ADMIN_INIT_PASSWORD") or None
+    password = os.getenv("ADMIN_INIT_PASSWORD") or DEFAULT_SUPER_ADMIN_PASSWORD
 
     with SessionLocal() as db:
         state = bootstrap_state(db)
@@ -44,6 +46,8 @@ def bootstrap_admin() -> int:
             name=name,
             password=password,
         )
+        if result is not None:
+            record_initial_setup(db, admin_account=result.account)
 
     if result is None:
         print("[bootstrap] 管理员账号已存在，跳过")

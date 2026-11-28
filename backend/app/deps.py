@@ -8,14 +8,28 @@ from app.database import get_db
 from app.models import User
 from app.roles import granted_roles, resolve_active_role, role_passes
 from app.security import decode_access_token
+from app.setup_service import SETUP_INCOMPLETE_DETAIL, setup_is_completed
 
 AUTH_PATH_PREFIX = "/api/v1/auth/"
+SETUP_PATH_PREFIX = "/api/v1/setup/"
+BOOTSTRAP_PATH_PREFIX = "/api/v1/bootstrap/"
+HEALTH_PATH = "/api/v1/health"
+SUPER_ADMIN_ROLE = "super_admin"
 CHANGE_PASSWORD_REQUIRED_DETAIL = "请先修改初始密码"
 EFFECTIVE_ROLE_ATTR = "active_role"
 
 
 def _allows_pending_password_change(path: str) -> bool:
-    return path.startswith(AUTH_PATH_PREFIX)
+    return path.startswith(AUTH_PATH_PREFIX) or path.startswith(SETUP_PATH_PREFIX)
+
+
+def _allows_before_setup(path: str) -> bool:
+    return (
+        path.startswith(AUTH_PATH_PREFIX)
+        or path.startswith(SETUP_PATH_PREFIX)
+        or path.startswith(BOOTSTRAP_PATH_PREFIX)
+        or path == HEALTH_PATH
+    )
 
 
 def effective_role(user: User) -> str:
@@ -49,6 +63,11 @@ def get_current_user(
         )
     roles = granted_roles(db, user)
     setattr(user, EFFECTIVE_ROLE_ATTR, resolve_active_role(user, roles, payload.get("ar")))
+    if not _allows_before_setup(request.url.path) and not setup_is_completed(db):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=SETUP_INCOMPLETE_DETAIL,
+        )
     return user
 
 

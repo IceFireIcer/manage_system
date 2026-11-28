@@ -115,7 +115,7 @@ def test_bootstrap_creates_admin_requiring_first_login_change(env: Environment) 
     )
 
     assert result is not None
-    assert result.role == "admin"
+    assert result.role == "super_admin"
     assert result.generated is False
     admin = env.db.scalars(select(User).where(User.account == "admin")).one()
     assert admin.status == "enabled"

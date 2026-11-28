@@ -6,6 +6,7 @@ const ROLE_NAMES = {
   teacher: '教师',
   admin: '班委',
   student: '学生',
+  super_admin: '超级管理员',
 }
 
 const REDIRECT_KEY = 'login-redirect'
@@ -36,9 +37,11 @@ export const useUserStore = defineStore('user', {
     mustChangePassword: false,
     sessionEpoch: null,
     identityLocked: false,
-    roles: [],
+roles: [],
     activeRole: null,
     activeClass: null,
+    setupRequired: false,
+    setupStatus: null,
   }),
   getters: {
     isLoggedIn: (state) => state.user !== null,
@@ -109,6 +112,19 @@ export const useUserStore = defineStore('user', {
       }
       this.mustChangePassword = Boolean(data.must_change_password)
       this.sessionExpiresAt = data.session_expires_at ?? null
+    },
+    async ensureSetupStatus(force = false) {
+      if (!force && this.setupStatus) {
+        return this.setupStatus
+      }
+      try {
+        const { data } = await api.get('/setup/status', { skipAuthRedirect: true })
+        this.setupStatus = data
+        this.setupRequired = Boolean(data.needs_setup)
+      } catch {
+        // 网络异常时保持现状，避免误导式跳转
+      }
+      return this.setupStatus
     },
     init(force = false) {
       this.ensureSessionSync()
@@ -226,6 +242,8 @@ export const useUserStore = defineStore('user', {
       this.fetched = true
       this.status = 'ready'
       this.identityLocked = false
+      this.setupRequired = false
+      this.setupStatus = null
     },
     rememberRedirect(path) {
       if (!path || path === '/login') return

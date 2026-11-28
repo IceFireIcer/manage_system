@@ -11,6 +11,12 @@ const routes = [
     meta: { public: true },
   },
   {
+    path: '/setup',
+    name: 'setup',
+    component: () => import('../views/Setup.vue'),
+    meta: { title: '系统初始化' },
+  },
+  {
     path: '/',
     component: Layout,
     children: [
@@ -175,7 +181,7 @@ router.beforeEach(async (to) => {
 
   if (to.meta.public) {
     if (to.name === 'login' && userStore.isLoggedIn) {
-      return { path: '/dashboard' }
+      return { path: userStore.setupRequired ? '/setup' : '/dashboard' }
     }
     return true
   }
@@ -193,6 +199,19 @@ router.beforeEach(async (to) => {
       path: '/login',
       query: to.fullPath !== '/' ? { redirect: to.fullPath } : {},
     }
+  }
+
+await userStore.ensureSetupStatus()
+
+  if (userStore.setupRequired) {
+    if (to.name !== 'setup') {
+      return { path: '/setup' }
+    }
+    return true
+  }
+
+  if (to.name === 'setup') {
+    return { path: '/dashboard' }
   }
 
   const activeRole = userStore.activeRole ?? userStore.user.role

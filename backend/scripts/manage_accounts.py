@@ -81,6 +81,15 @@ def _build_parser() -> argparse.ArgumentParser:
     recover.add_argument("--password", default=None)
     recover.add_argument("--class-id", type=int, default=1)
 
+    reset = subparsers.add_parser(
+        "reset-password",
+        parents=[actor_parent],
+        help="管理员密码重置兜底：重置超级管理员/班委密码并撤销旧会话",
+    )
+    reset.add_argument("--account", required=True)
+    reset.add_argument("--name", default=None)
+    reset.add_argument("--password", default=None)
+
     return parser
 
 
@@ -131,6 +140,16 @@ def main(argv: list[str] | None = None) -> int:
                     f"原会话已失效"
                 )
                 print(_result_line(handover.new_admin))
+                return 0
+            if args.command == "reset-password":
+                result = recover_admin(
+                    db,
+                    account=args.account,
+                    name=args.name,
+                    password=args.password,
+                    actor=args.actor,
+                )
+                print(_result_line(result))
                 return 0
             result = recover_admin(
                 db,
