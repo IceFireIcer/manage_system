@@ -1,4 +1,4 @@
-"""悬浮助手：会话线程、消息持久化与只读问答接口。"""
+"""悬浮助手：会话线程、消息持久化与问答/动作接口。"""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app import business_time
+from app.assistant import actions as assistant_actions
 from app.assistant import context as assistant_context
 from app.assistant import service as assistant_service
 from app.database import get_db
@@ -31,6 +32,7 @@ from app.schemas_assistant import (
     ThreadDetailOut,
     ThreadOut,
     ThreadUpdate,
+    ToolActionOut,
     ToolCallOut,
 )
 
@@ -188,7 +190,12 @@ def get_thread_detail(
 ) -> ThreadDetailOut:
     thread = _get_thread(db, thread_id, current_user.id, class_id)
     messages = [_message_out(row) for row in _thread_messages(db, thread_id)]
-    return ThreadDetailOut(thread=_thread_out(thread), messages=messages)
+    actions = assistant_actions.list_actions(
+        db, thread_id=thread_id, user=current_user, class_id=class_id
+    )
+    return ThreadDetailOut(
+        thread=_thread_out(thread), messages=messages, actions=actions
+    )
 
 
 @router.patch("/threads/{thread_id}")
@@ -255,7 +262,7 @@ def send_message(
     db.add(user_message)
     db.flush()
 
-    configured, answer, tool_calls = assistant_service.chat(
+    configured, answer, tool_calls, actions = assistant_service.chat(
         db,
         user=current_user,
         role=role,
@@ -263,6 +270,7 @@ def send_message(
         question=payload.content,
         context=context,
         history=history,
+        thread_id=thread.id,
     )
 
     assistant_message = AssistantMessage(
@@ -290,6 +298,22 @@ def send_message(
             ),
         )
 
+    for action in actions:
+        if action.get("kind") != "prefill":
+            continue
+        record_operation(
+            db,
+            action="assistant_tool_call",
+            operator=current_user,
+            target_type="assistant_tool",
+            target_label=action.get("tool"),
+            result="success",
+            remark=(
+                f"助手生成预填链接 {action.get('tool')}："
+                f"{action.get('summary') or ''}"
+            ),
+        )
+
     if not history and thread.title == DEFAULT_TITLE:
         thread.title = payload.content[:TITLE_LIMIT]
     thread.last_message_at = assistant_message.created_at
@@ -306,4 +330,32 @@ def send_message(
         configured=configured,
         answer=answer,
         tool_calls=_parse_tool_calls(assistant_message.tool_calls_json),
+        actions=actions,
     )
+
+
+@router.post("/actions/{token}/confirm")
+def confirm_action(
+    token: str,
+    db: Annotated[Session, Depends(get_db)],
+    current_user: CurrentUser,
+    class_id: Annotated[int, Depends(get_active_class_id)],
+) -> ToolActionOut:
+    result = assistant_actions.confirm(
+        db,
+        user=current_user,
+        role=effective_role(current_user),
+        class_id=class_id,
+        token=token,
+    )
+    return ToolActionOut(**result)
+
+
+@router.post("/actions/{token}/cancel")
+def cancel_action(
+    token: str,
+    db: Annotated[Session, Depends(get_db)],
+    current_user: CurrentUser,
+) -> ToolActionOut:
+    result = assistant_actions.cancel(db, user=current_user, token=token)
+    return ToolActionOut(**result)

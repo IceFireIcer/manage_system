@@ -1152,3 +1152,40 @@ class AssistantMessage(Base):
     context_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     tool_calls_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
+
+class AssistantToolAction(Base):
+    __tablename__ = "assistant_tool_actions"
+    __table_args__ = (
+        UniqueConstraint(
+            "confirmation_token", name="uq_assistant_tool_actions_token"
+        ),
+        Index(
+            "ix_assistant_tool_actions_user_class",
+            "user_id",
+            "class_id",
+            "created_at",
+        ),
+        Index("ix_assistant_tool_actions_thread", "thread_id", "id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    thread_id: Mapped[int | None] = mapped_column(
+        ForeignKey("assistant_threads.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    class_id: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    tool_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False, default="write")
+    args_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
+    confirmation_token: Mapped[str] = mapped_column(String(64), nullable=False)
+    result_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    idempotency_key: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, unique=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
+    confirmed_at: Mapped[datetime | None] = mapped_column(DATETIME, nullable=True)

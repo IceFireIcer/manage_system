@@ -188,6 +188,55 @@ def _enforce_rate_limit(db: Session, user: User) -> None:
         )
 
 
+def create_report(
+    db: Session,
+    *,
+    user: User,
+    class_id: int,
+    consumable: Consumable,
+    description: str,
+    location: str | None = None,
+    photo_path: str | None = None,
+) -> IncidentReport:
+    """校验并暂存异常单；事务提交由调用方负责。"""
+    cleaned_description = description.strip()
+    if not cleaned_description:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="请填写异常描述"
+        )
+    if len(cleaned_description) > DESCRIPTION_MAX_LENGTH:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"异常描述不能超过 {DESCRIPTION_MAX_LENGTH} 个字符",
+        )
+
+    cleaned_location = (location or "").strip() or consumable.location
+    if len(cleaned_location) > LOCATION_MAX_LENGTH:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"位置不能超过 {LOCATION_MAX_LENGTH} 个字符",
+        )
+
+    _enforce_rate_limit(db, user)
+
+    report = IncidentReport(
+        class_id=class_id,
+        consumable_id=consumable.id,
+        reporter_id=user.id,
+        reporter_name=user.name,
+        reporter_role=user.role,
+        location=cleaned_location,
+        description=cleaned_description,
+        photo_path=photo_path,
+        status=STATUS_OPEN,
+        created_at=business_time.now(),
+        updated_at=business_time.now(),
+    )
+    db.add(report)
+    db.flush()
+    return report
+
+
 @router.post("", status_code=status.HTTP_201_CREATED)
 def submit_incident(
     db: Annotated[Session, Depends(get_db)],
@@ -208,45 +257,20 @@ def submit_incident(
             detail="耗材已停用，无法上报异常",
         )
 
-    cleaned_description = description.strip()
-    if not cleaned_description:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="请填写异常描述"
-        )
-    if len(cleaned_description) > DESCRIPTION_MAX_LENGTH:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"异常描述不能超过 {DESCRIPTION_MAX_LENGTH} 个字符",
-        )
-
-    cleaned_location = (location or "").strip() or consumable.location
-    if len(cleaned_location) > LOCATION_MAX_LENGTH:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"位置不能超过 {LOCATION_MAX_LENGTH} 个字符",
-        )
-
-    _enforce_rate_limit(db, current_user)
-
     photo_path: str | None = None
     if photo is not None:
         data, content_type = _read_photo(photo)
         photo_path = _store_photo(data, content_type)
 
-    report = IncidentReport(
+    report = create_report(
+        db,
+        user=current_user,
         class_id=current_user.active_class_id,
-        consumable_id=consumable.id,
-        reporter_id=current_user.id,
-        reporter_name=current_user.name,
-        reporter_role=current_user.role,
-        location=cleaned_location,
-        description=cleaned_description,
+        consumable=consumable,
+        description=description,
+        location=location,
         photo_path=photo_path,
-        status=STATUS_OPEN,
-        created_at=business_time.now(),
-        updated_at=business_time.now(),
     )
-    db.add(report)
     try:
         db.commit()
     except Exception:
