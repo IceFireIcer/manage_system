@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -456,3 +457,46 @@ class RequisitionDetailOut(RequisitionRecordOut):
     returnable_quantity: int = 0
     returns: list[RequisitionReturnOut] = []
     scraps: list[RequisitionScrapOut] = []
+
+FootprintReasonCode = Literal["no_recipe", "no_headcount", "zero_demand"]
+
+
+class FootprintSupportOut(BaseModel):
+    supported_sessions: int | None = None
+    reason_code: FootprintReasonCode | None = None
+    course_id: int | None = None
+    course_name: str | None = None
+    recipe_version: int | None = None
+    headcount: int | None = None
+    quantity_per_person: int | None = None
+    required_quantity: int | None = None
+
+
+class FootprintItemOut(BaseModel):
+    consumable_id: int
+    name: str
+    spec: str
+    unit: str
+    requisition_count: int
+    issued_quantity: int
+    reversed_quantity: int
+    net_quantity: int
+    last_at: datetime
+    support: FootprintSupportOut
+
+
+class FootprintUnitTotalOut(BaseModel):
+    unit: str
+    requisition_count: int
+    net_quantity: int
+    consumables: int
+
+
+class FootprintOut(BaseModel):
+    window: int
+    generated_at: datetime
+    user_id: int
+    user_name: str
+    requisition_count: int
+    items: list[FootprintItemOut]
+    unit_totals: list[FootprintUnitTotalOut]

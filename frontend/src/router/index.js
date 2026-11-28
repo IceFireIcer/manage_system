@@ -55,6 +55,15 @@ const routes = [
         },
       },
       {
+        path: 'footprint',
+        name: 'footprint',
+        component: () => import('../views/MyFootprint.vue'),
+        meta: {
+          title: '我的耗材足迹',
+          nav: { group: 'requisition', icon: 'DataLine', order: 4 },
+        },
+      },
+      {
         path: 'courses',
         name: 'courses',
         component: () => import('../views/CourseRecipes.vue'),
