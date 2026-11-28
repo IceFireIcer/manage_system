@@ -199,3 +199,41 @@ class RecipeOut(BaseModel):
 
 class RecipeHistoryOut(BaseModel):
     items: list[RecipeSnapshotOut]
+
+RiskLevel = Literal["sufficient", "critical", "insufficient", "unconfigured"]
+ItemRiskLevel = Literal["sufficient", "critical", "insufficient"]
+
+
+class CourseRiskItemOut(BaseModel):
+    consumable_id: int
+    consumable_name: str
+    unit: str
+    quantity_per_person: int
+    required_quantity: int
+    available_quantity: int
+    safety_stock: int
+    gap: int
+    level: ItemRiskLevel
+
+
+class CourseSessionRiskOut(BaseModel):
+    configured: bool
+    level: RiskLevel
+    course_id: int
+    course_name: str
+    session_id: int
+    seq: int
+    session_date: date
+    headcount: int
+    recipe_version: int | None = None
+    lead_days: int
+    arrival_deadline: date | None = None
+    gap: int
+    gap_consumable_name: str | None = None
+    items: list[CourseRiskItemOut]
+
+
+class CourseRiskListOut(BaseModel):
+    days: int
+    lead_days: int
+    items: list[CourseSessionRiskOut]

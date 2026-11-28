@@ -32,6 +32,7 @@ const suggestions = ref({ items: [] })
 const consumption = ref({ items: [], unit_totals: [] })
 const logs = ref({ items: [] })
 const consumables = ref([])
+const courseRisks = ref([])
 
 const items = computed(() => overview.value.items ?? [])
 const summary = computed(() => overview.value.summary ?? null)
@@ -63,6 +64,24 @@ const suggestionItems = computed(() =>
     .sort(
       (left, right) =>
         (TIER_RANK[left.tier] ?? 9) - (TIER_RANK[right.tier] ?? 9),
+    )
+    .slice(0, 3),
+)
+
+const RISK_RANK = { insufficient: 0, critical: 1, unconfigured: 2, sufficient: 3 }
+const RISK_META = {
+  sufficient: { label: '充足', className: 'status-tag--success' },
+  critical: { label: '临界', className: 'status-tag--warning' },
+  insufficient: { label: '不足', className: 'status-tag--danger' },
+  unconfigured: { label: '未配置', className: 'status-tag--neutral' },
+}
+
+const upcomingRisks = computed(() =>
+  [...courseRisks.value]
+    .sort(
+      (left, right) =>
+        (RISK_RANK[left.level] ?? 9) - (RISK_RANK[right.level] ?? 9) ||
+        left.session_date.localeCompare(right.session_date),
     )
     .slice(0, 3),
 )
@@ -136,6 +155,26 @@ function suggestionMeta(item) {
   return TIER_META[item.tier] ?? { label: item.tier ?? '建议', className: 'status-tag--info' }
 }
 
+function riskMeta(risk) {
+  return (
+    RISK_META[risk.level] ?? {
+      label: risk.level,
+      className: 'status-tag--info',
+    }
+  )
+}
+
+function riskMetaDetail(risk) {
+  const parts = []
+  if (risk.gap > 0) parts.push(`缺 ${risk.gap}`)
+  if (risk.arrival_deadline) {
+    parts.push(`${risk.arrival_deadline.slice(5)} 前到货`)
+  } else {
+    parts.push(risk.session_date.slice(5))
+  }
+  return parts.join(' · ')
+}
+
 function formatTime(value) {
   if (!value) return '—'
   const date = new Date(value)
@@ -166,6 +205,8 @@ function assign(key, data) {
     }
   } else if (key === 'logs') {
     logs.value = { items: data.items ?? [] }
+  } else if (key === 'risks') {
+    courseRisks.value = data.items ?? []
   } else if (key === 'consumables') {
     consumables.value = Array.isArray(data) ? data : []
   }
@@ -187,6 +228,7 @@ async function loadData({ silent = false } = {}) {
   if (isStaff.value) {
     requests.push(
       { key: 'suggestions', request: api.get('/inventory/suggestions') },
+      { key: 'risks', request: api.get('/courses/risk', { params: { days: 14 } }) },
       {
         key: 'consumption',
         request: api.get('/consumption/summary', { params: { window: 7 } }),
@@ -270,6 +312,33 @@ onMounted(() => loadData())
 
     <div class="dashboard__grid">
       <div class="dashboard__main">
+        <section v-if="isStaff" class="panel dashboard__section">
+          <header class="dashboard__section-head">
+            <h2 class="dashboard__section-title">下一课次风险</h2>
+            <el-button link type="primary" @click="go('/courses')">全部</el-button>
+          </header>
+          <ul v-if="upcomingRisks.length" class="dashboard__list">
+            <li v-for="risk in upcomingRisks" :key="risk.session_id">
+              <button
+                type="button"
+                class="dashboard__risk-row"
+                @click="go('/courses')"
+              >
+                <span class="dashboard__row-main">
+                  <span class="status-tag" :class="riskMeta(risk).className">
+                    {{ riskMeta(risk).label }}
+                  </span>
+                  <span class="dashboard__row-title">
+                    {{ risk.course_name }} · 第 {{ risk.seq }} 次
+                  </span>
+                </span>
+                <span class="dashboard__row-meta">{{ riskMetaDetail(risk) }}</span>
+              </button>
+            </li>
+          </ul>
+          <EmptyState v-else title="暂未匹配到课程风险" />
+        </section>
+
         <section v-if="isStaff" class="panel dashboard__section">
           <header class="dashboard__section-head">
             <div class="dashboard__section-heading">
@@ -611,6 +680,25 @@ onMounted(() => loadData())
   font-size: 12px;
   line-height: 18px;
   font-variant-numeric: tabular-nums;
+}
+
+.dashboard__risk-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.dashboard__risk-row:hover .dashboard__row-title {
+  color: var(--primary);
 }
 
 .dashboard__chips {

@@ -15,6 +15,13 @@ const SESSION_STATUS = {
   cancelled: { label: '已取消', tag: 'status-tag--neutral' },
 }
 
+const RISK_META = {
+  sufficient: { label: '充足', tag: 'status-tag--success' },
+  critical: { label: '临界', tag: 'status-tag--warning' },
+  insufficient: { label: '不足', tag: 'status-tag--danger' },
+  unconfigured: { label: '未配置', tag: 'status-tag--neutral' },
+}
+
 const courses = ref([])
 const total = ref(0)
 const page = ref(1)
@@ -56,6 +63,9 @@ const sessionTotal = ref(0)
 const sessionPage = ref(1)
 const sessionsLoading = ref(false)
 const sessionError = ref('')
+const sessionRisks = ref({})
+const riskLoading = ref(false)
+const riskError = ref(false)
 const sessionDialogVisible = ref(false)
 const sessionSaving = ref(false)
 const sessionDialogError = ref('')
@@ -219,6 +229,62 @@ function sessionStatusTag(status) {
   return SESSION_STATUS[status]?.tag ?? 'status-tag--neutral'
 }
 
+function riskMeta(sessionId) {
+  const risk = sessionRisks.value[sessionId]
+  if (!risk) return null
+  return RISK_META[risk.level] ?? { label: risk.level, tag: 'status-tag--neutral' }
+}
+
+function riskDetail(sessionId) {
+  const risk = sessionRisks.value[sessionId]
+  if (!risk || risk.level === 'sufficient' || risk.level === 'unconfigured') return ''
+  const parts = []
+  if (risk.gap > 0) {
+    parts.push(
+      `缺口 ${risk.gap}${risk.gap_consumable_name ? `（${risk.gap_consumable_name}）` : ''}`,
+    )
+  } else if (risk.level === 'critical' && risk.gap_consumable_name) {
+    parts.push(`${risk.gap_consumable_name} 低于安全线`)
+  }
+  if (risk.arrival_deadline) parts.push(`${risk.arrival_deadline.slice(5)} 前到货`)
+  return parts.join(' · ')
+}
+
+function riskPlaceholder(sessionId) {
+  if (sessionRisks.value[sessionId]) return ''
+  if (riskLoading.value) return '计算中'
+  if (riskError.value) return '读取失败'
+  return '—'
+}
+
+async function loadSessionRisks() {
+  const course = activeCourse.value
+  if (!course || !sessions.value.length) {
+    sessionRisks.value = {}
+    riskError.value = false
+    return
+  }
+  const rows = [...sessions.value]
+  riskLoading.value = true
+  riskError.value = false
+  const results = await Promise.allSettled(
+    rows.map((row) =>
+      api
+        .get(`/courses/${course.id}/sessions/${row.id}/risk`)
+        .then(({ data }) => data),
+    ),
+  )
+  const next = {}
+  let failed = false
+  results.forEach((result, index) => {
+    if (result.status === 'fulfilled') next[rows[index].id] = result.value
+    else failed = true
+  })
+  sessionRisks.value = next
+  riskError.value = failed
+  riskLoading.value = false
+}
+
 async function fetchSessions() {
   if (!activeCourse.value) return
   sessionsLoading.value = true
@@ -235,6 +301,7 @@ async function fetchSessions() {
   } finally {
     sessionsLoading.value = false
   }
+  await loadSessionRisks()
 }
 
 function openSessions(course) {
@@ -593,6 +660,15 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
           class="courses__alert"
         />
 
+        <el-alert
+          v-if="riskError"
+          type="warning"
+          :closable="false"
+          show-icon
+          title="部分课次风险读取失败，其余信息不受影响"
+          class="courses__alert"
+        />
+
         <el-skeleton v-if="sessionsLoading && !sessions.length" :rows="4" animated />
         <EmptyState
           v-else-if="!sessions.length"
@@ -604,19 +680,38 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
           </template>
         </EmptyState>
         <el-table v-else :data="sessions" row-key="id" class="table-dense">
-          <el-table-column label="课次" width="72">
+          <el-table-column label="课次" width="64">
             <template #default="{ row }">第 {{ row.seq }} 次</template>
           </el-table-column>
-          <el-table-column prop="session_date" label="日期" width="110" />
-          <el-table-column label="人数" width="72" align="right">
+          <el-table-column prop="session_date" label="日期" width="104" />
+          <el-table-column label="人数" width="64" align="right">
             <template #default="{ row }">{{ row.headcount }} 人</template>
           </el-table-column>
-          <el-table-column label="配方" width="80">
+          <el-table-column label="配方" width="72">
             <template #default="{ row }">
               {{ row.recipe_version ? `v${row.recipe_version}` : '未配置' }}
             </template>
           </el-table-column>
-          <el-table-column label="状态" width="96">
+          <el-table-column label="风险" width="176">
+            <template #default="{ row }">
+              <div class="session-risk">
+                <span
+                  v-if="riskMeta(row.id)"
+                  class="status-tag"
+                  :class="riskMeta(row.id).tag"
+                >
+                  {{ riskMeta(row.id).label }}
+                </span>
+                <span v-else class="session-risk__placeholder">
+                  {{ riskPlaceholder(row.id) }}
+                </span>
+                <span v-if="riskDetail(row.id)" class="session-risk__detail">
+                  {{ riskDetail(row.id) }}
+                </span>
+              </div>
+            </template>
+          </el-table-column>
+          <el-table-column label="状态" width="84">
             <template #default="{ row }">
               <span class="status-tag" :class="sessionStatusTag(row.status)">
                 {{ sessionStatusLabel(row.status) }}
@@ -955,6 +1050,26 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
 .drawer-pagination {
   display: flex;
   justify-content: flex-end;
+}
+
+.session-risk {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+
+.session-risk__placeholder {
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.session-risk__detail {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 18px;
+  font-variant-numeric: tabular-nums;
 }
 
 .recipe-meta {
