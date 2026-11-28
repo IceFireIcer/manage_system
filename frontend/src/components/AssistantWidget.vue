@@ -1,10 +1,13 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
 import { ChatDotRound, Clock, Close, Delete, Plus } from '@element-plus/icons-vue'
 import { useUserStore } from '../stores/user'
 import { renderMarkdown } from '../utils/markdown'
 import {
+  cancelAssistantAction,
+  confirmAssistantAction,
   createThread,
   deleteThread,
   fetchAssistantStatus,
@@ -14,7 +17,15 @@ import {
 } from '../api/assistant'
 
 const OPEN_KEY = 'assistant-open'
+const ACTION_STATUS = {
+  pending: { label: '待确认', type: 'warning' },
+  prefilled: { label: '可前往', type: 'info' },
+  confirmed: { label: '已执行', type: 'success' },
+  cancelled: { label: '已取消', type: 'info' },
+  failed: { label: '执行失败', type: 'danger' },
+}
 const route = useRoute()
+const router = useRouter()
 const userStore = useUserStore()
 
 const open = ref(false)
@@ -28,6 +39,9 @@ const draft = ref('')
 const sending = ref(false)
 const showHistory = ref(false)
 const scrollRef = ref(null)
+const actions = ref([])
+const confirmingToken = ref('')
+const cancellingToken = ref('')
 
 const roleName = computed(() => userStore.roleName ?? '')
 const className = computed(() => userStore.activeClass?.name ?? '未选择班级')
@@ -91,17 +105,89 @@ async function selectThread(threadId) {
       content: item.content,
       toolCalls: item.tool_calls ?? [],
     }))
+    actions.value = Array.isArray(data.actions) ? data.actions : []
     await scrollToBottom()
   } catch {
     messages.value = []
+    actions.value = []
   }
 }
 
 function startNewChat() {
   activeThreadId.value = null
   messages.value = []
+  actions.value = []
   showHistory.value = false
   draft.value = ''
+}
+
+function mergeActions(list) {
+  if (!Array.isArray(list) || !list.length) return
+  const merged = [...actions.value]
+  for (const item of list) {
+    if (!item?.token) continue
+    const index = merged.findIndex((action) => action.token === item.token)
+    if (index === -1) merged.push(item)
+    else merged[index] = item
+  }
+  merged.sort((a, b) => String(a.created_at ?? '').localeCompare(String(b.created_at ?? '')))
+  actions.value = merged
+}
+
+function upsertAction(action) {
+  if (!action?.token) return
+  mergeActions([action])
+}
+
+function actionStatus(action) {
+  return ACTION_STATUS[action.status] ?? { label: action.status, type: 'info' }
+}
+
+function actionResultText(action) {
+  if (action.status === 'failed') return action.error || '执行失败'
+  if (action.status === 'cancelled') return '已取消'
+  if (action.status !== 'confirmed') return ''
+  const result = action.result ?? {}
+  if (result.incident_id) return `已提交异常单 #${result.incident_id}`
+  if (result.changed === false) return '资料没有变化'
+  if (Array.isArray(result.fields) && result.fields.length) return '资料已更新'
+  return '已执行'
+}
+
+async function confirmAction(action) {
+  if (confirmingToken.value || cancellingToken.value) return
+  confirmingToken.value = action.token
+  try {
+    const { data } = await confirmAssistantAction(action.token)
+    upsertAction(data)
+    if (data.status === 'confirmed') ElMessage.success('操作已执行')
+    else if (data.status === 'failed') ElMessage.error(data.error || '操作执行失败')
+    await scrollToBottom()
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || '确认失败，请稍后重试')
+  } finally {
+    confirmingToken.value = ''
+  }
+}
+
+async function cancelAction(action) {
+  if (confirmingToken.value || cancellingToken.value) return
+  cancellingToken.value = action.token
+  try {
+    const { data } = await cancelAssistantAction(action.token)
+    upsertAction(data)
+    ElMessage.success('操作已取消')
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || '取消失败，请稍后重试')
+  } finally {
+    cancellingToken.value = ''
+  }
+}
+
+function goAction(action) {
+  if (!action.route) return
+  router.push({ path: action.route, query: action.query ?? {} })
+  if (isMobile.value) closePanel()
 }
 
 async function removeThread(thread) {
@@ -154,6 +240,7 @@ async function send() {
       toolCalls: data.assistant_message.tool_calls ?? data.tool_calls ?? [],
     })
     configured.value = Boolean(data.configured)
+    mergeActions(data.actions ?? [])
     await loadThreads()
     await scrollToBottom()
   } catch (error) {
@@ -269,9 +356,12 @@ onBeforeUnmount(() => {
       </div>
 
       <div ref="scrollRef" class="assistant__messages">
-        <div v-if="!messages.length && !sending" class="assistant__hello">
-          <p>你好，我是只读 AI 助手。</p>
-          <p>我可以基于当前页面与班级的聚合数据回答问题，不会修改任何库存或记录。</p>
+        <div v-if="!messages.length && !sending && !actions.length" class="assistant__hello">
+          <p>你好，我是 AI 助手。</p>
+          <p>
+            我可以基于当前页面与班级的聚合数据回答问题；涉及修改或领用等操作时，
+            只会生成待确认卡片或预填链接，不会自动提交。
+          </p>
         </div>
         <div
           v-for="message in messages"
@@ -295,6 +385,62 @@ onBeforeUnmount(() => {
         </div>
         <div v-if="sending" class="assistant__msg assistant__msg--assistant">
           <div class="assistant__bubble assistant__typing">思考中…</div>
+        </div>
+
+        <div v-if="actions.length" class="assistant__actions">
+          <div class="assistant__actions-head">操作</div>
+          <div
+            v-for="action in actions"
+            :key="action.token"
+            class="assistant__action"
+            :class="`is-${action.status}`"
+          >
+            <div class="assistant__action-top">
+              <span class="assistant__action-label">{{ action.label }}</span>
+              <el-tag size="small" :type="actionStatus(action).type">
+                {{ actionStatus(action).label }}
+              </el-tag>
+            </div>
+            <p v-if="action.summary" class="assistant__action-summary">
+              {{ action.summary }}
+            </p>
+            <p v-if="action.status === 'failed'" class="assistant__action-error">
+              {{ actionResultText(action) }}
+            </p>
+            <p v-else-if="action.status === 'confirmed'" class="assistant__action-done">
+              {{ actionResultText(action) }}
+            </p>
+            <div
+              v-if="
+                (action.status === 'pending' && action.requires_confirmation) ||
+                (action.status === 'prefilled' && action.route)
+              "
+              class="assistant__action-btns"
+            >
+              <template v-if="action.status === 'pending' && action.requires_confirmation">
+                <el-button
+                  size="small"
+                  type="primary"
+                  :loading="confirmingToken === action.token"
+                  :disabled="cancellingToken !== ''"
+                  @click="confirmAction(action)"
+                >
+                  确认执行
+                </el-button>
+                <el-button
+                  size="small"
+                  :loading="cancellingToken === action.token"
+                  :disabled="confirmingToken !== ''"
+                  @click="cancelAction(action)"
+                >
+                  取消
+                </el-button>
+              </template>
+              <el-button v-else size="small" type="primary" plain @click="goAction(action)">
+                前往填写
+              </el-button>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -570,6 +716,73 @@ onBeforeUnmount(() => {
 
 .assistant__typing {
   color: var(--text-muted);
+}
+
+.assistant__actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.assistant__actions-head {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.assistant__action {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+  background: var(--surface-muted);
+}
+
+.assistant__action.is-pending {
+  border-color: var(--primary);
+}
+
+.assistant__action.is-failed {
+  border-color: rgb(228 86 86 / 45%);
+}
+
+.assistant__action-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.assistant__action-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.assistant__action-summary {
+  margin: 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--text-secondary);
+}
+
+.assistant__action-error {
+  margin: 0;
+  font-size: 12px;
+  color: #c0392b;
+}
+
+.assistant__action-done {
+  margin: 0;
+  font-size: 12px;
+  color: var(--primary);
+}
+
+.assistant__action-btns {
+  display: flex;
+  gap: 6px;
 }
 
 .assistant__input {

@@ -239,30 +239,44 @@ def get_profile(
     return _to_out(db, current_user, profile)
 
 
+def update_profile_fields(
+    db: Session,
+    user: User,
+    payload: ProfileUpdate,
+    *,
+    action: str = "profile_update",
+    commit: bool = True,
+) -> tuple[UserProfile, bool]:
+    """应用本人资料更新并由调用方决定事务边界。"""
+    profile = _get_or_create_profile(db, user)
+    before = _profile_snapshot(user, profile)
+    changed = _apply_common_fields(user, profile, payload)
+    if changed:
+        profile.updated_at = business_now()
+        record_operation(
+            db,
+            action=action,
+            operator=user,
+            target_type="user",
+            target_id=user.id,
+            target_label=user_label(user),
+            before_value=before,
+            after_value=_profile_snapshot(user, profile),
+        )
+        if commit:
+            db.commit()
+            db.refresh(user)
+            db.refresh(profile)
+    return profile, changed
+
+
 @router.patch("")
 def update_profile(
     payload: ProfileUpdate,
     db: Annotated[Session, Depends(get_db)],
     current_user: CurrentUser,
 ) -> ProfileOut:
-    profile = _get_or_create_profile(db, current_user)
-    before = _profile_snapshot(current_user, profile)
-    changed = _apply_common_fields(current_user, profile, payload)
-    if changed:
-        profile.updated_at = business_now()
-        record_operation(
-            db,
-            action="profile_update",
-            operator=current_user,
-            target_type="user",
-            target_id=current_user.id,
-            target_label=user_label(current_user),
-            before_value=before,
-            after_value=_profile_snapshot(current_user, profile),
-        )
-        db.commit()
-        db.refresh(current_user)
-        db.refresh(profile)
+    profile, _changed = update_profile_fields(db, current_user, payload)
     return _to_out(db, current_user, profile)
 
 

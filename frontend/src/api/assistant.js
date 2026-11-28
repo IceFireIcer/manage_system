@@ -27,3 +27,10 @@ export function sendThreadMessage(threadId, payload) {
     timeout: 60000,
   })
 }
+export function confirmAssistantAction(token) {
+  return api.post(`/assistant/actions/${token}/confirm`, {}, { timeout: 30000 })
+}
+
+export function cancelAssistantAction(token) {
+  return api.post(`/assistant/actions/${token}/cancel`, {}, { timeout: 30000 })
+}

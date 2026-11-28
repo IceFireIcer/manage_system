@@ -29,6 +29,22 @@ class ToolCallOut(BaseModel):
     error: str | None = None
 
 
+class ToolActionOut(BaseModel):
+    token: str
+    tool: str
+    label: str
+    kind: str
+    status: str
+    requires_confirmation: bool = False
+    summary: str | None = None
+    route: str | None = None
+    query: dict[str, str] = {}
+    result: dict | None = None
+    error: str | None = None
+    created_at: datetime
+    confirmed_at: datetime | None = None
+
+
 class MessageOut(BaseModel):
     id: int
     role: str
@@ -58,11 +74,13 @@ class ChatResponse(BaseModel):
     configured: bool
     answer: str
     tool_calls: list[ToolCallOut] = []
+    actions: list[ToolActionOut] = []
 
 
 class ThreadDetailOut(BaseModel):
     thread: ThreadOut
     messages: list[MessageOut]
+    actions: list[ToolActionOut] = []
 
 
 class AssistantStatusOut(BaseModel):

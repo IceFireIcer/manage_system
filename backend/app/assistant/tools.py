@@ -1,8 +1,8 @@
-"""悬浮助手只读数据工具注册表。
+"""悬浮助手工具注册表。
 
-所有工具按 active_role/active_class 与权限键在服务端二次校验；
-返回值仅含聚合数量与耗材级信息，不返回学生姓名/学号/手机号/邮箱等个人明细。
-工具只读，不写库存或业务事件；调用审计由路由层记录。
+只读工具返回聚合数据；写工具只在用户二次确认后执行；预填工具仅生成
+目标路由与参数，不提交账本。所有工具按 active_role/active_class 与
+权限键在服务端二次校验；工具参数禁止携带 class_id/role。
 """
 
 from __future__ import annotations
@@ -24,6 +24,61 @@ UNKNOWN_TOOL = "未知的数据工具"
 EXECUTE_FAILED = "工具执行失败，请稍后重试"
 TIER_LABELS = {"urgent": "紧急", "moderate": "关注", "observe": "观察"}
 RISK_LEVELS = ("insufficient", "critical", "unconfigured")
+
+KIND_READ = "read"
+KIND_WRITE = "write"
+KIND_PREFILL = "prefill"
+ACTION_PENDING = "pending"
+ACTION_PREFILLED = "prefilled"
+ACTION_CONFIRMED = "confirmed"
+ACTION_CANCELLED = "cancelled"
+ACTION_FAILED = "failed"
+
+PROFILE_FIELDS = ("name", "phone", "email", "wechat", "qq", "github")
+PROFILE_FIELD_LABELS = {
+    "name": "姓名",
+    "phone": "手机号",
+    "email": "邮箱",
+    "wechat": "微信",
+    "qq": "QQ",
+    "github": "GitHub",
+}
+ACTION_QUERY_MAX = 200
+FORBIDDEN_ARG_KEYS = frozenset(
+    {
+        "class_id",
+        "class",
+        "role",
+        "active_role",
+        "active_class",
+        "active_class_id",
+        "user_id",
+        "operator_id",
+        "permission",
+        "permissions",
+        "settings",
+        "llm",
+        "ledger",
+        "inventory_event",
+        "event",
+    }
+)
+FORBIDDEN_TOOL_MARKERS = (
+    "role",
+    "account",
+    "permission",
+    "llm",
+    "setting",
+    "config",
+    "secret",
+    "ledger",
+    "inventory_event",
+    "password",
+)
+
+
+class ToolActionError(Exception):
+    """工具动作被拒绝或无法完成；消息直接展示给用户。"""
 
 
 @dataclass(frozen=True)
@@ -425,3 +480,418 @@ def run_tool(name: str, ctx: ToolContext) -> dict:
     except Exception:
         return {"ok": False, "tool": name, "label": spec.label, "error": EXECUTE_FAILED}
     return {"ok": True, "tool": name, "label": spec.label, "data": data}
+
+@dataclass(frozen=True)
+class ActionToolSpec:
+    name: str
+    label: str
+    description: str
+    permission_key: str
+    kind: str
+    params: tuple[str, ...]
+    preview: Callable[[ToolContext, dict], dict]
+    execute: Callable[[ToolContext, dict], dict] | None
+    requires_confirmation: bool
+
+
+def _int_arg(args: dict, key: str, label: str) -> int:
+    raw = args.get(key)
+    if raw is None or raw == "":
+        raise ToolActionError(f"请提供{label}")
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        raise ToolActionError(f"{label}格式不正确")
+    if value <= 0:
+        raise ToolActionError(f"{label}必须为正整数")
+    return value
+
+
+def _optional_int_arg(args: dict, key: str) -> int | None:
+    raw = args.get(key)
+    if raw is None or raw == "":
+        return None
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
+def _require_consumable(ctx: ToolContext, args: dict) -> Consumable:
+    consumable_id = _int_arg(args, "consumable_id", "耗材")
+    consumable = ctx.db.get(Consumable, consumable_id)
+    if consumable is None or consumable.class_id != ctx.class_id:
+        raise ToolActionError("耗材不存在或不属于当前班级")
+    if consumable.status != "enabled":
+        raise ToolActionError("耗材已停用，无法操作")
+    return consumable
+
+
+def _http_action(call: Callable) -> object:
+    from fastapi import HTTPException
+
+    try:
+        return call()
+    except HTTPException as exc:
+        raise ToolActionError(str(exc.detail))
+
+
+def _preview_update_my_profile(ctx: ToolContext, args: dict) -> dict:
+    from app.routers import profile as profile_router
+
+    fields = [key for key in PROFILE_FIELDS if key in args]
+    if not fields:
+        raise ToolActionError("请提供要修改的资料字段")
+    if "name" in args:
+        _http_action(lambda: profile_router._normalize_name(args["name"]))
+    if "phone" in args:
+        _http_action(lambda: profile_router._normalize_phone(args["phone"]))
+    if "email" in args:
+        _http_action(lambda: profile_router._normalize_email(args["email"]))
+    labels = "、".join(PROFILE_FIELD_LABELS[key] for key in fields)
+    return {"summary": f"修改本人资料：{labels}", "fields": fields}
+
+
+def _execute_update_my_profile(ctx: ToolContext, args: dict) -> dict:
+    from app.routers import profile as profile_router
+
+    payload = profile_router.ProfileUpdate(
+        **{key: args[key] for key in PROFILE_FIELDS if key in args}
+    )
+    profile, changed = profile_router.update_profile_fields(
+        ctx.db, ctx.user, payload, commit=False
+    )
+    return {
+        "changed": changed,
+        "fields": [key for key in PROFILE_FIELDS if key in args],
+        "name": ctx.user.name,
+    }
+
+
+def _validate_incident_args(ctx: ToolContext, args: dict) -> Consumable:
+    from app.schemas_incidents import (
+        DESCRIPTION_MAX_LENGTH,
+        LOCATION_MAX_LENGTH,
+    )
+
+    consumable = _require_consumable(ctx, args)
+    description = str(args.get("description") or "").strip()
+    if not description:
+        raise ToolActionError("请填写异常描述")
+    if len(description) > DESCRIPTION_MAX_LENGTH:
+        raise ToolActionError(f"异常描述不能超过 {DESCRIPTION_MAX_LENGTH} 个字符")
+    location = str(args.get("location") or "").strip()
+    if len(location) > LOCATION_MAX_LENGTH:
+        raise ToolActionError(f"位置不能超过 {LOCATION_MAX_LENGTH} 个字符")
+    return consumable
+
+
+def _preview_create_incident(ctx: ToolContext, args: dict) -> dict:
+    consumable = _validate_incident_args(ctx, args)
+    description = str(args.get("description") or "").strip()
+    preview = description[:60] + ("…" if len(description) > 60 else "")
+    return {
+        "summary": f"提交异常单：{consumable.name}，{preview}",
+        "consumable_id": consumable.id,
+        "consumable_name": consumable.name,
+    }
+
+
+def _execute_create_incident(ctx: ToolContext, args: dict) -> dict:
+    from app.routers import incidents as incidents_router
+    from app.schemas_incidents import STATUS_OPEN
+
+    consumable = _validate_incident_args(ctx, args)
+    report = _http_action(
+        lambda: incidents_router.create_report(
+            ctx.db,
+            user=ctx.user,
+            class_id=ctx.class_id,
+            consumable=consumable,
+            description=str(args.get("description") or ""),
+            location=str(args.get("location") or ""),
+        )
+    )
+    return {
+        "incident_id": report.id,
+        "consumable_id": consumable.id,
+        "consumable_name": consumable.name,
+        "status": STATUS_OPEN,
+    }
+
+
+def _prefill_requisition(ctx: ToolContext, args: dict) -> dict:
+    consumable = _require_consumable(ctx, args)
+    quantity = _optional_int_arg(args, "quantity")
+    query = {"consumable_id": str(consumable.id)}
+    if quantity is not None:
+        query["quantity"] = str(quantity)
+    amount = f" {quantity}{consumable.unit}" if quantity is not None else ""
+    return {
+        "summary": f"前往领用登记填写：{consumable.name}{amount}",
+        "route": "/requisition",
+        "query": query,
+    }
+
+
+def _prefill_inbound(ctx: ToolContext, args: dict) -> dict:
+    consumable = _require_consumable(ctx, args)
+    quantity = _optional_int_arg(args, "quantity")
+    query = {"consumable_id": str(consumable.id)}
+    if quantity is not None:
+        query["quantity"] = str(quantity)
+    amount = f" {quantity}{consumable.unit}" if quantity is not None else ""
+    return {
+        "summary": f"前往补货入库填写：{consumable.name}{amount}",
+        "route": "/restock",
+        "query": query,
+    }
+
+
+def _prefill_inventory_count(ctx: ToolContext, args: dict) -> dict:
+    consumable = _require_consumable(ctx, args)
+    return {
+        "summary": f"前往库存盘点：{consumable.name}",
+        "route": "/overview",
+        "query": {
+            "focus": "inventory_count",
+            "consumable_id": str(consumable.id),
+        },
+    }
+
+
+def _prefill_reversal(ctx: ToolContext, args: dict) -> dict:
+    consumable_id = _optional_int_arg(args, "consumable_id")
+    requisition_id = _optional_int_arg(args, "requisition_id")
+    if consumable_id is None and requisition_id is None:
+        raise ToolActionError("请提供耗材或领用记录")
+    query: dict[str, str] = {"action": "reversal"}
+    if consumable_id is not None:
+        consumable = _require_consumable(ctx, args)
+        query["consumable_id"] = str(consumable.id)
+    if requisition_id is not None:
+        query["requisition_id"] = str(requisition_id)
+    return {
+        "summary": "前往记录查询选择原始领用进行红冲/纠错",
+        "route": "/records",
+        "query": query,
+    }
+
+
+def _prefill_return(ctx: ToolContext, args: dict) -> dict:
+    consumable_id = _optional_int_arg(args, "consumable_id")
+    requisition_id = _optional_int_arg(args, "requisition_id")
+    if consumable_id is None and requisition_id is None:
+        raise ToolActionError("请提供耗材或领用记录")
+    query: dict[str, str] = {"action": "return"}
+    if consumable_id is not None:
+        consumable = _require_consumable(ctx, args)
+        query["consumable_id"] = str(consumable.id)
+    if requisition_id is not None:
+        query["requisition_id"] = str(requisition_id)
+    return {
+        "summary": "前往记录查询选择领用单办理退库",
+        "route": "/records",
+        "query": query,
+    }
+
+
+def _prefill_scrap(ctx: ToolContext, args: dict) -> dict:
+    consumable_id = _optional_int_arg(args, "consumable_id")
+    requisition_id = _optional_int_arg(args, "requisition_id")
+    if consumable_id is None and requisition_id is None:
+        raise ToolActionError("请提供耗材或领用记录")
+    query: dict[str, str] = {"action": "scrap"}
+    if consumable_id is not None:
+        consumable = _require_consumable(ctx, args)
+        query["consumable_id"] = str(consumable.id)
+    if requisition_id is not None:
+        query["requisition_id"] = str(requisition_id)
+    return {
+        "summary": "前往记录查询选择领用单办理报损",
+        "route": "/records",
+        "query": query,
+    }
+
+
+def _prefill_course_recipe(ctx: ToolContext, args: dict) -> dict:
+    course_id = _optional_int_arg(args, "course_id")
+    query: dict[str, str] = {}
+    if course_id is not None:
+        query["course_id"] = str(course_id)
+    consumable_id = _optional_int_arg(args, "consumable_id")
+    if consumable_id is not None:
+        consumable = _require_consumable(ctx, args)
+        query["consumable_id"] = str(consumable.id)
+    if not query:
+        raise ToolActionError("请提供课程或耗材")
+    return {
+        "summary": "前往课程配方维护预填课次耗材",
+        "route": "/courses",
+        "query": query,
+    }
+
+
+ACTION_TOOL_SPECS: tuple[ActionToolSpec, ...] = (
+    ActionToolSpec(
+        "update_my_profile",
+        "修改本人资料",
+        "在用户确认后修改本人的姓名、手机号、邮箱、微信、QQ 或 GitHub",
+        "profile.edit",
+        KIND_WRITE,
+        PROFILE_FIELDS,
+        _preview_update_my_profile,
+        _execute_update_my_profile,
+        True,
+    ),
+    ActionToolSpec(
+        "create_incident",
+        "提交异常单",
+        "在用户确认后为指定耗材提交异常单（不支持照片）",
+        "incident.create",
+        KIND_WRITE,
+        ("consumable_id", "description", "location"),
+        _preview_create_incident,
+        _execute_create_incident,
+        True,
+    ),
+    ActionToolSpec(
+        "prefill_requisition",
+        "预填领用登记",
+        "只跳转到领用登记并预选耗材与数量，不提交",
+        "requisition.create",
+        KIND_PREFILL,
+        ("consumable_id", "quantity"),
+        _prefill_requisition,
+        None,
+        False,
+    ),
+    ActionToolSpec(
+        "prefill_inbound",
+        "预填补货入库",
+        "只跳转到补货页并预选耗材与数量，不提交",
+        "restock.manage",
+        KIND_PREFILL,
+        ("consumable_id", "quantity"),
+        _prefill_inbound,
+        None,
+        False,
+    ),
+    ActionToolSpec(
+        "prefill_inventory_count",
+        "预填库存盘点",
+        "只跳转到库存总览并打开盘点入口，不提交",
+        "inventory.manage",
+        KIND_PREFILL,
+        ("consumable_id",),
+        _prefill_inventory_count,
+        None,
+        False,
+    ),
+    ActionToolSpec(
+        "prefill_reversal",
+        "预填红冲/纠错",
+        "只跳转到记录查询并定位领用记录，不提交",
+        "requisition.approve",
+        KIND_PREFILL,
+        ("consumable_id", "requisition_id"),
+        _prefill_reversal,
+        None,
+        False,
+    ),
+    ActionToolSpec(
+        "prefill_return",
+        "预填退库",
+        "只跳转到记录查询并定位领用记录，不提交",
+        "requisition.approve",
+        KIND_PREFILL,
+        ("consumable_id", "requisition_id"),
+        _prefill_return,
+        None,
+        False,
+    ),
+    ActionToolSpec(
+        "prefill_scrap",
+        "预填报损",
+        "只跳转到记录查询并定位领用记录，不提交",
+        "requisition.approve",
+        KIND_PREFILL,
+        ("consumable_id", "requisition_id"),
+        _prefill_scrap,
+        None,
+        False,
+    ),
+    ActionToolSpec(
+        "prefill_course_recipe",
+        "预填课程配方",
+        "只跳转到课程配方页并预选课程/耗材，不提交",
+        "course.manage",
+        KIND_PREFILL,
+        ("course_id", "consumable_id"),
+        _prefill_course_recipe,
+        None,
+        False,
+    ),
+)
+
+ACTION_TOOL_MAP: dict[str, ActionToolSpec] = {
+    spec.name: spec for spec in ACTION_TOOL_SPECS
+}
+
+
+def is_forbidden_tool(name: str) -> bool:
+    lowered = name.strip().lower()
+    return any(marker in lowered for marker in FORBIDDEN_TOOL_MARKERS)
+
+
+def clean_action_args(spec: ActionToolSpec, raw: object) -> dict:
+    if raw is None:
+        raw = {}
+    if not isinstance(raw, dict):
+        raise ToolActionError("工具参数格式不正确")
+    for key in raw:
+        if str(key).strip().lower() in FORBIDDEN_ARG_KEYS:
+            raise ToolActionError("工具参数不能携带 class_id/role 等会话字段")
+    cleaned: dict = {}
+    for key in spec.params:
+        value = raw.get(key)
+        if value is None or isinstance(value, bool):
+            continue
+        if isinstance(value, (int, float)):
+            cleaned[key] = int(value)
+            continue
+        text = str(value).strip()
+        if text:
+            cleaned[key] = text[:ACTION_QUERY_MAX]
+    return cleaned
+
+
+def prepare_action(
+    name: str, ctx: ToolContext, raw_args: object
+) -> tuple[ActionToolSpec, dict, dict]:
+    spec = ACTION_TOOL_MAP.get(name)
+    if spec is None:
+        raise ToolActionError("未知或不受支持的操作工具")
+    if not has_permission(ctx, spec.permission_key):
+        raise ToolActionError(PERMISSION_DENIED)
+    args = clean_action_args(spec, raw_args)
+    preview = spec.preview(ctx, args)
+    return spec, args, preview
+
+
+def execute_action(spec: ActionToolSpec, ctx: ToolContext, args: dict) -> dict:
+    if spec.execute is None:
+        raise ToolActionError("该工具只支持预填，不执行提交")
+    return spec.execute(ctx, args)
+
+
+def action_tool_prompt_text() -> str:
+    lines = []
+    for spec in ACTION_TOOL_SPECS:
+        params = "、".join(spec.params) or "无"
+        mode = "需用户二次确认后执行" if spec.requires_confirmation else "只预填不提交"
+        lines.append(
+            f"- {spec.name}：{spec.label}（{mode}），参数：{params}。{spec.description}"
+        )
+    return "\n".join(lines)
