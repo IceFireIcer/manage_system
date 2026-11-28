@@ -281,6 +281,58 @@ class InventoryCountLinesUpdate(BaseModel):
     )
 
 
+class TraceDocumentOut(BaseModel):
+    kind: str
+    kind_label: str
+    order_no: str | None = None
+    quantity: int | None = None
+    unit: str | None = None
+    status: str | None = None
+    status_label: str | None = None
+    ref_id: int
+    at: datetime
+    operator_name: str | None = None
+    reason: str | None = None
+
+
+class TraceEventOut(BaseModel):
+    id: int
+    consumable_id: int
+    consumable_name: str
+    consumable_spec: str
+    consumable_unit: str
+    event_type: str
+    event_label: str
+    source_type: str
+    source_id: int | None
+    requisition_id: int | None
+    line_no: int | None
+    order_no: str | None
+    delta: int
+    stock_before: int
+    stock_after: int
+    exec_seq: int
+    unit_snapshot: str
+    business_at: datetime
+    posted_at: datetime
+    created_at: datetime
+    operator_id: int | None
+    operator_name: str | None
+    operator_role: str | None
+    evidence_status: str
+    evidence_label: str
+    reason: str | None
+    remark: str | None
+
+
+class InventoryEventTraceOut(BaseModel):
+    event: TraceEventOut
+    timeline: list[TraceDocumentOut]
+    timeline_total: int
+    limit: int
+    truncated: bool
+
+
 class InventoryCountLineOut(BaseModel):
     line_no: int
     consumable_id: int
