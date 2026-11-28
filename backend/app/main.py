@@ -28,6 +28,7 @@ from app.routers import (
     inventory,
     logs,
     ops,
+    profile,
     requisitions,
     setup,
     users,
@@ -146,6 +147,7 @@ def create_app() -> FastAPI:
     app.include_router(setup.router)
     app.include_router(classes.router)
     app.include_router(users.router)
+    app.include_router(profile.router)
     app.include_router(consumables.router)
     app.include_router(courses.router)
     app.include_router(handover.router)

@@ -351,7 +351,9 @@ async function handleRoleSwitch(nextRole) {
 }
 
 function handleUserCommand(command) {
-  if (command === 'logout') {
+  if (command === 'profile') {
+    router.push('/profile')
+  } else if (command === 'logout') {
     handleLogout()
   } else if (command === 'logout-all') {
     handleLogoutAll()
@@ -566,6 +568,7 @@ onBeforeUnmount(() => {
               >
                 切换为{{ ROLE_LABEL[role] ?? role }}视角
               </el-dropdown-item>
+              <el-dropdown-item divided command="profile">个人资料</el-dropdown-item>
               <el-dropdown-item divided command="change-password">修改密码</el-dropdown-item>
               <el-dropdown-item command="logout">退出当前会话</el-dropdown-item>
               <el-dropdown-item command="logout-all">撤销全部会话</el-dropdown-item>

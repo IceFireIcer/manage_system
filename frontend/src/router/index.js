@@ -110,6 +110,12 @@ const routes = [
         },
       },
       {
+        path: 'profile',
+        name: 'profile',
+        component: () => import('../views/Profile.vue'),
+        meta: { title: '个人资料' },
+      },
+      {
         path: 'restock',
         name: 'restock',
         component: () => import('../views/Restock.vue'),

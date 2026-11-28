@@ -14,6 +14,7 @@ from sqlalchemy import (
     UniqueConstraint,
     event,
 )
+from sqlalchemy.dialects import mysql
 from sqlalchemy.orm import Mapped, mapped_column, object_session
 
 from app.business_time import now as business_now
@@ -35,6 +36,30 @@ class User(Base):
     )
     session_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
+
+
+class UserProfile(Base):
+    __tablename__ = "user_profiles"
+    __table_args__ = (
+        UniqueConstraint("user_id", name="uq_user_profiles_user"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    employee_no: Mapped[str | None] = mapped_column(String(64), nullable=True, default="")
+    student_no: Mapped[str | None] = mapped_column(String(64), nullable=True, default="")
+    phone: Mapped[str | None] = mapped_column(String(32), nullable=True, default="")
+    email: Mapped[str | None] = mapped_column(String(128), nullable=True, default="")
+    wechat: Mapped[str | None] = mapped_column(String(64), nullable=True, default="")
+    qq: Mapped[str | None] = mapped_column(String(32), nullable=True, default="")
+    github: Mapped[str | None] = mapped_column(String(64), nullable=True, default="")
+    avatar_base64: Mapped[str | None] = mapped_column(
+        Text().with_variant(mysql.LONGTEXT(), "mysql"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
+    updated_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
 
 
 class UserRole(Base):
