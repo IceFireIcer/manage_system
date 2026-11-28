@@ -46,6 +46,15 @@ const routes = [
         },
       },
       {
+        path: 'incidents',
+        name: 'incidents',
+        component: () => import('../views/Incidents.vue'),
+        meta: {
+          title: '异常上报',
+          nav: { group: 'requisition', icon: 'Warning', order: 3 },
+        },
+      },
+      {
         path: 'courses',
         name: 'courses',
         component: () => import('../views/CourseRecipes.vue'),

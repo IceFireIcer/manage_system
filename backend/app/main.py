@@ -22,6 +22,7 @@ from app.routers import (
     consumables,
     consumption,
     courses,
+    incidents,
     inventory,
     logs,
     ops,
@@ -142,6 +143,7 @@ def create_app() -> FastAPI:
     app.include_router(users.router)
     app.include_router(consumables.router)
     app.include_router(courses.router)
+    app.include_router(incidents.router)
     app.include_router(requisitions.router)
     app.include_router(inventory.router)
     app.include_router(alerts.router)

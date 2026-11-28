@@ -684,6 +684,41 @@ class CourseSession(Base):
     updated_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
 
 
+class IncidentReport(Base):
+    __tablename__ = "incident_reports"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('open','confirmed','rejected')",
+            name="ck_incident_reports_status",
+        ),
+        Index("ix_incident_reports_class_status", "class_id", "status"),
+        Index("ix_incident_reports_reporter_created", "reporter_id", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    class_id: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    consumable_id: Mapped[int] = mapped_column(
+        ForeignKey("consumables.id"), nullable=False, index=True
+    )
+    reporter_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id"), nullable=False, index=True
+    )
+    reporter_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    reporter_role: Mapped[str] = mapped_column(String(16), nullable=False)
+    location: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    photo_path: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="open")
+    handler_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id"), nullable=True
+    )
+    handler_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    handled_at: Mapped[datetime | None] = mapped_column(DATETIME, nullable=True)
+    reject_reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
+    updated_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
+
+
 @event.listens_for(OperationLog, "before_insert")
 def _fill_operation_log_snapshot(_mapper, _connection, log: OperationLog) -> None:
     if log.result is None:
