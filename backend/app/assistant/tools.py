@@ -635,13 +635,19 @@ def _prefill_inbound(ctx: ToolContext, args: dict) -> dict:
 
 def _prefill_inventory_count(ctx: ToolContext, args: dict) -> dict:
     consumable = _require_consumable(ctx, args)
+    quantity = _optional_int_arg(args, "quantity")
+    query = {
+        "focus": "inventory_count",
+        "consumable_id": str(consumable.id),
+    }
+    amount = ""
+    if quantity is not None:
+        query["quantity"] = str(quantity)
+        amount = f" 实盘 {quantity}{consumable.unit}"
     return {
-        "summary": f"前往库存盘点：{consumable.name}",
+        "summary": f"前往库存盘点：{consumable.name}{amount}",
         "route": "/overview",
-        "query": {
-            "focus": "inventory_count",
-            "consumable_id": str(consumable.id),
-        },
+        "query": query,
     }
 
 
@@ -765,10 +771,10 @@ ACTION_TOOL_SPECS: tuple[ActionToolSpec, ...] = (
     ActionToolSpec(
         "prefill_inventory_count",
         "预填库存盘点",
-        "只跳转到库存总览并打开盘点入口，不提交",
+        "只跳转到库存总览并打开盘点入口，可预选耗材与实盘数量，不提交",
         "inventory.manage",
         KIND_PREFILL,
-        ("consumable_id",),
+        ("consumable_id", "quantity"),
         _prefill_inventory_count,
         None,
         False,

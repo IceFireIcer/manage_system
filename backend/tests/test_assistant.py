@@ -6,7 +6,8 @@ from app.assistant.context import build_context
 from app.assistant.service import trim_threads
 from app.assistant.tools import ToolActionError, ToolContext, prepare_action
 from app.config import Settings
-from app.models import AssistantThread, Consumable, User
+from app.models import AssistantThread, Consumable, SystemSetting, User, UserRole
+from app.security import hash_password
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
@@ -56,6 +57,9 @@ def test_trim_threads_respects_retention(db_session) -> None:
         )
         == 0
     )
+    db_session.add(SystemSetting(key="assistant_retention_days", value="0"))
+    db_session.commit()
+    assert trim_threads(db_session) == 0
 
 
 def test_threads_are_isolated_by_user(admin_client: TestClient) -> None:
@@ -139,6 +143,13 @@ def test_prefill_tools_return_expected_routes(db_session) -> None:
         "consumable_id": str(consumable.id),
     }
 
+    _, _, counted = prepare_action(
+        "prefill_inventory_count",
+        ctx,
+        {"consumable_id": consumable.id, "quantity": 7},
+    )
+    assert counted["query"]["quantity"] == "7"
+
     _, _, course = prepare_action(
         "prefill_course_recipe",
         ctx,
@@ -162,3 +173,42 @@ def test_prefill_tools_return_expected_routes(db_session) -> None:
             student_ctx,
             {"consumable_id": consumable.id},
         )
+
+def test_system_settings_write_requires_super_admin(
+    client: TestClient, db_session
+) -> None:
+    _login(client, "teacher01", "Teacher@123")
+    read = client.get("/api/v1/settings/system")
+    assert read.status_code == 200
+    assert read.json()["assistant_retention_days"] == 90
+    assert (
+        client.put(
+            "/api/v1/settings/system",
+            json={"assistant_retention_days": 30},
+        ).status_code
+        == 403
+    )
+
+    admin = User(
+        account="root01",
+        password_hash=hash_password("Root@123"),
+        name="超级管理员",
+        role="super_admin",
+        status="enabled",
+    )
+    db_session.add(admin)
+    db_session.flush()
+    db_session.add(UserRole(user_id=admin.id, role="super_admin"))
+    db_session.commit()
+
+    client.post("/api/v1/auth/logout")
+    _login(client, "root01", "Root@123")
+    updated = client.put(
+        "/api/v1/settings/system",
+        json={"assistant_retention_days": 30},
+    )
+    assert updated.status_code == 200, updated.text
+    assert (
+        client.get("/api/v1/settings/system").json()["assistant_retention_days"]
+        == 30
+    )

@@ -112,6 +112,7 @@ const ACTION_NAMES = {
   suggestion_feedback: '补货建议反馈',
   user_update: '更正用户',
   user_password_reset: '重置密码',
+  system_setting_update: '更新系统参数',
 }
 
 const FIELD_LABELS = {

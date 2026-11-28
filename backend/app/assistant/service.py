@@ -15,7 +15,7 @@ from app.agent import llm
 from app.assistant import actions as assistant_actions
 from app.assistant import tools as assistant_tools
 from app.config import Settings, get_settings
-from app.models import AssistantThread
+from app.models import AssistantThread, SystemSetting
 
 logger = logging.getLogger(__name__)
 
@@ -59,11 +59,24 @@ UNKNOWN_TOOL_EXTRA = (
 )
 
 
+ASSISTANT_RETENTION_KEY = "assistant_retention_days"
+
+
+def retention_days(db: Session, settings: Settings | None = None) -> int:
+    row = db.get(SystemSetting, ASSISTANT_RETENTION_KEY)
+    if row is not None:
+        try:
+            return max(0, int(row.value))
+        except (TypeError, ValueError):
+            pass
+    return max(0, (settings or get_settings()).assistant_retention_days)
+
+
 def trim_threads(db: Session, settings: Settings | None = None) -> int:
-    current = settings or get_settings()
-    if current.assistant_retention_days <= 0:
+    days = retention_days(db, settings)
+    if days <= 0:
         return 0
-    cutoff = business_time.now() - timedelta(days=current.assistant_retention_days)
+    cutoff = business_time.now() - timedelta(days=days)
     result = db.execute(
         delete(AssistantThread).where(AssistantThread.last_message_at < cutoff)
     )

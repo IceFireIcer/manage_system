@@ -1,11 +1,14 @@
 import logging
 import time
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.assistant import service as assistant_service
 from app.config import get_settings
+from app.database import SessionLocal
 from app.observability import record_error
 from app.request_context import (
     REQUEST_ID_HEADER,
@@ -38,6 +41,7 @@ from app.routers import (
     setup,
     users,
 )
+from app.routers.settings import router as settings_router
 from app.security import host_is_allowed, resolve_forwarded_scheme
 
 HTTPS_REQUIRED_DETAIL = "生产环境必须通过 HTTPS 访问"
@@ -54,6 +58,17 @@ INTERNAL_PROBE_PATHS = {
 access_logger = logging.getLogger("app.request")
 
 
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    try:
+        with SessionLocal() as db:
+            if assistant_service.trim_threads(db) > 0:
+                db.commit()
+    except Exception:
+        access_logger.warning("启动时清理助手会话失败", exc_info=True)
+    yield
+
+
 def _is_internal_probe(request: Request) -> bool:
     if request.url.path not in INTERNAL_PROBE_PATHS:
         return False
@@ -68,6 +83,7 @@ def create_app() -> FastAPI:
         title=settings.app_name,
         version="0.1.0",
         debug=settings.debug,
+        lifespan=lifespan,
     )
 
     @app.middleware("http")
@@ -155,6 +171,7 @@ def create_app() -> FastAPI:
     app.include_router(users.router)
     app.include_router(profile.router)
     app.include_router(assistant.router)
+    app.include_router(settings_router)
     app.include_router(consumables.router)
     app.include_router(courses.router)
     app.include_router(handover.router)
@@ -168,6 +185,7 @@ def create_app() -> FastAPI:
     app.include_router(llm.router)
     app.include_router(ops.router)
     app.include_router(permissions.router)
+
 
     @app.get("/api/v1/health")
     def health_check() -> dict[str, str]:

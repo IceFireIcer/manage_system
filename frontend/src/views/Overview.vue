@@ -69,6 +69,7 @@ const receive = reactive({
 const inventoryCount = reactive({
   visible: false,
   consumableId: null,
+  quantity: null,
 })
 
 const viewportWidth = ref(window.innerWidth)
@@ -437,6 +438,7 @@ function retry() {
 
 function openInventoryCount() {
   inventoryCount.consumableId = null
+  inventoryCount.quantity = null
   inventoryCount.visible = true
 }
 
@@ -446,8 +448,11 @@ function applyRouteQuery() {
   }
   if (route.query.focus === 'inventory_count') {
     const consumableId = Number(route.query.consumable_id)
+    const quantity = Number(route.query.quantity)
     inventoryCount.consumableId =
       Number.isInteger(consumableId) && consumableId > 0 ? consumableId : null
+    inventoryCount.quantity =
+      Number.isInteger(quantity) && quantity >= 0 ? quantity : null
     inventoryCount.visible = true
   }
 }
@@ -909,6 +914,7 @@ onBeforeUnmount(() => {
       v-model="inventoryCount.visible"
       :consumables="items"
       :initial-consumable-id="inventoryCount.consumableId"
+      :initial-quantity="inventoryCount.quantity"
       @completed="fetchOverview"
     />
   </div>

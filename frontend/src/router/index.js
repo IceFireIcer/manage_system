@@ -210,7 +210,7 @@ const routes = [
       {
         path: 'settings/system',
         name: 'settings-system',
-        component: SettingsPlaceholder,
+        component: () => import('../views/SystemSettings.vue'),
         meta: {
           title: '系统参数',
           permission: 'settings.manage',

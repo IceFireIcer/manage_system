@@ -106,6 +106,7 @@ const ACTIONS = [
   { value: 'restock', label: '补货入库' },
   { value: 'restock_correction', label: '入库纠错' },
   { value: 'suggestion_feedback', label: '补货建议反馈' },
+  { value: 'system_setting_update', label: '更新系统参数' },
 ]
 const ACTION_MAP = Object.fromEntries(ACTIONS.map((item) => [item.value, item]))
 const SYSTEM_ONLY_ACTIONS = new Set([

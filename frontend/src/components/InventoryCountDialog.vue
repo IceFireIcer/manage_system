@@ -16,6 +16,10 @@ const props = defineProps({
     type: Number,
     default: null,
   },
+  initialQuantity: {
+    type: Number,
+    default: null,
+  },
 })
 
 const emit = defineEmits(['update:modelValue', 'completed'])
@@ -126,10 +130,19 @@ async function createCount() {
       request_id: requestId,
     })
     count.value = data
+    const initialQuantity = Number(props.initialQuantity)
+    const targetId = Number(props.initialConsumableId)
     data.lines.forEach((row) => {
       entries[row.consumable_id] = {
         counted_qty: row.counted_qty,
         reason: row.reason || '',
+      }
+      if (
+        Number.isInteger(initialQuantity) &&
+        initialQuantity >= 0 &&
+        row.consumable_id === targetId
+      ) {
+        entries[row.consumable_id].counted_qty = initialQuantity
       }
     })
     step.value = 'entry'
