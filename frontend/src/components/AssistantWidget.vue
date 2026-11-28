@@ -89,6 +89,7 @@ async function selectThread(threadId) {
       id: item.id,
       role: item.role,
       content: item.content,
+      toolCalls: item.tool_calls ?? [],
     }))
     await scrollToBottom()
   } catch {
@@ -144,11 +145,13 @@ async function send() {
       id: data.user_message.id,
       role: 'user',
       content: data.user_message.content,
+      toolCalls: [],
     })
     messages.value.push({
       id: data.assistant_message.id,
       role: 'assistant',
       content: data.assistant_message.content,
+      toolCalls: data.assistant_message.tool_calls ?? data.tool_calls ?? [],
     })
     configured.value = Boolean(data.configured)
     await loadThreads()
@@ -160,6 +163,7 @@ async function send() {
       id: `error-${Date.now()}`,
       role: 'assistant',
       content: '消息发送失败，请稍后重试。',
+      toolCalls: [],
     })
     await scrollToBottom()
   } finally {
@@ -275,7 +279,19 @@ onBeforeUnmount(() => {
           class="assistant__msg"
           :class="`assistant__msg--${message.role}`"
         >
-          <div class="assistant__bubble" v-html="renderMarkdown(message.content)" />
+          <div class="assistant__stack">
+            <div class="assistant__bubble" v-html="renderMarkdown(message.content)" />
+            <div v-if="message.toolCalls?.length" class="assistant__toolcalls">
+              <span
+                v-for="call in message.toolCalls"
+                :key="`${message.id}-${call.name}`"
+                class="assistant__toolcall"
+                :class="{ 'is-error': !call.ok }"
+              >
+                只读工具 · {{ call.label || call.name }}{{ call.ok ? '' : '（失败）' }}
+              </span>
+            </div>
+          </div>
         </div>
         <div v-if="sending" class="assistant__msg assistant__msg--assistant">
           <div class="assistant__bubble assistant__typing">思考中…</div>
@@ -501,8 +517,38 @@ onBeforeUnmount(() => {
   justify-content: flex-end;
 }
 
-.assistant__bubble {
+.assistant__stack {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
   max-width: 84%;
+}
+
+.assistant__msg--user .assistant__stack {
+  align-items: flex-end;
+}
+
+.assistant__toolcalls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.assistant__toolcall {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--primary-soft);
+  color: var(--primary);
+  font-size: 11px;
+}
+
+.assistant__toolcall.is-error {
+  background: rgb(228 86 86 / 12%);
+  color: #c0392b;
+}
+
+.assistant__bubble {
+  max-width: 100%;
   padding: 9px 12px;
   border-radius: 12px;
   font-size: 13px;

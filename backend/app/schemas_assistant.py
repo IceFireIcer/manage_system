@@ -22,11 +22,19 @@ class ThreadUpdate(BaseModel):
     archived: bool | None = None
 
 
+class ToolCallOut(BaseModel):
+    name: str
+    label: str
+    ok: bool
+    error: str | None = None
+
+
 class MessageOut(BaseModel):
     id: int
     role: str
     content: str
     context: dict | None = None
+    tool_calls: list[ToolCallOut] = []
     created_at: datetime
 
 
@@ -49,6 +57,7 @@ class ChatResponse(BaseModel):
     assistant_message: MessageOut
     configured: bool
     answer: str
+    tool_calls: list[ToolCallOut] = []
 
 
 class ThreadDetailOut(BaseModel):

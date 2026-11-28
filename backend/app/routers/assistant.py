@@ -21,6 +21,7 @@ from app.deps import (
     require_permission,
 )
 from app.models import AssistantMessage, AssistantThread
+from app.operation_log import record_operation
 from app.schemas_assistant import (
     AssistantStatusOut,
     ChatRequest,
@@ -30,6 +31,7 @@ from app.schemas_assistant import (
     ThreadDetailOut,
     ThreadOut,
     ThreadUpdate,
+    ToolCallOut,
 )
 
 router = APIRouter(
@@ -55,6 +57,30 @@ def _thread_out(thread: AssistantThread) -> ThreadOut:
     )
 
 
+def _parse_tool_calls(raw: str | None) -> list[ToolCallOut]:
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(parsed, list):
+        return []
+    calls: list[ToolCallOut] = []
+    for item in parsed:
+        if not isinstance(item, dict) or not item.get("name"):
+            continue
+        calls.append(
+            ToolCallOut(
+                name=str(item.get("name")),
+                label=str(item.get("label") or item.get("name")),
+                ok=bool(item.get("ok")),
+                error=item.get("error"),
+            )
+        )
+    return calls
+
+
 def _message_out(message: AssistantMessage) -> MessageOut:
     context = None
     if message.context_json:
@@ -68,6 +94,7 @@ def _message_out(message: AssistantMessage) -> MessageOut:
         role=message.role,
         content=message.content,
         context=context,
+        tool_calls=_parse_tool_calls(message.tool_calls_json),
         created_at=message.created_at,
     )
 
@@ -228,8 +255,11 @@ def send_message(
     db.add(user_message)
     db.flush()
 
-    configured, answer = assistant_service.chat(
+    configured, answer, tool_calls = assistant_service.chat(
         db,
+        user=current_user,
+        role=role,
+        class_id=class_id,
         question=payload.content,
         context=context,
         history=history,
@@ -239,9 +269,26 @@ def send_message(
         thread_id=thread.id,
         role="assistant",
         content=answer,
+        tool_calls_json=(
+            json.dumps(tool_calls, ensure_ascii=False) if tool_calls else None
+        ),
         created_at=business_time.now(),
     )
     db.add(assistant_message)
+
+    for call in tool_calls:
+        record_operation(
+            db,
+            action="assistant_tool_call",
+            operator=current_user,
+            target_type="assistant_tool",
+            target_label=call.get("name"),
+            result="success" if call.get("ok") else "failure",
+            remark=(
+                f"助手调用只读工具 {call.get('name')}"
+                + ("" if call.get("ok") else f"：{call.get('error') or '失败'}")
+            ),
+        )
 
     if not history and thread.title == DEFAULT_TITLE:
         thread.title = payload.content[:TITLE_LIMIT]
@@ -258,4 +305,5 @@ def send_message(
         assistant_message=_message_out(assistant_message),
         configured=configured,
         answer=answer,
+        tool_calls=_parse_tool_calls(assistant_message.tool_calls_json),
     )
