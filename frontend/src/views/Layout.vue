@@ -10,6 +10,7 @@ import {
   Fold,
   Odometer,
   QuestionFilled,
+  Reading,
   Setting,
   Tickets,
   TrendCharts,
@@ -21,6 +22,7 @@ import HelpDrawer from '../components/HelpDrawer.vue'
 const GROUP_META = {
   inventory: { label: '库存总览', icon: Box, order: 1 },
   requisition: { label: '领用管理', icon: Tickets, order: 2 },
+  teaching: { label: '教学计划', icon: Reading, order: 2.5 },
   analysis: { label: '库存分析', icon: TrendCharts, order: 3 },
   daily: { label: '日常管理', icon: Setting, order: 4 },
 }

@@ -1,9 +1,10 @@
-from datetime import datetime
+from datetime import date, datetime
 
 from sqlalchemy import (
     DATETIME,
     Boolean,
     CheckConstraint,
+    Date,
     ForeignKey,
     Index,
     Integer,
@@ -579,6 +580,108 @@ class OperationLog(Base):
     after_value: Mapped[str | None] = mapped_column(Text, nullable=True)
     remark: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
+
+
+class Course(Base):
+    __tablename__ = "courses"
+    __table_args__ = (
+        UniqueConstraint(
+            "class_id", "name", "semester", name="uq_courses_class_name_semester"
+        ),
+        CheckConstraint(
+            "status IN ('enabled','disabled')", name="ck_courses_status"
+        ),
+        Index("ix_courses_class_status", "class_id", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    class_id: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    class_label: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    semester: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="enabled")
+    created_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    created_by_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    created_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
+    updated_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
+
+
+class CourseRecipeSnapshot(Base):
+    __tablename__ = "course_recipe_snapshots"
+    __table_args__ = (
+        UniqueConstraint(
+            "course_id", "version", name="uq_course_recipe_snapshots_version"
+        ),
+        Index("ix_course_recipe_snapshots_course", "course_id", "version"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    course_id: Mapped[int] = mapped_column(
+        ForeignKey("courses.id"), nullable=False, index=True
+    )
+    class_id: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    created_by_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    note: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
+
+
+class CourseRecipeItem(Base):
+    __tablename__ = "course_recipe_items"
+    __table_args__ = (
+        UniqueConstraint(
+            "snapshot_id", "consumable_id", name="uq_course_recipe_items_consumable"
+        ),
+        CheckConstraint(
+            "quantity_per_person > 0", name="ck_course_recipe_items_quantity"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    snapshot_id: Mapped[int] = mapped_column(
+        ForeignKey("course_recipe_snapshots.id"), nullable=False, index=True
+    )
+    consumable_id: Mapped[int] = mapped_column(
+        ForeignKey("consumables.id"), nullable=False, index=True
+    )
+    consumable_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    unit: Mapped[str] = mapped_column(String(16), nullable=False)
+    quantity_per_person: Mapped[int] = mapped_column(Integer, nullable=False)
+    remark: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
+
+
+class CourseSession(Base):
+    __tablename__ = "course_sessions"
+    __table_args__ = (
+        UniqueConstraint("course_id", "seq", name="uq_course_sessions_course_seq"),
+        CheckConstraint("headcount >= 0", name="ck_course_sessions_headcount"),
+        CheckConstraint(
+            "status IN ('planned','completed','cancelled')",
+            name="ck_course_sessions_status",
+        ),
+        Index("ix_course_sessions_course_date", "course_id", "session_date"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    course_id: Mapped[int] = mapped_column(
+        ForeignKey("courses.id"), nullable=False, index=True
+    )
+    class_id: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    seq: Mapped[int] = mapped_column(Integer, nullable=False)
+    session_date: Mapped[date] = mapped_column(Date, nullable=False)
+    headcount: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    class_label: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="planned")
+    recipe_snapshot_id: Mapped[int | None] = mapped_column(
+        ForeignKey("course_recipe_snapshots.id"), nullable=True
+    )
+    created_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    created_by_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
+    updated_at: Mapped[datetime] = mapped_column(DATETIME, nullable=False, default=business_now)
 
 
 @event.listens_for(OperationLog, "before_insert")

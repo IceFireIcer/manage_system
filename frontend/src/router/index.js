@@ -46,6 +46,16 @@ const routes = [
         },
       },
       {
+        path: 'courses',
+        name: 'courses',
+        component: () => import('../views/CourseRecipes.vue'),
+        meta: {
+          title: '课程配方',
+          roles: ['teacher', 'admin'],
+          nav: { group: 'teaching', icon: 'Reading', order: 1 },
+        },
+      },
+      {
         path: 'consumables',
         name: 'consumables',
         component: () => import('../views/Consumables.vue'),
