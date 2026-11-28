@@ -46,6 +46,24 @@ def _clean_text(value: Any, limit: int = MAX_TEXT) -> str | None:
     return text[:limit]
 
 
+def _clean_route(value: Any) -> str | None:
+    text = _clean_text(value, MAX_ROUTE)
+    if text is None:
+        return None
+    path = text.split("?", 1)[0].split("#", 1)[0]
+    return path or None
+
+
+def _clean_page(value: Any) -> str | None:
+    text = _clean_text(value, MAX_TEXT)
+    if text is None:
+        return None
+    lowered = text.lower()
+    if any(marker in lowered for marker in SENSITIVE_KEY_MARKERS):
+        return None
+    return text
+
+
 def _sanitize_entity(raw: Any) -> dict | None:
     if not isinstance(raw, dict):
         return None
@@ -110,8 +128,8 @@ def build_context(
     """生成可信上下文；active_role/active_class 与聚合摘要由服务端补齐。"""
     raw = raw if isinstance(raw, dict) else {}
     return {
-        "route": _clean_text(raw.get("route"), MAX_ROUTE),
-        "page": _clean_text(raw.get("page"), MAX_TEXT),
+        "route": _clean_route(raw.get("route")),
+        "page": _clean_page(raw.get("page")),
         "active_role": role,
         "role_label": ROLE_LABELS.get(role, role),
         "active_class": {

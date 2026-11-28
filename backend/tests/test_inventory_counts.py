@@ -308,7 +308,7 @@ def test_repeat_post_is_idempotent(admin_client: TestClient, db_session) -> None
     assert db_session.get(Consumable, consumable["id"]).current_stock == 12
 
 
-def test_teacher_reads_but_cannot_create_or_post(
+def test_teacher_can_read_and_manage_counts(
     admin_client: TestClient, db_session
 ) -> None:
     consumable = _create_consumable(admin_client, current_stock=10)
@@ -326,8 +326,8 @@ def test_teacher_reads_but_cannot_create_or_post(
         COUNTS_URL,
         json={"lines": [{"consumable_id": consumable["id"], "counted_qty": 9}]},
     )
-    assert create.status_code == 403, create.text
-    assert _post(admin_client, order_no).status_code == 403
+    assert create.status_code == 201, create.text
+    assert _post(admin_client, create.json()["order_no"]).status_code == 201
 
     _login_student(admin_client)
     assert admin_client.get(f"{COUNTS_URL}/{order_no}").status_code == 403

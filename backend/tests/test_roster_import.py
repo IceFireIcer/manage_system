@@ -63,17 +63,19 @@ def _payload(rows: list[dict], **extra: Any) -> dict[str, Any]:
     return payload
 
 
-def test_roster_import_requires_admin(client: TestClient) -> None:
+def test_roster_import_requires_permission(client: TestClient) -> None:
     rows = [{"line_no": 1, "account": "20260001", "name": "王五"}]
 
     _login_teacher(client)
-    assert client.get(TEMPLATE_URL).status_code == 403
-    assert client.post(PREVIEW_URL, json=_payload(rows)).status_code == 403
-    assert client.post(IMPORT_URL, json=_payload(rows)).status_code == 403
+    assert client.get(TEMPLATE_URL).status_code == 200
+    assert client.post(PREVIEW_URL, json=_payload(rows)).status_code == 200
+    assert client.post(IMPORT_URL, json=_payload(rows)).status_code == 201
 
     client.post("/api/v1/auth/logout")
     _login(client, "student01", "Student@123")
+    assert client.get(TEMPLATE_URL).status_code == 403
     assert client.post(PREVIEW_URL, json=_payload(rows)).status_code == 403
+    assert client.post(IMPORT_URL, json=_payload(rows)).status_code == 403
 
 
 def test_roster_template_download(admin_client: TestClient) -> None:

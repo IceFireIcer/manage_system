@@ -25,6 +25,7 @@ const TARGET_NAMES = {
   requisition_correction: '纠错申请',
   operation_log: '操作日志',
   class: '班级',
+  class_term: '学期',
   role: '角色',
   llm_provider: 'LLM 供应商',
   llm_prompt: 'LLM 提示词',
@@ -49,10 +50,14 @@ const ACTIONS = [
   { value: 'switch_class', label: '班级切换' },
   { value: 'setup_complete', label: '完成系统初始化' },
   { value: 'admin_bootstrap', label: '初始化管理员' },
+  { value: 'admin_bootstrap_rejected', label: '初始化管理员被拒' },
   { value: 'teacher_provision', label: '开通教师' },
+  { value: 'teacher_provision_rejected', label: '开通教师被拒' },
   { value: 'admin_handover', label: '班委交接' },
+  { value: 'admin_handover_rejected', label: '班委交接被拒' },
   { value: 'admin_handover_create', label: '开通班委' },
   { value: 'admin_recover', label: '管理员恢复' },
+  { value: 'admin_recover_rejected', label: '管理员恢复被拒' },
   { value: 'account_create', label: '创建账号' },
   { value: 'account_update', label: '更新账号' },
   { value: 'account_status', label: '账号状态' },
@@ -84,15 +89,36 @@ const ACTIONS = [
   { value: 'audit_export', label: '导出审计' },
   { value: 'log_export', label: '导出操作日志' },
   { value: 'requisition_export', label: '导出领用流水' },
+  { value: 'user_create', label: '新增用户' },
+  { value: 'user_update', label: '更正用户' },
+  { value: 'consumable_import', label: '导入耗材台账' },
+  { value: 'consumable_conflict', label: '耗材导入冲突' },
+  { value: 'inventory_adjustment', label: '库存调整' },
+  { value: 'requisition_create', label: '领用登记' },
+  { value: 'requisition_reverse', label: '撤销领用' },
+  { value: 'requisition_reentry', label: '关联重登' },
+  { value: 'requisition_backfill_controlled', label: '受控补录' },
+  { value: 'requisition_correction_submit', label: '纠错申请' },
+  { value: 'requisition_correction_accept', label: '纠错受理' },
+  { value: 'requisition_correction_handle', label: '纠错处理' },
+  { value: 'requisition_return', label: '退库登记' },
+  { value: 'requisition_scrap', label: '报损登记' },
+  { value: 'restock', label: '补货入库' },
+  { value: 'restock_correction', label: '入库纠错' },
+  { value: 'suggestion_feedback', label: '补货建议反馈' },
 ]
 const ACTION_MAP = Object.fromEntries(ACTIONS.map((item) => [item.value, item]))
 const SYSTEM_ONLY_ACTIONS = new Set([
   'setup_complete',
   'admin_bootstrap',
+  'admin_bootstrap_rejected',
   'teacher_provision',
+  'teacher_provision_rejected',
   'admin_handover',
+  'admin_handover_rejected',
   'admin_handover_create',
   'admin_recover',
+  'admin_recover_rejected',
   'permission_role_update',
 ])
 
@@ -313,12 +339,24 @@ function displayValue(key, value) {
   return String(value)
 }
 
+const DIFF_LABELS = {
+  status: '状态',
+  role: '角色',
+  class_id: '班级',
+  class_name: '班级',
+  name: '名称',
+  account: '账号',
+  enabled: '启用',
+}
+
 function diffSummary(before, after) {
   if (!before || !after) return ''
   const parts = []
   for (const key of ['status', 'role', 'class_id', 'class_name', 'name', 'account', 'enabled']) {
     if (before[key] === after[key]) continue
-    parts.push(`${key} ${displayValue(key, before[key])} → ${displayValue(key, after[key])}`)
+    parts.push(
+      `${DIFF_LABELS[key] ?? key} ${displayValue(key, before[key])} → ${displayValue(key, after[key])}`,
+    )
     if (parts.length >= 3) break
   }
   return parts.join('；')

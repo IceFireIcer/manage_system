@@ -96,6 +96,7 @@ const tableRegion = ref(null)
 const lastTrigger = ref(null)
 let requestSerial = 0
 let pendingRequisitionId = null
+let pendingAction = ''
 
 
 const quickKey = computed(() => {
@@ -674,6 +675,9 @@ function applyRouteQuery() {
   if (Number.isInteger(requisitionId) && requisitionId > 0) {
     pendingRequisitionId = requisitionId
   }
+  if (['reversal', 'return', 'scrap'].includes(String(query.action))) {
+    pendingAction = String(query.action)
+  }
   const routePage = Number(query.page)
   if (Number.isInteger(routePage) && routePage > 0) {
     page.current = routePage
@@ -696,6 +700,36 @@ async function openRouteRequisition() {
   openDetail(id)
 }
 
+async function openRouteAction() {
+  const action = pendingAction
+  pendingAction = ''
+  if (!action) return
+  const id = Number(route.query.requisition_id)
+  if (Number.isInteger(id) && id > 0) {
+    try {
+      const { data } = await api.get(`/requisitions/${id}`)
+      if (data.type !== 'normal' || data.status !== 'active') {
+        ElMessage.warning('该记录不可办理红冲、退库或报损')
+        return
+      }
+      if (action === 'reversal') {
+        handleDetailReverse(data)
+      } else {
+        await openStockAction(data, action)
+      }
+    } catch (error) {
+      const code = error.response?.status
+      if (code === 404 || code === 403) {
+        ElMessage.warning('该流水不存在或无权查看')
+      }
+    }
+    return
+  }
+  if (route.query.consumable_id) {
+    ElMessage.info('已按耗材筛选记录，请选择需要办理的领用记录')
+  }
+}
+
 watch(
   () => route.query.requisition_id,
   (value) => {
@@ -707,11 +741,25 @@ watch(
   },
 )
 
+watch(
+  () => route.query.action,
+  (value) => {
+    if (!['reversal', 'return', 'scrap'].includes(String(value))) return
+    pendingAction = String(value)
+    openRouteAction()
+  },
+)
+
 onMounted(async () => {
   applyRouteQuery()
   await Promise.all([fetchConsumableOptions(), fetchUserOptions()])
   await fetchRecords()
-  openRouteRequisition()
+  if (pendingAction) {
+    pendingRequisitionId = null
+    await openRouteAction()
+  } else {
+    openRouteRequisition()
+  }
 })
 </script>
 

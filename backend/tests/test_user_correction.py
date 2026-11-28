@@ -76,10 +76,21 @@ def _submit(client: TestClient, items: list[dict], **extra: Any):
     return client.post(REQUISITIONS_URL, json=payload)
 
 
-def test_correction_and_reset_require_admin(client: TestClient) -> None:
+def test_correction_and_reset_permissions(
+    client: TestClient, db_session
+) -> None:
+    target_id = _user_id(db_session, "disabled01")
+
     _login_teacher(client)
-    assert client.patch(f"{USERS_URL}/1", json={"name": "新名"}).status_code == 403
-    assert client.post(f"{USERS_URL}/1/reset-password").status_code == 403
+    assert (
+        client.patch(f"{USERS_URL}/{target_id}", json={"name": "新名"}).status_code
+        == 200
+    )
+    assert (
+        client.post(f"{USERS_URL}/{target_id}/reset-password").status_code == 200
+    )
+    assert client.patch(f"{USERS_URL}/1", json={"name": "新名"}).status_code == 400
+    assert client.post(f"{USERS_URL}/1/reset-password").status_code == 400
 
     client.post("/api/v1/auth/logout")
     _login_student(client)

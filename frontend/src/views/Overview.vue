@@ -1,5 +1,5 @@
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import api from '../api'
@@ -68,6 +68,7 @@ const receive = reactive({
 
 const inventoryCount = reactive({
   visible: false,
+  consumableId: null,
 })
 
 const viewportWidth = ref(window.innerWidth)
@@ -434,17 +435,37 @@ function retry() {
   if (isAdmin.value) fetchSetup()
 }
 
-onMounted(() => {
-  fetchOverview()
+function openInventoryCount() {
+  inventoryCount.consumableId = null
+  inventoryCount.visible = true
+}
+
+function applyRouteQuery() {
+  if (route.query.focus === 'alerts') {
+    nextTick(() => setTimeout(scrollToAlerts, 200))
+  }
+  if (route.query.focus === 'inventory_count') {
+    const consumableId = Number(route.query.consumable_id)
+    inventoryCount.consumableId =
+      Number.isInteger(consumableId) && consumableId > 0 ? consumableId : null
+    inventoryCount.visible = true
+  }
+}
+
+watch(
+  () => [route.query.focus, route.query.consumable_id],
+  () => applyRouteQuery(),
+)
+
+onMounted(async () => {
+  await fetchOverview()
   fetchSetup()
   if (canAudit.value) {
     alertsStore.fetch()
   }
   pollTimer = setInterval(() => fetchOverview({ silent: true }), POLL_INTERVAL_MS)
   window.addEventListener('resize', handleResize)
-  if (route.query.focus === 'alerts') {
-    nextTick(() => setTimeout(scrollToAlerts, 200))
-  }
+  applyRouteQuery()
 })
 
 onBeforeUnmount(() => {
@@ -470,7 +491,7 @@ onBeforeUnmount(() => {
           <el-icon :size="16"><Refresh /></el-icon>
           <span class="overview__button-text">刷新</span>
         </el-button>
-        <el-button v-if="isAdmin" @click="inventoryCount.visible = true">库存盘点</el-button>
+        <el-button v-if="isAdmin" @click="openInventoryCount()">库存盘点</el-button>
         <el-button type="primary" @click="goRequisition()">登记领用</el-button>
       </template>
     </PageHeader>
@@ -887,6 +908,7 @@ onBeforeUnmount(() => {
     <InventoryCountDialog
       v-model="inventoryCount.visible"
       :consumables="items"
+      :initial-consumable-id="inventoryCount.consumableId"
       @completed="fetchOverview"
     />
   </div>

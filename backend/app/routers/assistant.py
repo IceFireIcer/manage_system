@@ -142,6 +142,8 @@ def list_threads(
     class_id: Annotated[int, Depends(get_active_class_id)],
     include_archived: bool = False,
 ) -> list[ThreadOut]:
+    if assistant_service.trim_threads(db) > 0:
+        db.commit()
     stmt = select(AssistantThread).where(
         AssistantThread.user_id == current_user.id,
         AssistantThread.class_id == class_id,

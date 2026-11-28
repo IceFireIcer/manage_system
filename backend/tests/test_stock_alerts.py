@@ -207,12 +207,10 @@ def test_alert_permissions_and_actions(admin_client: TestClient, db_session) -> 
     teacher_view = admin_client.get(ALERTS_URL)
     assert teacher_view.status_code == 200
     assert len(teacher_view.json()["items"]) == 1
-    assert (
-        admin_client.patch(
-            f"{ALERTS_URL}/{consumable['id']}", json={"action": "complete"}
-        ).status_code
-        == 403
+    acknowledged = admin_client.patch(
+        f"{ALERTS_URL}/{consumable['id']}", json={"action": "acknowledge"}
     )
+    assert acknowledged.status_code == 200, acknowledged.text
 
     admin_client.post("/api/v1/auth/logout")
     _login(admin_client, "admin01", "Admin@123")

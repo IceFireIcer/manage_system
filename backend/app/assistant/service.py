@@ -5,12 +5,17 @@ from __future__ import annotations
 import json
 import logging
 import re
+from datetime import timedelta
 
+from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
+from app import business_time
 from app.agent import llm
 from app.assistant import actions as assistant_actions
 from app.assistant import tools as assistant_tools
+from app.config import Settings, get_settings
+from app.models import AssistantThread
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +57,17 @@ UNKNOWN_TOOL_EXTRA = (
     "\n\n工具选择返回了未注册的工具，本轮不执行任何操作。"
     "请据实说明助手无法完成该请求，不要编造结果。"
 )
+
+
+def trim_threads(db: Session, settings: Settings | None = None) -> int:
+    current = settings or get_settings()
+    if current.assistant_retention_days <= 0:
+        return 0
+    cutoff = business_time.now() - timedelta(days=current.assistant_retention_days)
+    result = db.execute(
+        delete(AssistantThread).where(AssistantThread.last_message_at < cutoff)
+    )
+    return result.rowcount or 0
 
 
 def _context_block(context: dict | None) -> str:

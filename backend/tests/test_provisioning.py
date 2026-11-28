@@ -204,7 +204,8 @@ def test_empty_database_can_provide_teacher_admin_student(env: Environment) -> N
             "role": "teacher",
         },
     )
-    assert forbidden.status_code == 403
+    assert forbidden.status_code == 400
+    assert forbidden.json()["detail"] == "仅允许创建学生账号"
 
 
 def test_provision_teacher_keeps_existing_admin(env: Environment) -> None:

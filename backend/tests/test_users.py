@@ -33,13 +33,20 @@ def test_student_forbidden_on_all_user_endpoints(student_client: TestClient) -> 
     assert patch_response.status_code == 403
 
 
-def test_teacher_forbidden_on_all_user_endpoints(teacher_client: TestClient) -> None:
-    assert teacher_client.get("/api/v1/users").status_code == 403
-    assert teacher_client.post("/api/v1/users", json=NEW_STUDENT).status_code == 403
+def test_teacher_manages_class_students(
+    teacher_client: TestClient, db_session
+) -> None:
+    assert teacher_client.get("/api/v1/users").status_code == 200
+    created = teacher_client.post("/api/v1/users", json=NEW_STUDENT)
+    assert created.status_code == 201, created.text
+
+    student_id = db_session.scalars(
+        select(User.id).where(User.account == "student01")
+    ).one()
     patch_response = teacher_client.patch(
-        "/api/v1/users/1/status", json={"status": "disabled"}
+        f"/api/v1/users/{student_id}/status", json={"status": "disabled"}
     )
-    assert patch_response.status_code == 403
+    assert patch_response.status_code == 200, patch_response.text
 
 
 def test_admin_can_list_users(admin_client: TestClient) -> None:

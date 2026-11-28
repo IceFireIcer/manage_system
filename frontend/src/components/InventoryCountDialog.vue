@@ -12,6 +12,10 @@ const props = defineProps({
     type: Array,
     default: () => [],
   },
+  initialConsumableId: {
+    type: Number,
+    default: null,
+  },
 })
 
 const emit = defineEmits(['update:modelValue', 'completed'])
@@ -94,6 +98,14 @@ watch(
   (open) => {
     if (!open) return
     resetState()
+    const initial = Number(props.initialConsumableId)
+    if (
+      Number.isInteger(initial) &&
+      initial > 0 &&
+      props.consumables.some((item) => item.id === initial)
+    ) {
+      selectedIds.value = [initial]
+    }
     fetchStaff()
   },
 )

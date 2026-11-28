@@ -1,6 +1,5 @@
 from typing import Any
 
-import pytest
 from app.models import OperationLog, User
 from fastapi.testclient import TestClient
 from sqlalchemy import select
@@ -59,34 +58,33 @@ def test_student_can_list(student_client: TestClient) -> None:
     assert response.json() == []
 
 
-@pytest.mark.parametrize("fixture_name", ["teacher_client", "student_client"])
-def test_non_admin_create_forbidden(fixture_name: str, request: pytest.FixtureRequest) -> None:
-    client = request.getfixturevalue(fixture_name)
-
-    response = client.post(LIST_URL, json=_payload())
+def test_student_create_forbidden(student_client: TestClient) -> None:
+    response = student_client.post(LIST_URL, json=_payload())
 
     assert response.status_code == 403
     assert response.json()["detail"] == "无权限访问"
 
 
-@pytest.mark.parametrize("fixture_name", ["teacher_client", "student_client"])
-def test_non_admin_update_forbidden(fixture_name: str, request: pytest.FixtureRequest) -> None:
-    client = request.getfixturevalue(fixture_name)
+def test_teacher_manages_consumables(teacher_client: TestClient) -> None:
+    created = teacher_client.post(LIST_URL, json=_payload())
+    assert created.status_code == 201, created.text
+    item = created.json()
 
-    response = client.put(f"{LIST_URL}/1", json={"name": "新名字"})
+    updated = teacher_client.put(f"{LIST_URL}/{item['id']}", json={"name": "新名字"})
+    assert updated.status_code == 200, updated.text
 
-    assert response.status_code == 403
+    disabled = teacher_client.patch(
+        f"{LIST_URL}/{item['id']}/status", json={"status": "disabled"}
+    )
+    assert disabled.status_code == 200, disabled.text
 
 
-@pytest.mark.parametrize("fixture_name", ["teacher_client", "student_client"])
-def test_non_admin_toggle_status_forbidden(
-    fixture_name: str, request: pytest.FixtureRequest
-) -> None:
-    client = request.getfixturevalue(fixture_name)
-
-    response = client.patch(f"{LIST_URL}/1/status", json={"status": "disabled"})
-
-    assert response.status_code == 403
+def test_student_update_and_toggle_forbidden(student_client: TestClient) -> None:
+    assert student_client.put(f"{LIST_URL}/1", json={"name": "新名字"}).status_code == 403
+    assert (
+        student_client.patch(f"{LIST_URL}/1/status", json={"status": "disabled"}).status_code
+        == 403
+    )
 
 
 def test_admin_create_consumable_success(admin_client: TestClient) -> None:

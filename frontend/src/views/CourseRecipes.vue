@@ -1,9 +1,12 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import api from '../api'
 import PageHeader from '../components/PageHeader.vue'
 import EmptyState from '../components/EmptyState.vue'
+
+const route = useRoute()
 
 const PAGE_SIZE = 9
 const SESSION_PAGE_SIZE = 10
@@ -636,9 +639,40 @@ function handleResize() {
   viewportWidth.value = window.innerWidth
 }
 
-onMounted(() => {
+async function applyRouteQuery() {
+  const courseId = Number(route.query.course_id)
+  if (!Number.isInteger(courseId) || courseId <= 0) return
+  let course = courses.value.find((item) => item.id === courseId)
+  if (!course) {
+    statusFilter.value = 'all'
+    await fetchCourses()
+    course = courses.value.find((item) => item.id === courseId)
+  }
+  if (!course) return
+  await openRecipe(course)
+  const consumableId = Number(route.query.consumable_id)
+  if (
+    Number.isInteger(consumableId) &&
+    consumableId > 0 &&
+    !recipeItems.value.some((item) => item.consumable_id === consumableId) &&
+    recipeItems.value.length < MAX_RECIPE_ITEMS
+  ) {
+    recipeItems.value.push({
+      consumable_id: consumableId,
+      quantity_per_person: 1,
+    })
+  }
+}
+
+watch(
+  () => [route.query.course_id, route.query.consumable_id],
+  () => applyRouteQuery(),
+)
+
+onMounted(async () => {
   window.addEventListener('resize', handleResize)
-  fetchCourses()
+  await fetchCourses()
+  await applyRouteQuery()
 })
 
 onBeforeUnmount(() => window.removeEventListener('resize', handleResize))

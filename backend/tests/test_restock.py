@@ -354,7 +354,9 @@ def test_correction_uses_reverse_event_and_respects_original_quantity(
     assert _stock(db_session, consumable["id"]) == 3
 
 
-def test_teacher_and_student_cannot_write_restock(admin_client: TestClient) -> None:
+def test_teacher_can_write_restock_but_student_cannot(
+    admin_client: TestClient,
+) -> None:
     consumable = _create_consumable(
         admin_client, name="胶带", safety_stock=0, current_stock=0
     )
@@ -375,13 +377,20 @@ def test_teacher_and_student_cannot_write_restock(admin_client: TestClient) -> N
     }
 
     _login(admin_client, "teacher01", "Teacher@123")
-    assert admin_client.post(ORDERS_URL, json=payload).status_code == 403
-    assert admin_client.post(
-        RESTOCK_URL, json={"consumable_id": consumable["id"], "quantity": 1}
-    ).status_code == 403
-    assert admin_client.post(
-        f"{ORDERS_URL}/{order_no}/corrections", json=correction_payload
-    ).status_code == 403
+    teacher_order = admin_client.post(ORDERS_URL, json=payload)
+    assert teacher_order.status_code == 201, teacher_order.text
+    assert (
+        admin_client.post(
+            RESTOCK_URL, json={"consumable_id": consumable["id"], "quantity": 1}
+        ).status_code
+        == 200
+    )
+    assert (
+        admin_client.post(
+            f"{ORDERS_URL}/{order_no}/corrections", json=correction_payload
+        ).status_code
+        == 200
+    )
     assert admin_client.get(f"{ORDERS_URL}/{order_no}").status_code == 200
 
     _login(admin_client, "student01", "Student@123")

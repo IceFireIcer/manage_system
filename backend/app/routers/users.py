@@ -3,7 +3,7 @@ import secrets
 from datetime import datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, model_validator
@@ -26,23 +26,7 @@ from app.schemas_users import (
 )
 from app.security import hash_password
 
-
-def _legacy_user_gate(
-    request: Request,
-    current_user: Annotated[User, Depends(require_permission("account.manage"))],
-) -> User:
-    if effective_role(current_user) == "teacher" and not request.url.path.endswith(
-        ("/history-options", "/options")
-    ):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权限访问")
-    return current_user
-
-
-router = APIRouter(
-    prefix="/api/v1/users",
-    tags=["users"],
-    dependencies=[Depends(_legacy_user_gate)],
-)
+router = APIRouter(prefix="/api/v1/users", tags=["users"])
 
 ALLOWED_STATUSES = ("enabled", "disabled")
 ROSTER_TEMPLATE = "\ufeff学号,姓名\n20260001,张三\n20260002,李四\n"

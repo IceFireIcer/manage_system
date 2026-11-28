@@ -123,10 +123,19 @@ def test_deactivation_preview_shows_balance_receipts_and_pending(
     assert kinds == {"requisition_order": 1, "disposition": 1}
 
 
-def test_deactivation_preview_forbidden_for_non_admin(
+def test_deactivation_preview_teacher_allowed(
     teacher_client: TestClient,
 ) -> None:
-    response = teacher_client.get(f"{LIST_URL}/1/deactivation-preview")
+    item = _create(teacher_client, current_stock=10)
+    response = teacher_client.get(f"{LIST_URL}/{item['id']}/deactivation-preview")
+
+    assert response.status_code == 200, response.text
+
+
+def test_deactivation_preview_student_forbidden(
+    student_client: TestClient,
+) -> None:
+    response = student_client.get(f"{LIST_URL}/1/deactivation-preview")
 
     assert response.status_code == 403
 

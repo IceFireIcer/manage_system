@@ -1,6 +1,5 @@
 from typing import Any
 
-import pytest
 from app.models import Consumable, ConsumableImportBatch, InventoryEvent
 from fastapi.testclient import TestClient
 from sqlalchemy import select
@@ -365,15 +364,17 @@ def test_import_accepts_explicit_code(admin_client: TestClient) -> None:
     assert response.json()["rows"][0]["code"] == "WELD-9"
 
 
-@pytest.mark.parametrize("fixture_name", ["teacher_client", "student_client"])
-def test_non_admin_cannot_import(
-    fixture_name: str, request: pytest.FixtureRequest
-) -> None:
-    client = request.getfixturevalue(fixture_name)
+def test_teacher_can_import(teacher_client: TestClient) -> None:
+    preview = teacher_client.post(PREVIEW_URL, json=_import_payload())
+    assert preview.status_code == 200, preview.text
+    imported = teacher_client.post(IMPORT_URL, json=_import_payload())
+    assert imported.status_code == 201, imported.text
 
-    assert client.post(PREVIEW_URL, json=_import_payload()).status_code == 403
-    assert client.post(IMPORT_URL, json=_import_payload()).status_code == 403
-    assert client.get(f"{BATCH_URL}/1").status_code == 403
+
+def test_student_cannot_import(student_client: TestClient) -> None:
+    assert student_client.post(PREVIEW_URL, json=_import_payload()).status_code == 403
+    assert student_client.post(IMPORT_URL, json=_import_payload()).status_code == 403
+    assert student_client.get(f"{BATCH_URL}/1").status_code == 403
 
 
 def test_import_batch_not_found(admin_client: TestClient) -> None:
